@@ -1,0 +1,21 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Android and Godot build outputs
+*.apk
+*.idsig
+*.keystore
+godot-android/builds/
+godot-android/addons.disabled/
+android-client/build/
+godot-android/android/build/.gradle/
+godot-android/android/build/build/
+godot-android/android/build/src/main/assets/
+
+# Godot editor/import cache. Keep extension_list.cfg because export tests rely on it.
+godot-android/.godot/editor/
+godot-android/.godot/exported/
+godot-android/.godot/imported/
+godot-android/.godot/*.bin
+godot-android/.godot/global_script_class_cache.cfg
