@@ -68,6 +68,36 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("Yaw/Pitch/Depth", source)
         self.assertNotIn("world anchor", source.lower())
 
+    def test_moving_card_supports_mock_bbox_anchor_mode(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("BBOX_IMAGE_SIZE", source)
+        self.assertIn("var _anchor_mode := \"manual\"", source)
+        self.assertIn("var _bbox_center_px", source)
+        self.assertIn("var _bbox_size_px", source)
+        self.assertIn("var _bbox_depth_m", source)
+        self.assertIn("_apply_bbox_anchor()", source)
+        self.assertIn("_anchor_from_bbox(", source)
+        self.assertIn('"toggle_bbox_mode"', source)
+        self.assertIn('"bbox_left"', source)
+        self.assertIn('"bbox_right"', source)
+        self.assertIn('"bbox_up"', source)
+        self.assertIn('"bbox_down"', source)
+        self.assertIn('"bbox_depth_in"', source)
+        self.assertIn('"bbox_depth_out"', source)
+        self.assertIn("Mode: %s", source)
+        self.assertIn("BBox cx/cy/w/h", source)
+        self.assertIn("Angular W/H", source)
+
+    def test_moving_card_accepts_bbox_payloads_from_websocket(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('parsed.get("type", "") == "bbox"', source)
+        self.assertIn("_apply_bbox_payload(parsed)", source)
+        self.assertIn("_bbox_center_px = Vector2", source)
+        self.assertIn("_bbox_size_px = Vector2", source)
+        self.assertIn("_bbox_image_size = Vector2", source)
+
     def test_moving_card_reports_xr_pose_for_tracking_diagnosis(self):
         source = SCRIPT.read_text(encoding="utf-8")
 

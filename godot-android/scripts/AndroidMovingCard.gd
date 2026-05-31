@@ -12,6 +12,13 @@ const CARD_SPEED_STEP_DEG_PER_SECOND := 2.0
 const CARD_YAW_STEP_DEG := 3.0
 const CARD_PITCH_STEP_DEG := 3.0
 const CARD_DEPTH_STEP_M := 0.10
+const BBOX_IMAGE_SIZE := Vector2(1280.0, 720.0)
+const BBOX_START_CENTER_PX := Vector2(640.0, 360.0)
+const BBOX_START_SIZE_PX := Vector2(180.0, 240.0)
+const BBOX_CENTER_STEP_PX := 32.0
+const BBOX_DEPTH_STEP_M := 0.10
+const BBOX_HORIZONTAL_FOV_DEG := 70.0
+const BBOX_VERTICAL_FOV_DEG := 43.0
 const MIN_SPEED_DEG_PER_SECOND := 0.0
 const MAX_SPEED_DEG_PER_SECOND := 45.0
 const MIN_DEPTH_M := 0.65
@@ -32,6 +39,12 @@ var _speed_deg_per_second := CARD_DEFAULT_SPEED_DEG_PER_SECOND
 var _anchor_yaw_deg := CARD_START_YAW_DEG
 var _anchor_pitch_deg := CARD_START_PITCH_DEG
 var _anchor_depth_m := CARD_START_DEPTH_M
+var _anchor_mode := "manual"
+var _bbox_center_px := BBOX_START_CENTER_PX
+var _bbox_size_px := BBOX_START_SIZE_PX
+var _bbox_image_size := BBOX_IMAGE_SIZE
+var _bbox_depth_m := CARD_START_DEPTH_M
+var _bbox_angular_size_deg := Vector2.ZERO
 var _paused := false
 var _face_camera_enabled := true
 var _last_command := "none"
@@ -191,10 +204,12 @@ func _connect_ws() -> void:
 
 func _process(delta: float) -> void:
 	_poll_ws(delta)
-	if not _paused:
+	if not _paused and _anchor_mode == "manual":
 		_anchor_yaw_deg -= _speed_deg_per_second * delta
 		if _anchor_yaw_deg < CARD_END_YAW_DEG:
 			_anchor_yaw_deg = CARD_START_YAW_DEG
+	if _anchor_mode == "bbox":
+		_apply_bbox_anchor()
 	_apply_3dof_anchor_transform()
 	_update_status_label()
 
@@ -216,6 +231,9 @@ func _handle_packet(payload: String) -> void:
 	var parsed = JSON.parse_string(payload)
 	if typeof(parsed) != TYPE_DICTIONARY:
 		return
+	if parsed.get("type", "") == "bbox":
+		_apply_bbox_payload(parsed)
+		return
 	if parsed.get("type", "") != "control":
 		return
 	_apply_command(str(parsed.get("command", "")))
@@ -225,17 +243,51 @@ func _apply_command(command: String) -> void:
 	_last_command = command
 	match command:
 		"yaw_left", "left", "move_left", "a":
+			_anchor_mode = "manual"
 			_anchor_yaw_deg -= CARD_YAW_STEP_DEG
 		"yaw_right", "right", "move_right", "d":
+			_anchor_mode = "manual"
 			_anchor_yaw_deg += CARD_YAW_STEP_DEG
 		"pitch_up", "up", "move_up", "w":
+			_anchor_mode = "manual"
 			_anchor_pitch_deg += CARD_PITCH_STEP_DEG
 		"pitch_down", "down", "move_down", "s":
+			_anchor_mode = "manual"
 			_anchor_pitch_deg -= CARD_PITCH_STEP_DEG
 		"depth_in", "closer":
+			_anchor_mode = "manual"
 			_anchor_depth_m = clampf(_anchor_depth_m - CARD_DEPTH_STEP_M, MIN_DEPTH_M, MAX_DEPTH_M)
 		"depth_out", "farther":
+			_anchor_mode = "manual"
 			_anchor_depth_m = clampf(_anchor_depth_m + CARD_DEPTH_STEP_M, MIN_DEPTH_M, MAX_DEPTH_M)
+		"toggle_bbox_mode":
+			_anchor_mode = "manual" if _anchor_mode == "bbox" else "bbox"
+			if _anchor_mode == "bbox":
+				_apply_bbox_anchor()
+		"bbox_left":
+			_anchor_mode = "bbox"
+			_bbox_center_px.x = clampf(_bbox_center_px.x - BBOX_CENTER_STEP_PX, 0.0, _bbox_image_size.x)
+			_apply_bbox_anchor()
+		"bbox_right":
+			_anchor_mode = "bbox"
+			_bbox_center_px.x = clampf(_bbox_center_px.x + BBOX_CENTER_STEP_PX, 0.0, _bbox_image_size.x)
+			_apply_bbox_anchor()
+		"bbox_up":
+			_anchor_mode = "bbox"
+			_bbox_center_px.y = clampf(_bbox_center_px.y - BBOX_CENTER_STEP_PX, 0.0, _bbox_image_size.y)
+			_apply_bbox_anchor()
+		"bbox_down":
+			_anchor_mode = "bbox"
+			_bbox_center_px.y = clampf(_bbox_center_px.y + BBOX_CENTER_STEP_PX, 0.0, _bbox_image_size.y)
+			_apply_bbox_anchor()
+		"bbox_depth_in":
+			_anchor_mode = "bbox"
+			_bbox_depth_m = clampf(_bbox_depth_m - BBOX_DEPTH_STEP_M, MIN_DEPTH_M, MAX_DEPTH_M)
+			_apply_bbox_anchor()
+		"bbox_depth_out":
+			_anchor_mode = "bbox"
+			_bbox_depth_m = clampf(_bbox_depth_m + BBOX_DEPTH_STEP_M, MIN_DEPTH_M, MAX_DEPTH_M)
+			_apply_bbox_anchor()
 		"speed_up", "plus":
 			_speed_deg_per_second = clampf(_speed_deg_per_second + CARD_SPEED_STEP_DEG_PER_SECOND, MIN_SPEED_DEG_PER_SECOND, MAX_SPEED_DEG_PER_SECOND)
 		"speed_down", "minus":
@@ -246,8 +298,55 @@ func _apply_command(command: String) -> void:
 			_anchor_yaw_deg = CARD_START_YAW_DEG
 			_anchor_pitch_deg = CARD_START_PITCH_DEG
 			_anchor_depth_m = CARD_START_DEPTH_M
+			_anchor_mode = "manual"
+			_bbox_center_px = BBOX_START_CENTER_PX
+			_bbox_size_px = BBOX_START_SIZE_PX
+			_bbox_image_size = BBOX_IMAGE_SIZE
+			_bbox_depth_m = CARD_START_DEPTH_M
+			_bbox_angular_size_deg = Vector2.ZERO
 			_paused = false
 	_apply_3dof_anchor_transform()
+
+
+func _apply_bbox_payload(parsed: Dictionary) -> void:
+	var bbox = parsed.get("bbox", {})
+	var image = parsed.get("image", {})
+	if typeof(bbox) != TYPE_DICTIONARY or typeof(image) != TYPE_DICTIONARY:
+		return
+	_bbox_center_px = Vector2(float(bbox.get("cx", _bbox_center_px.x)), float(bbox.get("cy", _bbox_center_px.y)))
+	_bbox_size_px = Vector2(float(bbox.get("w", _bbox_size_px.x)), float(bbox.get("h", _bbox_size_px.y)))
+	_bbox_image_size = Vector2(float(image.get("w", _bbox_image_size.x)), float(image.get("h", _bbox_image_size.y)))
+	_bbox_depth_m = clampf(float(parsed.get("depth_m", _bbox_depth_m)), MIN_DEPTH_M, MAX_DEPTH_M)
+	_anchor_mode = "bbox"
+	_last_command = "bbox_payload"
+	_apply_bbox_anchor()
+
+
+func _apply_bbox_anchor() -> void:
+	var anchor := _anchor_from_bbox(_bbox_center_px, _bbox_size_px, _bbox_image_size, _bbox_depth_m)
+	_anchor_yaw_deg = anchor["yaw_deg"]
+	_anchor_pitch_deg = anchor["pitch_deg"]
+	_anchor_depth_m = anchor["depth_m"]
+	_bbox_angular_size_deg = anchor["angular_size_deg"]
+
+
+func _anchor_from_bbox(center_px: Vector2, size_px: Vector2, image_size: Vector2, depth_m: float) -> Dictionary:
+	var fx := (image_size.x * 0.5) / tan(deg_to_rad(BBOX_HORIZONTAL_FOV_DEG) * 0.5)
+	var fy := (image_size.y * 0.5) / tan(deg_to_rad(BBOX_VERTICAL_FOV_DEG) * 0.5)
+	var nx := (center_px.x - image_size.x * 0.5) / fx
+	var ny := (center_px.y - image_size.y * 0.5) / fy
+	var ray := Vector3(nx, -ny, -1.0).normalized()
+	var point := ray * depth_m
+	var yaw_deg := rad_to_deg(atan2(point.x, -point.z))
+	var pitch_deg := rad_to_deg(atan2(point.y, sqrt(point.x * point.x + point.z * point.z)))
+	var angular_w := rad_to_deg(2.0 * atan((size_px.x * 0.5) / fx))
+	var angular_h := rad_to_deg(2.0 * atan((size_px.y * 0.5) / fy))
+	return {
+		"yaw_deg": yaw_deg,
+		"pitch_deg": pitch_deg,
+		"depth_m": depth_m,
+		"angular_size_deg": Vector2(angular_w, angular_h),
+	}
 
 
 func _anchor_position_from_yaw_pitch_depth() -> Vector3:
@@ -308,15 +407,23 @@ func _update_status_label() -> void:
 	var xr_origin_pos := "n/a"
 	if _xr_origin != null:
 		xr_origin_pos = _format_vec3(_xr_origin.global_position)
-	_status_label.text = "3DoF Anchor\nWS: %s  Cmd: %s  Face: 3DoF\nCamera Pos xyz: %s\nCamera Rot xyz: %s\nXROrigin Pos xyz: %s\nYaw/Pitch/Depth: %.1f %.1f %.2f  Rot: %.1f %.1f %.1f\nSpeed: %.1f deg/s  Paused: %s\nTL %.2f %.2f %.2f  TR %.2f %.2f %.2f\nBL %.2f %.2f %.2f  BR %.2f %.2f %.2f" % [
+	_status_label.text = "3DoF Anchor\nWS: %s  Cmd: %s  Face: 3DoF  Mode: %s\nCamera Pos xyz: %s\nCamera Rot xyz: %s\nXROrigin Pos xyz: %s\nBBox cx/cy/w/h: %.0f %.0f %.0f %.0f  Depth: %.2f\nYaw/Pitch/Depth: %.1f %.1f %.2f  Angular W/H: %.1f %.1f  Rot: %.1f %.1f %.1f\nSpeed: %.1f deg/s  Paused: %s\nTL %.2f %.2f %.2f  TR %.2f %.2f %.2f\nBL %.2f %.2f %.2f  BR %.2f %.2f %.2f" % [
 		"connected" if _ws_connected else "waiting",
 		_last_command,
+		_anchor_mode,
 		camera_pos,
 		camera_rot,
 		xr_origin_pos,
+		_bbox_center_px.x,
+		_bbox_center_px.y,
+		_bbox_size_px.x,
+		_bbox_size_px.y,
+		_bbox_depth_m,
 		_anchor_yaw_deg,
 		_anchor_pitch_deg,
 		_anchor_depth_m,
+		_bbox_angular_size_deg.x,
+		_bbox_angular_size_deg.y,
 		rotation.x,
 		rotation.y,
 		rotation.z,

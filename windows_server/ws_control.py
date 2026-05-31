@@ -44,6 +44,13 @@ KEY_COMMANDS = {
     "space": "pause",
     " ": "pause",
     "r": "reset",
+    "b": "toggle_bbox_mode",
+    "j": "bbox_left",
+    "l": "bbox_right",
+    "i": "bbox_up",
+    "k": "bbox_down",
+    "u": "bbox_depth_out",
+    "o": "bbox_depth_in",
 }
 
 EXTENDED_KEYS = {
@@ -58,6 +65,26 @@ QUIT_KEYS = {"q", "esc", "escape", "\x1b"}
 
 def build_control_message(command: str) -> str:
     return json.dumps({"type": "control", "command": command}, separators=(",", ":"))
+
+
+def build_bbox_message(
+    center_x: int,
+    center_y: int,
+    width: int,
+    height: int,
+    image_width: int,
+    image_height: int,
+    depth_m: float,
+) -> str:
+    return json.dumps(
+        {
+            "type": "bbox",
+            "bbox": {"cx": center_x, "cy": center_y, "w": width, "h": height},
+            "image": {"w": image_width, "h": image_height},
+            "depth_m": depth_m,
+        },
+        separators=(",", ":"),
+    )
 
 
 def make_websocket_accept_key(client_key: str) -> str:
@@ -234,6 +261,7 @@ async def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     stop = asyncio.Event()
     print(f"SmartXR ws_control listening on ws://{host}:{port}/control")
     print("Keys: W/A/S/D or arrows adjust yaw/pitch, [/ ] depth, +/- angular speed, Space pause, R reset, Q quit.")
+    print("Mock bbox: B toggle mode, J/L move cx, I/K move cy, U/O depth.")
     if websockets is None:
         await _serve_stdlib(host, port, hub, stop)
         return

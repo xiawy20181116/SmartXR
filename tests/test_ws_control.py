@@ -26,11 +26,39 @@ class WsControlTests(unittest.TestCase):
             "space": "pause",
             " ": "pause",
             "r": "reset",
+            "b": "toggle_bbox_mode",
+            "j": "bbox_left",
+            "l": "bbox_right",
+            "i": "bbox_up",
+            "k": "bbox_down",
+            "u": "bbox_depth_out",
+            "o": "bbox_depth_in",
         }
 
         for key, command in cases.items():
             with self.subTest(key=key):
                 self.assertEqual(ws_control.command_for_key(key), command)
+
+    def test_build_bbox_message_uses_stable_android_protocol(self):
+        payload = ws_control.build_bbox_message(
+            center_x=420,
+            center_y=280,
+            width=180,
+            height=240,
+            image_width=1280,
+            image_height=720,
+            depth_m=1.6,
+        )
+
+        self.assertEqual(
+            json.loads(payload),
+            {
+                "type": "bbox",
+                "bbox": {"cx": 420, "cy": 280, "w": 180, "h": 240},
+                "image": {"w": 1280, "h": 720},
+                "depth_m": 1.6,
+            },
+        )
 
     def test_unknown_key_has_no_command(self):
         self.assertIsNone(ws_control.command_for_key("x"))
