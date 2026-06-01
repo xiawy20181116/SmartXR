@@ -93,6 +93,8 @@ var _vst_tracker_latency_ms := -1.0
 var _vst_anchor_updates := 0
 var _vst_eye_to_head_status := "eye2head: not queried"
 var _vst_calibration_status := "cal: not queried"
+var _vst_right_eye_to_head_matrix := PackedFloat64Array()
+var _vst_uses_eye_to_head_anchor := false
 
 
 func _ready() -> void:
@@ -483,6 +485,8 @@ func _anchor_from_bbox(center_px: Vector2, size_px: Vector2, image_size: Vector2
 	var ny := (center_px.y - image_size.y * 0.5) / fy
 	var ray := Vector3(nx, -ny, -1.0).normalized()
 	var point := ray * depth_m
+	if _vst_uses_eye_to_head_anchor:
+		point = _transform_right_vst_point_to_head(point)
 	var yaw_deg := rad_to_deg(atan2(point.x, -point.z))
 	var pitch_deg := rad_to_deg(atan2(point.y, sqrt(point.x * point.x + point.z * point.z)))
 	var angular_w := rad_to_deg(2.0 * atan((size_px.x * 0.5) / fx))
@@ -490,9 +494,20 @@ func _anchor_from_bbox(center_px: Vector2, size_px: Vector2, image_size: Vector2
 	return {
 		"yaw_deg": yaw_deg,
 		"pitch_deg": pitch_deg,
-		"depth_m": depth_m,
+		"depth_m": point.length() if _vst_uses_eye_to_head_anchor else depth_m,
 		"angular_size_deg": Vector2(angular_w, angular_h),
 	}
+
+
+func _transform_right_vst_point_to_head(point: Vector3) -> Vector3:
+	if _vst_right_eye_to_head_matrix.size() < 16:
+		return point
+	var m := _vst_right_eye_to_head_matrix
+	return Vector3(
+		float(m[0]) * point.x + float(m[1]) * point.y + float(m[2]) * point.z + float(m[3]),
+		float(m[4]) * point.x + float(m[5]) * point.y + float(m[6]) * point.z + float(m[7]),
+		float(m[8]) * point.x + float(m[9]) * point.y + float(m[10]) * point.z + float(m[11])
+	)
 
 
 func _anchor_position_from_yaw_pitch_depth() -> Vector3:
@@ -769,6 +784,7 @@ func _refresh_vst_calibration_diagnostics() -> void:
 	if _vst_capture.has_method(&"get_eye_to_head_matrices"):
 		var eye_info = _vst_capture.get_eye_to_head_matrices()
 		if typeof(eye_info) == TYPE_DICTIONARY:
+			_store_right_eye_to_head_matrix(eye_info)
 			_vst_eye_to_head_status = _format_eye_to_head_status(eye_info)
 		else:
 			_vst_eye_to_head_status = "eye2head: invalid response"
@@ -787,6 +803,19 @@ func _refresh_vst_calibration_diagnostics() -> void:
 	else:
 		_vst_calibration_status = "cal: API missing"
 	print("VST calibration: %s | %s" % [_vst_eye_to_head_status, _vst_calibration_status])
+
+
+func _store_right_eye_to_head_matrix(eye_info: Dictionary) -> void:
+	_vst_right_eye_to_head_matrix = PackedFloat64Array()
+	_vst_uses_eye_to_head_anchor = false
+	if int(eye_info.get("ret", -999)) != 0:
+		return
+	var right = eye_info.get("right", PackedFloat64Array())
+	if not (right is PackedFloat64Array) or right.size() < 16:
+		return
+	for i in range(16):
+		_vst_right_eye_to_head_matrix.push_back(float(right[i]))
+	_vst_uses_eye_to_head_anchor = true
 
 
 func _format_eye_to_head_status(eye_info: Dictionary) -> String:
@@ -852,7 +881,7 @@ func _format_vst_status_line() -> String:
 	if _vst_first_box.size() >= 5:
 		box_str = "%.2f %.2f %.2f %.2f %.2f" % [_vst_first_box[0], _vst_first_box[1], _vst_first_box[2], _vst_first_box[3], _vst_first_box[4]]
 	var err_str := _vst_last_error if not _vst_last_error.is_empty() else "-"
-	return "VST: cls=%s init=%s frames=%d boxes=%d latency=%.1fms img=%.0fx%.0f box0=%s err=%s\n%s\n%s" % [
+	return "VST: cls=%s init=%s frames=%d boxes=%d latency=%.1fms img=%.0fx%.0f box0=%s err=%s\nAnchor: %s\n%s\n%s" % [
 		class_state,
 		init_state,
 		_vst_right_frames,
@@ -862,6 +891,7 @@ func _format_vst_status_line() -> String:
 		_vst_right_image_size.y,
 		box_str,
 		err_str,
+		"eye2head" if _vst_uses_eye_to_head_anchor else "raw-fov",
 		_vst_eye_to_head_status,
 		_vst_calibration_status,
 	]

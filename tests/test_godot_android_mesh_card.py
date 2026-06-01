@@ -121,6 +121,17 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_apply_bbox_anchor()", source)
         self.assertIn("VST anchor:", source)
 
+    def test_vst_bbox_anchor_uses_right_eye_to_head_transform_when_available(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("var _vst_right_eye_to_head_matrix := PackedFloat64Array()", source)
+        self.assertIn("var _vst_uses_eye_to_head_anchor := false", source)
+        self.assertIn("_store_right_eye_to_head_matrix(eye_info)", source)
+        self.assertIn("func _transform_right_vst_point_to_head(point: Vector3) -> Vector3:", source)
+        self.assertIn("point = _transform_right_vst_point_to_head(point)", source)
+        self.assertIn("Anchor: %s", source)
+        self.assertIn('"eye2head" if _vst_uses_eye_to_head_anchor else "raw-fov"', source)
+
     def test_vst_tracker_boxes_draw_visible_3d_bbox_frame(self):
         source = SCRIPT.read_text(encoding="utf-8")
 
