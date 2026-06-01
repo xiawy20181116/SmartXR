@@ -135,6 +135,20 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_set_vst_bbox_frame_visible(false)", source)
         self.assertIn("_orient_node_for_3dof_reading(_vst_bbox_frame_anchor)", source)
 
+    def test_vst_tracker_debug_panel_draws_raw_right_image_bbox(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("const VST_RAW_DEBUG_PIXEL_SIZE_M", source)
+        self.assertIn("var _vst_raw_debug_anchor: Node3D = null", source)
+        self.assertIn("var _vst_raw_right_sprite: Sprite3D = null", source)
+        self.assertIn("var _vst_raw_bbox_parts: Array[MeshInstance3D] = []", source)
+        self.assertIn("_build_vst_raw_debug_panel()", source)
+        self.assertIn('VSTRawDebugPanel"', source)
+        self.assertIn("_vst_raw_right_sprite.texture = ImageTexture.create_from_image(right_img)", source)
+        self.assertIn("_update_vst_raw_bbox_overlay(boxes)", source)
+        self.assertIn("(x + w * 0.5 - 0.5) * overlay_size.x", source)
+        self.assertIn("(0.5 - y - h * 0.5) * overlay_size.y", source)
+
     def test_moving_card_reports_xr_pose_for_tracking_diagnosis(self):
         source = SCRIPT.read_text(encoding="utf-8")
 

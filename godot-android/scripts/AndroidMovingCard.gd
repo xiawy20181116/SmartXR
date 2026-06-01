@@ -39,6 +39,9 @@ const VST_RIGHT_TRACKER_FRAME_STRIDE := 5
 const VST_BBOX_FRAME_COLOR := Color(1.0, 0.88, 0.05, 1.0)
 const VST_BBOX_FRAME_LINE_M := 0.018
 const VST_BBOX_FRAME_Z_OFFSET_M := 0.04
+const VST_RAW_DEBUG_PIXEL_SIZE_M := 0.00045
+const VST_RAW_DEBUG_POSITION := Vector3(0.48, -0.28, -1.2)
+const VST_RAW_DEBUG_FRAME_Z_OFFSET_M := 0.025
 
 var _xr_active := false
 var _xr_interface_found := false
@@ -55,6 +58,9 @@ var _card_mesh: MeshInstance3D = null
 var _xr_probe_mesh: MeshInstance3D = null
 var _vst_bbox_frame_anchor: Node3D = null
 var _vst_bbox_frame_parts: Array[MeshInstance3D] = []
+var _vst_raw_debug_anchor: Node3D = null
+var _vst_raw_right_sprite: Sprite3D = null
+var _vst_raw_bbox_parts: Array[MeshInstance3D] = []
 var _status_label: Label3D = null
 var _speed_deg_per_second := CARD_DEFAULT_SPEED_DEG_PER_SECOND
 var _anchor_yaw_deg := CARD_START_YAW_DEG
@@ -87,6 +93,7 @@ var _vst_anchor_updates := 0
 func _ready() -> void:
 	_try_init_xr()
 	_setup_camera()
+	_build_vst_raw_debug_panel()
 	_setup_light()
 	_build_card_anchor()
 	_build_xr_render_probe()
@@ -225,6 +232,46 @@ func _build_vst_bbox_frame() -> void:
 		part.set_surface_override_material(0, material)
 		_vst_bbox_frame_anchor.add_child(part)
 		_vst_bbox_frame_parts.append(part)
+
+
+func _build_vst_raw_debug_panel() -> void:
+	if _camera == null:
+		return
+	_vst_raw_debug_anchor = Node3D.new()
+	_vst_raw_debug_anchor.name = "VSTRawDebugPanel"
+	_vst_raw_debug_anchor.position = VST_RAW_DEBUG_POSITION
+	_camera.add_child(_vst_raw_debug_anchor)
+
+	_vst_raw_right_sprite = Sprite3D.new()
+	_vst_raw_right_sprite.name = "VSTRawRightImage"
+	_vst_raw_right_sprite.pixel_size = VST_RAW_DEBUG_PIXEL_SIZE_M
+	_vst_raw_right_sprite.no_depth_test = true
+	_vst_raw_right_sprite.modulate = Color(1.0, 1.0, 1.0, 0.72)
+	_vst_raw_debug_anchor.add_child(_vst_raw_right_sprite)
+
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = VST_BBOX_FRAME_COLOR
+	material.no_depth_test = true
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+	for part_name in ["Top", "Bottom", "Left", "Right"]:
+		var part := MeshInstance3D.new()
+		part.name = "VSTRawBBox" + part_name
+		part.mesh = QuadMesh.new()
+		part.visible = false
+		part.set_surface_override_material(0, material)
+		_vst_raw_debug_anchor.add_child(part)
+		_vst_raw_bbox_parts.append(part)
+
+	var label := Label3D.new()
+	label.name = "VSTRawDebugLabel"
+	label.text = "RAW VST"
+	label.font_size = 18
+	label.no_depth_test = true
+	label.modulate = VST_BBOX_FRAME_COLOR
+	label.position = Vector3(0.0, 0.19, 0.02)
+	_vst_raw_debug_anchor.add_child(label)
 
 
 func _make_card_ui() -> Control:
@@ -511,6 +558,32 @@ func _set_vst_bbox_frame_visible(visible: bool) -> void:
 		_vst_bbox_frame_anchor.visible = visible
 
 
+func _update_vst_raw_bbox_overlay(boxes: PackedFloat32Array) -> void:
+	if _vst_raw_bbox_parts.size() != 4 or _vst_right_image_size.x <= 0.0 or _vst_right_image_size.y <= 0.0:
+		return
+	if boxes.size() < 5:
+		_set_vst_raw_bbox_visible(false)
+		return
+	var x := clampf(float(boxes[0]), 0.0, 1.0)
+	var y := clampf(float(boxes[1]), 0.0, 1.0)
+	var w := clampf(float(boxes[2]), 0.02, 1.0)
+	var h := clampf(float(boxes[3]), 0.02, 1.0)
+	var overlay_size := _vst_right_image_size * VST_RAW_DEBUG_PIXEL_SIZE_M
+	var center := Vector3((x + w * 0.5 - 0.5) * overlay_size.x, (0.5 - y - h * 0.5) * overlay_size.y, VST_RAW_DEBUG_FRAME_Z_OFFSET_M)
+	var width_m := w * overlay_size.x
+	var height_m := h * overlay_size.y
+	_set_vst_raw_bbox_visible(true)
+	_configure_vst_bbox_frame_part(_vst_raw_bbox_parts[0], Vector2(width_m, VST_BBOX_FRAME_LINE_M), center + Vector3(0.0, height_m * 0.5, 0.0))
+	_configure_vst_bbox_frame_part(_vst_raw_bbox_parts[1], Vector2(width_m, VST_BBOX_FRAME_LINE_M), center + Vector3(0.0, -height_m * 0.5, 0.0))
+	_configure_vst_bbox_frame_part(_vst_raw_bbox_parts[2], Vector2(VST_BBOX_FRAME_LINE_M, height_m), center + Vector3(-width_m * 0.5, 0.0, 0.0))
+	_configure_vst_bbox_frame_part(_vst_raw_bbox_parts[3], Vector2(VST_BBOX_FRAME_LINE_M, height_m), center + Vector3(width_m * 0.5, 0.0, 0.0))
+
+
+func _set_vst_raw_bbox_visible(visible: bool) -> void:
+	for part in _vst_raw_bbox_parts:
+		part.visible = visible
+
+
 func _corner_world_points() -> Dictionary:
 	var half := CARD_SIZE_M * 0.5
 	var transform := _card_mesh.global_transform
@@ -664,6 +737,8 @@ func _poll_vst_bbox() -> void:
 		var right_img: Image = _vst_capture.capture_frame_right() if _vst_capture.has_method(&"capture_frame_right") else null
 		if right_img != null:
 			_vst_right_image_size = Vector2(right_img.get_width(), right_img.get_height())
+			if _vst_raw_right_sprite != null:
+				_vst_raw_right_sprite.texture = ImageTexture.create_from_image(right_img)
 			_vst_right_frames += 1
 	if _vst_capture.has_method(&"get_right_tracker_boxes"):
 		var boxes: PackedFloat32Array = _vst_capture.get_right_tracker_boxes()
@@ -672,9 +747,11 @@ func _poll_vst_bbox() -> void:
 			_vst_first_box = PackedFloat32Array()
 			for i in range(5):
 				_vst_first_box.push_back(float(boxes[i]))
+			_update_vst_raw_bbox_overlay(boxes)
 			_apply_vst_tracker_anchor(boxes)
 		else:
 			_vst_first_box = PackedFloat32Array()
+			_set_vst_raw_bbox_visible(false)
 			_set_vst_bbox_frame_visible(false)
 	if _vst_capture.has_method(&"get_right_tracker_total_latency_ms"):
 		_vst_tracker_latency_ms = float(_vst_capture.get_right_tracker_total_latency_ms())
