@@ -172,6 +172,22 @@ class AndroidMovingCardVstScaffoldTests(unittest.TestCase):
         self.assertIn("var w := clampf(float(boxes[2]), 0.02, 1.0)", self.source)
         self.assertIn("_bbox_center_px = Vector2((x + w * 0.5) * _vst_right_image_size.x", self.source)
 
+    def test_script_and_extension_expose_runtime_calibration_diagnostics(self):
+        self.assertIn("const GXR_CAL_CV_DEWARP_R := 0x00400061", self.source)
+        self.assertIn("const GXR_CAL_CV_SLAM := 0x00400070", self.source)
+        self.assertIn("_refresh_vst_calibration_diagnostics()", self.source)
+        self.assertIn("_vst_eye_to_head_status", self.source)
+        self.assertIn("_vst_calibration_status", self.source)
+        self.assertIn("get_eye_to_head_matrices", self.source)
+        self.assertIn("get_calibration_coeff_info", self.source)
+
+        debug_binary = (ADDON_SO / "libgxr_sdk.android.template_debug.arm64.so").read_bytes()
+        release_binary = (ADDON_SO / "libgxr_sdk.android.template_release.arm64.so").read_bytes()
+        for binary in [debug_binary, release_binary]:
+            with self.subTest(size=len(binary)):
+                self.assertIn(b"get_eye_to_head_matrices", binary)
+                self.assertIn(b"get_calibration_coeff_info", binary)
+
 
 if __name__ == "__main__":
     unittest.main()

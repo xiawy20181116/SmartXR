@@ -42,6 +42,9 @@ const VST_BBOX_FRAME_Z_OFFSET_M := 0.04
 const VST_RAW_DEBUG_PIXEL_SIZE_M := 0.00045
 const VST_RAW_DEBUG_POSITION := Vector3(0.48, -0.28, -1.2)
 const VST_RAW_DEBUG_FRAME_Z_OFFSET_M := 0.025
+const GXR_CAL_CV_DEWARP_L := 0x00400060
+const GXR_CAL_CV_DEWARP_R := 0x00400061
+const GXR_CAL_CV_SLAM := 0x00400070
 
 var _xr_active := false
 var _xr_interface_found := false
@@ -88,6 +91,8 @@ var _vst_first_box := PackedFloat32Array()
 var _vst_box_count := 0
 var _vst_tracker_latency_ms := -1.0
 var _vst_anchor_updates := 0
+var _vst_eye_to_head_status := "eye2head: not queried"
+var _vst_calibration_status := "cal: not queried"
 
 
 func _ready() -> void:
@@ -687,6 +692,7 @@ func _setup_vst_capture() -> void:
 	_vst_init_ok = bool(_vst_capture.initialize())
 	if _vst_init_ok:
 		_vst_last_error = ""
+		_refresh_vst_calibration_diagnostics()
 	else:
 		_vst_last_error = str(_vst_capture.get_last_error()) if _vst_capture.has_method(&"get_last_error") else "initialize returned false"
 
@@ -757,6 +763,59 @@ func _poll_vst_bbox() -> void:
 		_vst_tracker_latency_ms = float(_vst_capture.get_right_tracker_total_latency_ms())
 
 
+func _refresh_vst_calibration_diagnostics() -> void:
+	if _vst_capture == null:
+		return
+	if _vst_capture.has_method(&"get_eye_to_head_matrices"):
+		var eye_info = _vst_capture.get_eye_to_head_matrices()
+		if typeof(eye_info) == TYPE_DICTIONARY:
+			_vst_eye_to_head_status = _format_eye_to_head_status(eye_info)
+		else:
+			_vst_eye_to_head_status = "eye2head: invalid response"
+	else:
+		_vst_eye_to_head_status = "eye2head: API missing"
+
+	if _vst_capture.has_method(&"get_calibration_coeff_info"):
+		var right_info = _vst_capture.get_calibration_coeff_info(GXR_CAL_CV_DEWARP_R, 4096)
+		var slam_info = _vst_capture.get_calibration_coeff_info(GXR_CAL_CV_SLAM, 4096)
+		var left_info = _vst_capture.get_calibration_coeff_info(GXR_CAL_CV_DEWARP_L, 256)
+		_vst_calibration_status = "cal: L %s R %s SLAM %s" % [
+			_format_calibration_probe(left_info),
+			_format_calibration_probe(right_info),
+			_format_calibration_probe(slam_info),
+		]
+	else:
+		_vst_calibration_status = "cal: API missing"
+	print("VST calibration: %s | %s" % [_vst_eye_to_head_status, _vst_calibration_status])
+
+
+func _format_eye_to_head_status(eye_info: Dictionary) -> String:
+	var ret := int(eye_info.get("ret", -999))
+	var right = eye_info.get("right", PackedFloat64Array())
+	if right is PackedFloat64Array and right.size() >= 16:
+		return "eye2head: ret=%d r03=%.4f r13=%.4f r23=%.4f" % [
+			ret,
+			float(right[3]),
+			float(right[7]),
+			float(right[11]),
+		]
+	return "eye2head: ret=%d no-matrix" % ret
+
+
+func _format_calibration_probe(info) -> String:
+	if typeof(info) != TYPE_DICTIONARY:
+		return "invalid"
+	var bytes_size := 0
+	var bytes = info.get("bytes", PackedByteArray())
+	if bytes is PackedByteArray:
+		bytes_size = bytes.size()
+	return "ret=%d size=%d bytes=%d" % [
+		int(info.get("result", -999)),
+		int(info.get("actual_size", 0)),
+		bytes_size,
+	]
+
+
 func _apply_vst_tracker_anchor(boxes: PackedFloat32Array) -> void:
 	if boxes.size() < 5 or _vst_right_image_size.x <= 0.0 or _vst_right_image_size.y <= 0.0:
 		return
@@ -793,7 +852,7 @@ func _format_vst_status_line() -> String:
 	if _vst_first_box.size() >= 5:
 		box_str = "%.2f %.2f %.2f %.2f %.2f" % [_vst_first_box[0], _vst_first_box[1], _vst_first_box[2], _vst_first_box[3], _vst_first_box[4]]
 	var err_str := _vst_last_error if not _vst_last_error.is_empty() else "-"
-	return "VST: cls=%s init=%s frames=%d boxes=%d latency=%.1fms img=%.0fx%.0f box0=%s err=%s" % [
+	return "VST: cls=%s init=%s frames=%d boxes=%d latency=%.1fms img=%.0fx%.0f box0=%s err=%s\n%s\n%s" % [
 		class_state,
 		init_state,
 		_vst_right_frames,
@@ -803,6 +862,8 @@ func _format_vst_status_line() -> String:
 		_vst_right_image_size.y,
 		box_str,
 		err_str,
+		_vst_eye_to_head_status,
+		_vst_calibration_status,
 	]
 
 

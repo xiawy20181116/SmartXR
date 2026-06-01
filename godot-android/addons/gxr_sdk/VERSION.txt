@@ -22,6 +22,20 @@ libjxg.so                                     152568  2026-05-25 20:10:58
 libtrace_provider.so                         3418008  2026-05-25 20:10:58
 libtracking_hand.so                         50315848  2026-05-25 20:11:02
 
+Local rebuild for YAN-56 runtime calibration diagnostics
+--------------------------------------------------------
+Source: E:\xia\PJ\SmartXR\gxr_sdk_extension
+Built by: 小安开发第一 on 2026-06-01
+
+Updated files:
+libgxr_sdk.android.template_debug.arm64.so   9429272
+libgxr_sdk.android.template_release.arm64.so 9369200
+
+The local rebuild keeps the VST + ncnn tracker path and adds two Godot-bound
+diagnostic APIs:
+- get_eye_to_head_matrices()
+- get_calibration_coeff_info(cal_type, max_bytes)
+
 Also mirrored to gradle jniLibs
 -------------------------------
 android/build/libs/debug/arm64-v8a/   (10 files; same set + libomp.so + libopenxr_loader.so)
