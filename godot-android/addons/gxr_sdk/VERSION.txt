@@ -1,0 +1,47 @@
+GXR SDK binary provenance
+=========================
+
+These binaries are NOT built from the SmartXR repo. They are vendored
+from the Godot_card project, which validated the VST + ncnn pipeline.
+
+Source
+------
+Path:    E:\xia\Godot_card\addons\gxr_sdk\bin\android
+Origin:  Godot_card project (not a git repo; pinned by file mtime + size)
+Imported by: agent/orion/0500409c on 2026-06-01 (issue YAN-56, M1)
+
+Files vendored to addons/gxr_sdk/bin/android/
+---------------------------------------------
+libahrs.so                                   2003744  2026-05-25 20:10:58
+libgxr_log.so                                 952256  2026-05-25 20:10:58
+libgxr_metadata.so                            168696  2026-05-25 20:10:58
+libgxr_sdk.android.template_debug.arm64.so   9422392  2026-05-30 15:04:30
+libgxr_sdk.android.template_release.arm64.so 9362656  2026-05-30 17:21:09
+libgxrapi.so                                 1333424  2026-05-25 20:10:58
+libjxg.so                                     152568  2026-05-25 20:10:58
+libtrace_provider.so                         3418008  2026-05-25 20:10:58
+libtracking_hand.so                         50315848  2026-05-25 20:11:02
+
+Also mirrored to gradle jniLibs
+-------------------------------
+android/build/libs/debug/arm64-v8a/   (10 files; same set + libomp.so + libopenxr_loader.so)
+android/build/libs/release/arm64-v8a/ (8 files; subset matching Godot_card's release layout — no template_release.so here, no openxr_loader.so)
+
+Rollback
+--------
+If this binary set misbehaves on Quest, restore the previous SmartXR baseline:
+    git checkout baseline-3dof-bbox-anchor-20260531 -- godot-android/addons/gxr_sdk
+That returns the vanilla 913 KB libgxr_sdk.android.template_debug.arm64.so and removes the 5 support libs. Then re-apply only the Godot_card files known to be safe.
+
+What changed vs vanilla SmartXR
+-------------------------------
+- libgxr_sdk.android.template_debug.arm64.so   913504 -> 9422392 (+10.3x)
+- libgxr_sdk.android.template_release.arm64.so 792680 -> 9362656 (+11.8x)
+- libgxrapi.so                                1349872 -> 1333424 (very close; updated for consistency)
+- libtracking_hand.so                        49249232 -> 50315848 (very close; updated for consistency)
+- libahrs.so / libgxr_log.so / libgxr_metadata.so / libjxg.so / libtrace_provider.so — NEW
+- libomp.so / libopenxr_loader.so (jniLibs only) — NEW
+
+The fatter libgxr_sdk.* binaries register the GXRDualVstCapture GDExtension class
+and embed the ncnn inference runtime for the right-eye tracker. See
+ncnn/yolov8n_320.opt.ncnn.{param,bin} for the model artefacts.

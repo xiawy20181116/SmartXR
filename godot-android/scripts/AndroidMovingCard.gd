@@ -25,6 +25,17 @@ const MIN_DEPTH_M := 0.65
 const MAX_DEPTH_M := 4.0
 const WS_URL := "ws://10.1.98.195:8766/control"
 
+# M1 (YAN-56): on-device VST capture + ncnn tracker scaffold.
+# Functional behaviour is gated on GXRDualVstCapture class registration so the
+# scene still loads on a vanilla GXR SDK; activation requires the fat libgxr_sdk
+# from Godot_card (see addons/gxr_sdk/VERSION.txt).
+const VST_NCNN_PARAM_RES := "res://ncnn/yolov8n_320.opt.ncnn.param"
+const VST_NCNN_BIN_RES := "res://ncnn/yolov8n_320.opt.ncnn.bin"
+const VST_NCNN_PARAM_USER := "user://ncnn/yolov8n_320.opt.ncnn.param"
+const VST_NCNN_BIN_USER := "user://ncnn/yolov8n_320.opt.ncnn.bin"
+const VST_RIGHT_TRACKER_ENABLED := true
+const VST_RIGHT_TRACKER_FRAME_STRIDE := 5
+
 var _xr_active := false
 var _xr_origin: XROrigin3D = null
 var _camera: Camera3D = null
@@ -49,6 +60,18 @@ var _paused := false
 var _face_camera_enabled := true
 var _last_command := "none"
 
+# M1: VST capture state. _vst_capture stays null on vanilla SDK and every helper
+# below short-circuits in that case, so all existing behaviour is preserved.
+var _vst_class_registered := false
+var _vst_capture: Object = null
+var _vst_init_ok := false
+var _vst_last_error := "not initialized"
+var _vst_right_image_size := Vector2.ZERO
+var _vst_right_frames := 0
+var _vst_first_box := PackedFloat32Array()
+var _vst_box_count := 0
+var _vst_tracker_latency_ms := -1.0
+
 
 func _ready() -> void:
 	_try_init_xr()
@@ -57,6 +80,7 @@ func _ready() -> void:
 	_build_card_anchor()
 	_build_status_label()
 	_connect_ws()
+	_setup_vst_capture()
 	set_process(true)
 
 
@@ -204,6 +228,7 @@ func _connect_ws() -> void:
 
 func _process(delta: float) -> void:
 	_poll_ws(delta)
+	_poll_vst_bbox()
 	if not _paused and _anchor_mode == "manual":
 		_anchor_yaw_deg -= _speed_deg_per_second * delta
 		if _anchor_yaw_deg < CARD_END_YAW_DEG:
@@ -407,7 +432,8 @@ func _update_status_label() -> void:
 	var xr_origin_pos := "n/a"
 	if _xr_origin != null:
 		xr_origin_pos = _format_vec3(_xr_origin.global_position)
-	_status_label.text = "3DoF Anchor\nWS: %s  Cmd: %s  Face: 3DoF  Mode: %s\nCamera Pos xyz: %s\nCamera Rot xyz: %s\nXROrigin Pos xyz: %s\nBBox cx/cy/w/h: %.0f %.0f %.0f %.0f  Depth: %.2f\nYaw/Pitch/Depth: %.1f %.1f %.2f  Angular W/H: %.1f %.1f  Rot: %.1f %.1f %.1f\nSpeed: %.1f deg/s  Paused: %s\nTL %.2f %.2f %.2f  TR %.2f %.2f %.2f\nBL %.2f %.2f %.2f  BR %.2f %.2f %.2f" % [
+	var vst_line := _format_vst_status_line()
+	_status_label.text = "3DoF Anchor\nWS: %s  Cmd: %s  Face: 3DoF  Mode: %s\nCamera Pos xyz: %s\nCamera Rot xyz: %s\nXROrigin Pos xyz: %s\nBBox cx/cy/w/h: %.0f %.0f %.0f %.0f  Depth: %.2f\nYaw/Pitch/Depth: %.1f %.1f %.2f  Angular W/H: %.1f %.1f  Rot: %.1f %.1f %.1f\nSpeed: %.1f deg/s  Paused: %s\nTL %.2f %.2f %.2f  TR %.2f %.2f %.2f\nBL %.2f %.2f %.2f  BR %.2f %.2f %.2f\n%s" % [
 		"connected" if _ws_connected else "waiting",
 		_last_command,
 		_anchor_mode,
@@ -441,6 +467,109 @@ func _update_status_label() -> void:
 		corners["BR"].x,
 		corners["BR"].y,
 		corners["BR"].z,
+		vst_line,
+	]
+
+
+func _exit_tree() -> void:
+	if _vst_capture != null and _vst_capture.has_method(&"shutdown"):
+		_vst_capture.shutdown()
+
+
+func _setup_vst_capture() -> void:
+	_vst_class_registered = ClassDB.class_exists(&"GXRDualVstCapture")
+	if not _vst_class_registered:
+		_vst_last_error = "GXRDualVstCapture class not registered"
+		return
+	_vst_capture = ClassDB.instantiate(&"GXRDualVstCapture")
+	if _vst_capture == null:
+		_vst_last_error = "instantiate GXRDualVstCapture failed"
+		return
+	if VST_RIGHT_TRACKER_ENABLED:
+		_configure_vst_right_tracker_model()
+	_vst_init_ok = bool(_vst_capture.initialize())
+	if _vst_init_ok:
+		_vst_last_error = ""
+	else:
+		_vst_last_error = str(_vst_capture.get_last_error()) if _vst_capture.has_method(&"get_last_error") else "initialize returned false"
+
+
+func _configure_vst_right_tracker_model() -> void:
+	if _vst_capture == null or not _vst_capture.has_method(&"configure_right_tracker_model"):
+		_vst_last_error = "configure_right_tracker_model API unavailable"
+		return
+	var param_path := _stage_vst_tracker_asset(VST_NCNN_PARAM_RES, VST_NCNN_PARAM_USER)
+	var bin_path := _stage_vst_tracker_asset(VST_NCNN_BIN_RES, VST_NCNN_BIN_USER)
+	if param_path.is_empty() or bin_path.is_empty():
+		_vst_last_error = "ncnn asset staging failed"
+		return
+	var ok := bool(_vst_capture.configure_right_tracker_model(param_path, bin_path))
+	if _vst_capture.has_method(&"set_right_tracker_enabled"):
+		_vst_capture.set_right_tracker_enabled(true)
+	if _vst_capture.has_method(&"set_right_tracker_frame_stride"):
+		_vst_capture.set_right_tracker_frame_stride(VST_RIGHT_TRACKER_FRAME_STRIDE)
+	if not ok:
+		_vst_last_error = "configure_right_tracker_model returned false"
+
+
+func _stage_vst_tracker_asset(source_path: String, target_path: String) -> String:
+	if not DirAccess.dir_exists_absolute("user://ncnn"):
+		var err := DirAccess.make_dir_recursive_absolute("user://ncnn")
+		if err != OK:
+			return ""
+	if FileAccess.file_exists(target_path):
+		return ProjectSettings.globalize_path(target_path)
+	var source := FileAccess.open(source_path, FileAccess.READ)
+	if source == null:
+		return ""
+	var target := FileAccess.open(target_path, FileAccess.WRITE)
+	if target == null:
+		source.close()
+		return ""
+	target.store_buffer(source.get_buffer(source.get_length()))
+	target.close()
+	source.close()
+	return ProjectSettings.globalize_path(target_path)
+
+
+func _poll_vst_bbox() -> void:
+	if _vst_capture == null or not _vst_init_ok:
+		return
+	if _vst_capture.has_method(&"has_new_frame_right") and bool(_vst_capture.has_new_frame_right()):
+		var right_img: Image = _vst_capture.capture_frame_right() if _vst_capture.has_method(&"capture_frame_right") else null
+		if right_img != null:
+			_vst_right_image_size = Vector2(right_img.get_width(), right_img.get_height())
+			_vst_right_frames += 1
+	if _vst_capture.has_method(&"get_right_tracker_boxes"):
+		var boxes: PackedFloat32Array = _vst_capture.get_right_tracker_boxes()
+		_vst_box_count = boxes.size() / 5
+		if boxes.size() >= 5:
+			_vst_first_box = PackedFloat32Array()
+			for i in range(5):
+				_vst_first_box.push_back(float(boxes[i]))
+		else:
+			_vst_first_box = PackedFloat32Array()
+	if _vst_capture.has_method(&"get_right_tracker_total_latency_ms"):
+		_vst_tracker_latency_ms = float(_vst_capture.get_right_tracker_total_latency_ms())
+
+
+func _format_vst_status_line() -> String:
+	var class_state := "registered" if _vst_class_registered else "missing"
+	var init_state := "ok" if _vst_init_ok else "blocked"
+	var box_str := "n/a"
+	if _vst_first_box.size() >= 5:
+		box_str = "%.2f %.2f %.2f %.2f %.2f" % [_vst_first_box[0], _vst_first_box[1], _vst_first_box[2], _vst_first_box[3], _vst_first_box[4]]
+	var err_str := _vst_last_error if not _vst_last_error.is_empty() else "-"
+	return "VST: cls=%s init=%s frames=%d boxes=%d latency=%.1fms img=%.0fx%.0f box0=%s err=%s" % [
+		class_state,
+		init_state,
+		_vst_right_frames,
+		_vst_box_count,
+		_vst_tracker_latency_ms,
+		_vst_right_image_size.x,
+		_vst_right_image_size.y,
+		box_str,
+		err_str,
 	]
 
 
