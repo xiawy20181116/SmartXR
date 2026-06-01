@@ -3,6 +3,7 @@ extends Node3D
 const CARD_ANCHOR_NAME := "CardAnchor"
 const CARD_VIEWPORT_SIZE := Vector2i(720, 1080)
 const CARD_SIZE_M := Vector2(0.72, 1.08)
+const XR_PROBE_SIZE_M := Vector2(0.18, 0.18)
 const CARD_START_YAW_DEG := 32.0
 const CARD_END_YAW_DEG := -32.0
 const CARD_START_PITCH_DEG := -4.5
@@ -37,6 +38,9 @@ const VST_RIGHT_TRACKER_ENABLED := true
 const VST_RIGHT_TRACKER_FRAME_STRIDE := 5
 
 var _xr_active := false
+var _xr_interface_found := false
+var _xr_initialize_ok := false
+var _xr_init_error := "not attempted"
 var _xr_origin: XROrigin3D = null
 var _camera: Camera3D = null
 var _ws := WebSocketPeer.new()
@@ -45,6 +49,7 @@ var _ws_retry_seconds := 0.0
 var _card_viewport: SubViewport = null
 var _card_anchor: Node3D = null
 var _card_mesh: MeshInstance3D = null
+var _xr_probe_mesh: MeshInstance3D = null
 var _status_label: Label3D = null
 var _speed_deg_per_second := CARD_DEFAULT_SPEED_DEG_PER_SECOND
 var _anchor_yaw_deg := CARD_START_YAW_DEG
@@ -78,6 +83,7 @@ func _ready() -> void:
 	_setup_camera()
 	_setup_light()
 	_build_card_anchor()
+	_build_xr_render_probe()
 	_build_status_label()
 	_connect_ws()
 	_setup_vst_capture()
@@ -86,12 +92,26 @@ func _ready() -> void:
 
 func _try_init_xr() -> void:
 	var xr := XRServer.find_interface("OpenXR")
-	if xr != null and xr.initialize():
-		_xr_active = true
-		get_viewport().use_xr = true
-		get_viewport().transparent_bg = true
-		xr.environment_blend_mode = XRInterface.XR_ENV_BLEND_MODE_ALPHA_BLEND
-		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	_xr_interface_found = xr != null
+	if xr == null:
+		_xr_initialize_ok = false
+		_xr_active = false
+		_xr_init_error = "OpenXR interface not found"
+		print("XR init: " + _xr_init_error)
+		return
+	_xr_initialize_ok = bool(xr.initialize())
+	if not _xr_initialize_ok:
+		_xr_active = false
+		_xr_init_error = "OpenXR initialize returned false"
+		print("XR init: " + _xr_init_error)
+		return
+	_xr_active = true
+	get_viewport().use_xr = true
+	get_viewport().transparent_bg = true
+	xr.environment_blend_mode = XRInterface.XR_ENV_BLEND_MODE_ALPHA_BLEND
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	_xr_init_error = ""
+	print("XR init: active use_xr=%s transparent=%s blend=alpha" % [str(get_viewport().use_xr), str(get_viewport().transparent_bg)])
 
 
 func _setup_camera() -> void:
@@ -110,9 +130,9 @@ func _setup_camera() -> void:
 	var camera := Camera3D.new()
 	camera.name = "FallbackCamera"
 	camera.position = Vector3(0.0, 0.0, 0.0)
-	camera.look_at(_anchor_position_from_yaw_pitch_depth(), Vector3.UP)
 	camera.far = 50.0
 	add_child(camera)
+	camera.look_at(_anchor_position_from_yaw_pitch_depth(), Vector3.UP)
 	camera.make_current()
 	_xr_origin = null
 	_camera = camera
@@ -157,6 +177,26 @@ func _build_card_anchor() -> void:
 	_card_mesh.set_surface_override_material(0, material)
 	_card_anchor.add_child(_card_mesh)
 	_apply_3dof_anchor_transform()
+
+
+func _build_xr_render_probe() -> void:
+	if _card_anchor == null:
+		return
+	var mesh := QuadMesh.new()
+	mesh.size = XR_PROBE_SIZE_M
+
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = Color(1.0, 0.05, 0.05, 1.0)
+	material.no_depth_test = true
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+	_xr_probe_mesh = MeshInstance3D.new()
+	_xr_probe_mesh.name = "XRRenderProbe"
+	_xr_probe_mesh.mesh = mesh
+	_xr_probe_mesh.position = Vector3(-0.56, 0.58, 0.025)
+	_xr_probe_mesh.set_surface_override_material(0, material)
+	_card_anchor.add_child(_xr_probe_mesh)
 
 
 func _make_card_ui() -> Control:
@@ -432,8 +472,9 @@ func _update_status_label() -> void:
 	var xr_origin_pos := "n/a"
 	if _xr_origin != null:
 		xr_origin_pos = _format_vec3(_xr_origin.global_position)
+	var xr_line := _format_xr_status_line()
 	var vst_line := _format_vst_status_line()
-	_status_label.text = "3DoF Anchor\nWS: %s  Cmd: %s  Face: 3DoF  Mode: %s\nCamera Pos xyz: %s\nCamera Rot xyz: %s\nXROrigin Pos xyz: %s\nBBox cx/cy/w/h: %.0f %.0f %.0f %.0f  Depth: %.2f\nYaw/Pitch/Depth: %.1f %.1f %.2f  Angular W/H: %.1f %.1f  Rot: %.1f %.1f %.1f\nSpeed: %.1f deg/s  Paused: %s\nTL %.2f %.2f %.2f  TR %.2f %.2f %.2f\nBL %.2f %.2f %.2f  BR %.2f %.2f %.2f\n%s" % [
+	_status_label.text = "3DoF Anchor\nWS: %s  Cmd: %s  Face: 3DoF  Mode: %s\nCamera Pos xyz: %s\nCamera Rot xyz: %s\nXROrigin Pos xyz: %s\nBBox cx/cy/w/h: %.0f %.0f %.0f %.0f  Depth: %.2f\nYaw/Pitch/Depth: %.1f %.1f %.2f  Angular W/H: %.1f %.1f  Rot: %.1f %.1f %.1f\nSpeed: %.1f deg/s  Paused: %s\nTL %.2f %.2f %.2f  TR %.2f %.2f %.2f\nBL %.2f %.2f %.2f  BR %.2f %.2f %.2f\n%s\n%s" % [
 		"connected" if _ws_connected else "waiting",
 		_last_command,
 		_anchor_mode,
@@ -467,7 +508,19 @@ func _update_status_label() -> void:
 		corners["BR"].x,
 		corners["BR"].y,
 		corners["BR"].z,
+		xr_line,
 		vst_line,
+	]
+
+
+func _format_xr_status_line() -> String:
+	var err_str := _xr_init_error if not _xr_init_error.is_empty() else "-"
+	return "XR: iface=%s init=%s active=%s use_xr=%s err=%s" % [
+		str(_xr_interface_found),
+		str(_xr_initialize_ok),
+		str(_xr_active),
+		str(get_viewport().use_xr),
+		err_str,
 	]
 
 
@@ -477,6 +530,10 @@ func _exit_tree() -> void:
 
 
 func _setup_vst_capture() -> void:
+	if not _xr_active:
+		_vst_last_error = "OpenXR inactive; VST disabled to avoid passthrough-only false success"
+		print("VST init blocked: " + _vst_last_error)
+		return
 	_vst_class_registered = ClassDB.class_exists(&"GXRDualVstCapture")
 	if not _vst_class_registered:
 		_vst_last_error = "GXRDualVstCapture class not registered"

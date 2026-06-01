@@ -137,6 +137,12 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("libgxr_sdk.android.template_debug.arm64.so", gradle_extension_libs.read_text(encoding="utf-8"))
         self.assertTrue(native_lib.exists())
 
+    def test_android_export_is_visible_launcher_app(self):
+        export_presets = (GODOT_ANDROID / "export_presets.cfg").read_text(encoding="utf-8")
+
+        self.assertIn('package/unique_name="com.smartxr.godotcontrol"', export_presets)
+        self.assertIn("package/show_as_launcher_app=true", export_presets)
+
     def test_android_adaptive_icon_references_existing_mipmap_resources(self):
         res_dir = GODOT_ANDROID / "android" / "build" / "res"
         adaptive_icon = res_dir / "mipmap-anydpi-v26" / "icon.xml"

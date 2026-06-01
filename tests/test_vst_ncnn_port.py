@@ -133,6 +133,25 @@ class AndroidMovingCardVstScaffoldTests(unittest.TestCase):
         self.assertIn("VST:", self.source)
         self.assertIn("vst_line", self.source)
 
+    def test_script_reports_xr_diagnostics_before_vst_status(self):
+        self.assertIn("_format_xr_status_line()", self.source)
+        self.assertIn("XR:", self.source)
+        self.assertIn("_xr_interface_found", self.source)
+        self.assertIn("_xr_initialize_ok", self.source)
+        self.assertIn("_xr_init_error", self.source)
+
+    def test_script_does_not_enable_vst_when_openxr_is_inactive(self):
+        setup_index = self.source.index("func _setup_vst_capture()")
+        gated_index = self.source.index("if not _xr_active:", setup_index)
+        class_probe_index = self.source.index('ClassDB.class_exists(&"GXRDualVstCapture")', setup_index)
+        self.assertLess(gated_index, class_probe_index)
+
+    def test_script_has_simple_xr_render_probe(self):
+        self.assertIn("_build_xr_render_probe()", self.source)
+        self.assertIn('"XRRenderProbe"', self.source)
+        self.assertIn("XR_PROBE_SIZE_M", self.source)
+        self.assertIn("Color(1.0, 0.05, 0.05, 1.0)", self.source)
+
     def test_script_shuts_capture_down_on_exit(self):
         self.assertIn("func _exit_tree()", self.source)
         self.assertIn("_vst_capture.shutdown()", self.source)
