@@ -107,11 +107,11 @@ func _try_init_xr() -> void:
 		return
 	_xr_active = true
 	get_viewport().use_xr = true
-	get_viewport().transparent_bg = true
-	xr.environment_blend_mode = XRInterface.XR_ENV_BLEND_MODE_ALPHA_BLEND
+	get_viewport().transparent_bg = false
+	xr.environment_blend_mode = XRInterface.XR_ENV_BLEND_MODE_OPAQUE
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	_xr_init_error = ""
-	print("XR init: active use_xr=%s transparent=%s blend=alpha" % [str(get_viewport().use_xr), str(get_viewport().transparent_bg)])
+	print("XR init: active use_xr=%s transparent=%s blend=opaque" % [str(get_viewport().use_xr), str(get_viewport().transparent_bg)])
 
 
 func _setup_camera() -> void:

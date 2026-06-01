@@ -154,6 +154,15 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('package/name="demo_run"', export_presets)
         self.assertIn(">demo_run<", android_label)
 
+    def test_xr_visibility_diagnostic_uses_opaque_composition(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        project = (GODOT_ANDROID / "project.godot").read_text(encoding="utf-8")
+
+        self.assertIn("get_viewport().transparent_bg = false", source)
+        self.assertIn("XRInterface.XR_ENV_BLEND_MODE_OPAQUE", source)
+        self.assertIn("blend=opaque", source)
+        self.assertIn("environment/defaults/default_clear_color=Color(0.02, 0.025, 0.03, 1)", project)
+
     def test_android_adaptive_icon_references_existing_mipmap_resources(self):
         res_dir = GODOT_ANDROID / "android" / "build" / "res"
         adaptive_icon = res_dir / "mipmap-anydpi-v26" / "icon.xml"
