@@ -143,6 +143,17 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('package/unique_name="com.smartxr.godotcontrol"', export_presets)
         self.assertIn("package/show_as_launcher_app=true", export_presets)
 
+    def test_android_app_label_is_demo_run_for_device_disambiguation(self):
+        project = (GODOT_ANDROID / "project.godot").read_text(encoding="utf-8")
+        export_presets = (GODOT_ANDROID / "export_presets.cfg").read_text(encoding="utf-8")
+        android_label = (
+            GODOT_ANDROID / "android" / "build" / "res" / "values" / "godot_project_name_string.xml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('config/name="demo_run"', project)
+        self.assertIn('package/name="demo_run"', export_presets)
+        self.assertIn(">demo_run<", android_label)
+
     def test_android_adaptive_icon_references_existing_mipmap_resources(self):
         res_dir = GODOT_ANDROID / "android" / "build" / "res"
         adaptive_icon = res_dir / "mipmap-anydpi-v26" / "icon.xml"
