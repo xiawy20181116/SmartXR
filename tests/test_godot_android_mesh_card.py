@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import unittest
 
 
@@ -135,6 +136,19 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("res://addons/gxr_sdk/gxr_sdk.gdextension", extension_list.read_text(encoding="utf-8"))
         self.assertIn("libgxr_sdk.android.template_debug.arm64.so", gradle_extension_libs.read_text(encoding="utf-8"))
         self.assertTrue(native_lib.exists())
+
+    def test_android_adaptive_icon_references_existing_mipmap_resources(self):
+        res_dir = GODOT_ANDROID / "android" / "build" / "res"
+        adaptive_icon = res_dir / "mipmap-anydpi-v26" / "icon.xml"
+        source = adaptive_icon.read_text(encoding="utf-8")
+
+        refs = re.findall(r"@mipmap/([A-Za-z0-9_]+)", source)
+        self.assertGreater(len(refs), 0)
+        for ref in refs:
+            self.assertNotEqual(ref, adaptive_icon.stem, "adaptive icon must not reference itself")
+            matches = list(res_dir.glob(f"mipmap*/{ref}.*"))
+            with self.subTest(resource=ref):
+                self.assertTrue(matches, f"{adaptive_icon} references missing @mipmap/{ref}")
 
 
 if __name__ == "__main__":
