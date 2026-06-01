@@ -69,6 +69,15 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("Yaw/Pitch/Depth", source)
         self.assertNotIn("world anchor", source.lower())
 
+    def test_moving_card_starts_centered_for_visibility(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("const CARD_START_YAW_DEG := 0.0", source)
+        self.assertIn("const CARD_START_PITCH_DEG := 0.0", source)
+        self.assertIn("const CARD_DEFAULT_SPEED_DEG_PER_SECOND := 0.0", source)
+        self.assertIn("const BBOX_START_CENTER_PX := Vector2(436.0, 326.0)", source)
+        self.assertIn("const BBOX_IMAGE_SIZE := Vector2(872.0, 652.0)", source)
+
     def test_moving_card_supports_mock_bbox_anchor_mode(self):
         source = SCRIPT.read_text(encoding="utf-8")
 
@@ -98,6 +107,19 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_bbox_center_px = Vector2", source)
         self.assertIn("_bbox_size_px = Vector2", source)
         self.assertIn("_bbox_image_size = Vector2", source)
+
+    def test_vst_tracker_boxes_drive_bbox_anchor(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("_apply_vst_tracker_anchor(boxes)", source)
+        self.assertIn("func _apply_vst_tracker_anchor(boxes: PackedFloat32Array) -> void:", source)
+        self.assertIn("_bbox_center_px = Vector2", source)
+        self.assertIn("_bbox_size_px = Vector2", source)
+        self.assertIn("_bbox_image_size = _vst_right_image_size", source)
+        self.assertIn('_anchor_mode = "bbox"', source)
+        self.assertIn('_last_command = "vst_bbox"', source)
+        self.assertIn("_apply_bbox_anchor()", source)
+        self.assertIn("VST anchor:", source)
 
     def test_moving_card_reports_xr_pose_for_tracking_diagnosis(self):
         source = SCRIPT.read_text(encoding="utf-8")

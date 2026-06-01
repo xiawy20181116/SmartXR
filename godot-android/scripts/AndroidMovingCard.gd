@@ -4,17 +4,17 @@ const CARD_ANCHOR_NAME := "CardAnchor"
 const CARD_VIEWPORT_SIZE := Vector2i(720, 1080)
 const CARD_SIZE_M := Vector2(0.72, 1.08)
 const XR_PROBE_SIZE_M := Vector2(0.18, 0.18)
-const CARD_START_YAW_DEG := 32.0
+const CARD_START_YAW_DEG := 0.0
 const CARD_END_YAW_DEG := -32.0
-const CARD_START_PITCH_DEG := -4.5
+const CARD_START_PITCH_DEG := 0.0
 const CARD_START_DEPTH_M := 1.35
-const CARD_DEFAULT_SPEED_DEG_PER_SECOND := 8.5
+const CARD_DEFAULT_SPEED_DEG_PER_SECOND := 0.0
 const CARD_SPEED_STEP_DEG_PER_SECOND := 2.0
 const CARD_YAW_STEP_DEG := 3.0
 const CARD_PITCH_STEP_DEG := 3.0
 const CARD_DEPTH_STEP_M := 0.10
-const BBOX_IMAGE_SIZE := Vector2(1280.0, 720.0)
-const BBOX_START_CENTER_PX := Vector2(640.0, 360.0)
+const BBOX_IMAGE_SIZE := Vector2(872.0, 652.0)
+const BBOX_START_CENTER_PX := Vector2(436.0, 326.0)
 const BBOX_START_SIZE_PX := Vector2(180.0, 240.0)
 const BBOX_CENTER_STEP_PX := 32.0
 const BBOX_DEPTH_STEP_M := 0.10
@@ -76,6 +76,7 @@ var _vst_right_frames := 0
 var _vst_first_box := PackedFloat32Array()
 var _vst_box_count := 0
 var _vst_tracker_latency_ms := -1.0
+var _vst_anchor_updates := 0
 
 
 func _ready() -> void:
@@ -561,6 +562,7 @@ func _configure_vst_right_tracker_model() -> void:
 		_vst_last_error = "ncnn asset staging failed"
 		return
 	var ok := bool(_vst_capture.configure_right_tracker_model(param_path, bin_path))
+	print("VST tracker model: ok=%s param=%s bin=%s" % [str(ok), param_path, bin_path])
 	if _vst_capture.has_method(&"set_right_tracker_enabled"):
 		_vst_capture.set_right_tracker_enabled(true)
 	if _vst_capture.has_method(&"set_right_tracker_frame_stride"):
@@ -604,10 +606,39 @@ func _poll_vst_bbox() -> void:
 			_vst_first_box = PackedFloat32Array()
 			for i in range(5):
 				_vst_first_box.push_back(float(boxes[i]))
+			_apply_vst_tracker_anchor(boxes)
 		else:
 			_vst_first_box = PackedFloat32Array()
 	if _vst_capture.has_method(&"get_right_tracker_total_latency_ms"):
 		_vst_tracker_latency_ms = float(_vst_capture.get_right_tracker_total_latency_ms())
+
+
+func _apply_vst_tracker_anchor(boxes: PackedFloat32Array) -> void:
+	if boxes.size() < 5 or _vst_right_image_size.x <= 0.0 or _vst_right_image_size.y <= 0.0:
+		return
+	var x := clampf(float(boxes[0]), 0.0, 1.0)
+	var y := clampf(float(boxes[1]), 0.0, 1.0)
+	var w := clampf(float(boxes[2]), 0.02, 1.0)
+	var h := clampf(float(boxes[3]), 0.02, 1.0)
+	_bbox_center_px = Vector2((x + w * 0.5) * _vst_right_image_size.x, (y + h * 0.5) * _vst_right_image_size.y)
+	_bbox_size_px = Vector2(w * _vst_right_image_size.x, h * _vst_right_image_size.y)
+	_bbox_image_size = _vst_right_image_size
+	_bbox_depth_m = clampf(_bbox_depth_m, MIN_DEPTH_M, MAX_DEPTH_M)
+	_anchor_mode = "bbox"
+	_last_command = "vst_bbox"
+	_apply_bbox_anchor()
+	_vst_anchor_updates += 1
+	if _vst_anchor_updates <= 5:
+		print("VST anchor: center=%.1f %.1f size=%.1f %.1f image=%.0f %.0f yaw=%.1f pitch=%.1f" % [
+			_bbox_center_px.x,
+			_bbox_center_px.y,
+			_bbox_size_px.x,
+			_bbox_size_px.y,
+			_bbox_image_size.x,
+			_bbox_image_size.y,
+			_anchor_yaw_deg,
+			_anchor_pitch_deg,
+		])
 
 
 func _format_vst_status_line() -> String:

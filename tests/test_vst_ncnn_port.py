@@ -116,6 +116,11 @@ class AndroidMovingCardVstScaffoldTests(unittest.TestCase):
         self.assertIn('"user://ncnn/yolov8n_320.opt.ncnn.bin"', self.source)
         self.assertIn("_stage_vst_tracker_asset(", self.source)
 
+    def test_android_export_includes_ncnn_model_assets(self):
+        export_presets = (ANDROID / "export_presets.cfg").read_text(encoding="utf-8")
+
+        self.assertIn('include_filter="ncnn/*.param,ncnn/*.bin"', export_presets)
+
     def test_script_configures_right_tracker_model(self):
         self.assertIn("_configure_vst_right_tracker_model()", self.source)
         self.assertIn('configure_right_tracker_model', self.source)
@@ -156,13 +161,16 @@ class AndroidMovingCardVstScaffoldTests(unittest.TestCase):
         self.assertIn("func _exit_tree()", self.source)
         self.assertIn("_vst_capture.shutdown()", self.source)
 
-    def test_m1_does_not_yet_touch_anchor_or_fov_constants(self):
-        # ADR-007 v2 and ADR-010 are explicit: FOV and BBOX_IMAGE_SIZE change in M2,
-        # not M1. This guard catches drift if a future agent tries to bundle the
-        # constant swap into M1.
+    def test_on_device_vst_bbox_image_geometry_is_pinned(self):
         self.assertIn("const BBOX_HORIZONTAL_FOV_DEG := 70.0", self.source)
         self.assertIn("const BBOX_VERTICAL_FOV_DEG := 43.0", self.source)
-        self.assertIn("const BBOX_IMAGE_SIZE := Vector2(1280.0, 720.0)", self.source)
+        self.assertIn("const BBOX_IMAGE_SIZE := Vector2(872.0, 652.0)", self.source)
+
+    def test_vst_tracker_boxes_are_normalized_xywh(self):
+        self.assertIn("var x := clampf(float(boxes[0]), 0.0, 1.0)", self.source)
+        self.assertIn("var y := clampf(float(boxes[1]), 0.0, 1.0)", self.source)
+        self.assertIn("var w := clampf(float(boxes[2]), 0.02, 1.0)", self.source)
+        self.assertIn("_bbox_center_px = Vector2((x + w * 0.5) * _vst_right_image_size.x", self.source)
 
 
 if __name__ == "__main__":
