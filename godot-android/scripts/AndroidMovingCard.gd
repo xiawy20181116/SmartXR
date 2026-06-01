@@ -36,6 +36,9 @@ const VST_NCNN_PARAM_USER := "user://ncnn/yolov8n_320.opt.ncnn.param"
 const VST_NCNN_BIN_USER := "user://ncnn/yolov8n_320.opt.ncnn.bin"
 const VST_RIGHT_TRACKER_ENABLED := true
 const VST_RIGHT_TRACKER_FRAME_STRIDE := 5
+const VST_BBOX_FRAME_COLOR := Color(1.0, 0.88, 0.05, 1.0)
+const VST_BBOX_FRAME_LINE_M := 0.018
+const VST_BBOX_FRAME_Z_OFFSET_M := 0.04
 
 var _xr_active := false
 var _xr_interface_found := false
@@ -50,6 +53,8 @@ var _card_viewport: SubViewport = null
 var _card_anchor: Node3D = null
 var _card_mesh: MeshInstance3D = null
 var _xr_probe_mesh: MeshInstance3D = null
+var _vst_bbox_frame_anchor: Node3D = null
+var _vst_bbox_frame_parts: Array[MeshInstance3D] = []
 var _status_label: Label3D = null
 var _speed_deg_per_second := CARD_DEFAULT_SPEED_DEG_PER_SECOND
 var _anchor_yaw_deg := CARD_START_YAW_DEG
@@ -85,6 +90,7 @@ func _ready() -> void:
 	_setup_light()
 	_build_card_anchor()
 	_build_xr_render_probe()
+	_build_vst_bbox_frame()
 	_build_status_label()
 	_connect_ws()
 	_setup_vst_capture()
@@ -198,6 +204,27 @@ func _build_xr_render_probe() -> void:
 	_xr_probe_mesh.position = Vector3(-0.56, 0.58, 0.025)
 	_xr_probe_mesh.set_surface_override_material(0, material)
 	_card_anchor.add_child(_xr_probe_mesh)
+
+
+func _build_vst_bbox_frame() -> void:
+	_vst_bbox_frame_anchor = Node3D.new()
+	_vst_bbox_frame_anchor.name = "VSTBBoxFrame"
+	_vst_bbox_frame_anchor.visible = false
+	add_child(_vst_bbox_frame_anchor)
+
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = VST_BBOX_FRAME_COLOR
+	material.no_depth_test = true
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+	for part_name in ["Top", "Bottom", "Left", "Right"]:
+		var part := MeshInstance3D.new()
+		part.name = "VSTBBoxFrame" + part_name
+		part.mesh = QuadMesh.new()
+		part.set_surface_override_material(0, material)
+		_vst_bbox_frame_anchor.add_child(part)
+		_vst_bbox_frame_parts.append(part)
 
 
 func _make_card_ui() -> Control:
@@ -370,6 +397,7 @@ func _apply_command(command: String) -> void:
 			_bbox_image_size = BBOX_IMAGE_SIZE
 			_bbox_depth_m = CARD_START_DEPTH_M
 			_bbox_angular_size_deg = Vector2.ZERO
+			_set_vst_bbox_frame_visible(false)
 			_paused = false
 	_apply_3dof_anchor_transform()
 
@@ -432,17 +460,55 @@ func _apply_3dof_anchor_transform() -> void:
 	_card_anchor.position = _anchor_position_from_yaw_pitch_depth()
 	if _face_camera_enabled:
 		_orient_card_for_3dof_reading()
+	_update_vst_bbox_frame()
 
 
 func _orient_card_for_3dof_reading() -> void:
 	if _card_anchor == null:
 		return
+	_orient_node_for_3dof_reading(_card_anchor)
+
+
+func _orient_node_for_3dof_reading(node: Node3D) -> void:
+	if node == null:
+		return
 	var camera_position := Vector3.ZERO
 	if _camera != null:
 		camera_position = _camera.global_transform.origin
-	var world_position := _card_anchor.global_transform.origin
+	var world_position := node.global_transform.origin
 	var away_from_camera := world_position + camera_position.direction_to(world_position)
-	_card_anchor.look_at(away_from_camera, Vector3.UP)
+	node.look_at(away_from_camera, Vector3.UP)
+
+
+func _update_vst_bbox_frame() -> void:
+	if _vst_bbox_frame_anchor == null or _vst_bbox_frame_parts.size() != 4:
+		return
+	if _bbox_angular_size_deg.x <= 0.0 or _bbox_angular_size_deg.y <= 0.0:
+		_set_vst_bbox_frame_visible(false)
+		return
+	_set_vst_bbox_frame_visible(true)
+	_vst_bbox_frame_anchor.position = _anchor_position_from_yaw_pitch_depth()
+	if _face_camera_enabled:
+		_orient_node_for_3dof_reading(_vst_bbox_frame_anchor)
+
+	var width_m := maxf(2.0 * _anchor_depth_m * tan(deg_to_rad(_bbox_angular_size_deg.x) * 0.5), VST_BBOX_FRAME_LINE_M * 3.0)
+	var height_m := maxf(2.0 * _anchor_depth_m * tan(deg_to_rad(_bbox_angular_size_deg.y) * 0.5), VST_BBOX_FRAME_LINE_M * 3.0)
+	_configure_vst_bbox_frame_part(_vst_bbox_frame_parts[0], Vector2(width_m, VST_BBOX_FRAME_LINE_M), Vector3(0.0, height_m * 0.5, VST_BBOX_FRAME_Z_OFFSET_M))
+	_configure_vst_bbox_frame_part(_vst_bbox_frame_parts[1], Vector2(width_m, VST_BBOX_FRAME_LINE_M), Vector3(0.0, -height_m * 0.5, VST_BBOX_FRAME_Z_OFFSET_M))
+	_configure_vst_bbox_frame_part(_vst_bbox_frame_parts[2], Vector2(VST_BBOX_FRAME_LINE_M, height_m), Vector3(-width_m * 0.5, 0.0, VST_BBOX_FRAME_Z_OFFSET_M))
+	_configure_vst_bbox_frame_part(_vst_bbox_frame_parts[3], Vector2(VST_BBOX_FRAME_LINE_M, height_m), Vector3(width_m * 0.5, 0.0, VST_BBOX_FRAME_Z_OFFSET_M))
+
+
+func _configure_vst_bbox_frame_part(part: MeshInstance3D, size: Vector2, position: Vector3) -> void:
+	var mesh := part.mesh as QuadMesh
+	if mesh != null:
+		mesh.size = size
+	part.position = position
+
+
+func _set_vst_bbox_frame_visible(visible: bool) -> void:
+	if _vst_bbox_frame_anchor != null:
+		_vst_bbox_frame_anchor.visible = visible
 
 
 func _corner_world_points() -> Dictionary:
@@ -609,6 +675,7 @@ func _poll_vst_bbox() -> void:
 			_apply_vst_tracker_anchor(boxes)
 		else:
 			_vst_first_box = PackedFloat32Array()
+			_set_vst_bbox_frame_visible(false)
 	if _vst_capture.has_method(&"get_right_tracker_total_latency_ms"):
 		_vst_tracker_latency_ms = float(_vst_capture.get_right_tracker_total_latency_ms())
 
@@ -627,6 +694,7 @@ func _apply_vst_tracker_anchor(boxes: PackedFloat32Array) -> void:
 	_anchor_mode = "bbox"
 	_last_command = "vst_bbox"
 	_apply_bbox_anchor()
+	_update_vst_bbox_frame()
 	_vst_anchor_updates += 1
 	if _vst_anchor_updates <= 5:
 		print("VST anchor: center=%.1f %.1f size=%.1f %.1f image=%.0f %.0f yaw=%.1f pitch=%.1f" % [

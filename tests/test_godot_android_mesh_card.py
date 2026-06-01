@@ -121,6 +121,20 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_apply_bbox_anchor()", source)
         self.assertIn("VST anchor:", source)
 
+    def test_vst_tracker_boxes_draw_visible_3d_bbox_frame(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("const VST_BBOX_FRAME_COLOR", source)
+        self.assertIn("const VST_BBOX_FRAME_LINE_M", source)
+        self.assertIn("const VST_BBOX_FRAME_Z_OFFSET_M", source)
+        self.assertIn("var _vst_bbox_frame_anchor: Node3D = null", source)
+        self.assertIn("var _vst_bbox_frame_parts: Array[MeshInstance3D] = []", source)
+        self.assertIn("_build_vst_bbox_frame()", source)
+        self.assertIn('VSTBBoxFrame"', source)
+        self.assertIn("_update_vst_bbox_frame()", source)
+        self.assertIn("_set_vst_bbox_frame_visible(false)", source)
+        self.assertIn("_orient_node_for_3dof_reading(_vst_bbox_frame_anchor)", source)
+
     def test_moving_card_reports_xr_pose_for_tracking_diagnosis(self):
         source = SCRIPT.read_text(encoding="utf-8")
 
