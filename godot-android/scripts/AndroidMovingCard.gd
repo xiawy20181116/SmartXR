@@ -483,25 +483,30 @@ func _anchor_from_bbox(center_px: Vector2, size_px: Vector2, image_size: Vector2
 	var fy := (image_size.y * 0.5) / tan(deg_to_rad(BBOX_VERTICAL_FOV_DEG) * 0.5)
 	var nx := (center_px.x - image_size.x * 0.5) / fx
 	var ny := (center_px.y - image_size.y * 0.5) / fy
-	var ray := Vector3(nx, -ny, -1.0).normalized()
-	var point := ray * depth_m
+	# VST camera axes: +X right, +Y down, +Z forward.
+	var point_vst := Vector3(nx, ny, 1.0).normalized() * depth_m
+	var point_head := _convert_vst_camera_point_to_head_convention(point_vst)
 	if _vst_uses_eye_to_head_anchor:
-		point = _transform_right_vst_point_to_head(point)
-	var yaw_deg := rad_to_deg(atan2(point.x, -point.z))
-	var pitch_deg := rad_to_deg(atan2(point.y, sqrt(point.x * point.x + point.z * point.z)))
+		point_head = _transform_right_vst_point_to_head(point_vst)
+	var yaw_deg := rad_to_deg(atan2(point_head.x, -point_head.z))
+	var pitch_deg := rad_to_deg(atan2(point_head.y, sqrt(point_head.x * point_head.x + point_head.z * point_head.z)))
 	var angular_w := rad_to_deg(2.0 * atan((size_px.x * 0.5) / fx))
 	var angular_h := rad_to_deg(2.0 * atan((size_px.y * 0.5) / fy))
 	return {
 		"yaw_deg": yaw_deg,
 		"pitch_deg": pitch_deg,
-		"depth_m": point.length() if _vst_uses_eye_to_head_anchor else depth_m,
+		"depth_m": point_head.length() if _vst_uses_eye_to_head_anchor else depth_m,
 		"angular_size_deg": Vector2(angular_w, angular_h),
 	}
 
 
+func _convert_vst_camera_point_to_head_convention(point: Vector3) -> Vector3:
+	return Vector3(point.x, -point.y, -point.z)
+
+
 func _transform_right_vst_point_to_head(point: Vector3) -> Vector3:
 	if _vst_right_eye_to_head_matrix.size() < 16:
-		return point
+		return _convert_vst_camera_point_to_head_convention(point)
 	var m := _vst_right_eye_to_head_matrix
 	return Vector3(
 		float(m[0]) * point.x + float(m[1]) * point.y + float(m[2]) * point.z + float(m[3]),

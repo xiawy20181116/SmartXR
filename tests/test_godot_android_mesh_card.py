@@ -126,9 +126,12 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
         self.assertIn("var _vst_right_eye_to_head_matrix := PackedFloat64Array()", source)
         self.assertIn("var _vst_uses_eye_to_head_anchor := false", source)
+        self.assertIn("VST camera axes: +X right, +Y down, +Z forward", source)
+        self.assertIn("var point_vst := Vector3(nx, ny, 1.0).normalized() * depth_m", source)
+        self.assertIn("_convert_vst_camera_point_to_head_convention(point_vst)", source)
         self.assertIn("_store_right_eye_to_head_matrix(eye_info)", source)
         self.assertIn("func _transform_right_vst_point_to_head(point: Vector3) -> Vector3:", source)
-        self.assertIn("point = _transform_right_vst_point_to_head(point)", source)
+        self.assertIn("point_head = _transform_right_vst_point_to_head(point_vst)", source)
         self.assertIn("Anchor: %s", source)
         self.assertIn('"eye2head" if _vst_uses_eye_to_head_anchor else "raw-fov"', source)
 
