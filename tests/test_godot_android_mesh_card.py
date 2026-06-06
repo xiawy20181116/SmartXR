@@ -5,6 +5,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "godot-android" / "scripts" / "AndroidMovingCard.gd"
+VALIDATOR = ROOT / "tests" / "validate_project.ps1"
 ANDROID_ACTIVITY = (
     ROOT
     / "godot-android"
@@ -19,6 +20,10 @@ ANDROID_ACTIVITY = (
     / "GodotApp.java"
 )
 GODOT_ANDROID = ROOT / "godot-android"
+EXPORT_PRESETS = GODOT_ANDROID / "export_presets.cfg"
+WINDOWS_PCMR_RUNNER = ROOT / "tools" / "run_windows_pcmr.ps1"
+GXR_EXTENSION_SWITCH = ROOT / "tools" / "set_gxr_extension.ps1"
+ANDROID_EXPORT_RUNNER = ROOT / "tools" / "export_android.ps1"
 
 
 class GodotAndroidMeshCardTests(unittest.TestCase):
@@ -31,6 +36,14 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("QuadMesh.new()", source)
         self.assertIn("StandardMaterial3D.new()", source)
         self.assertIn("albedo_texture = _card_viewport.get_texture()", source)
+
+    def test_validate_project_wrapper_exists(self):
+        source = VALIDATOR.read_text(encoding="utf-8")
+
+        self.assertIn("python -m unittest", source)
+        self.assertIn("test_godot_android_mesh_card.py", source)
+        self.assertIn("test_vst_ncnn_port.py", source)
+        self.assertIn("test_ws_control.py", source)
 
     def test_moving_card_reports_world_corners_for_real_device_validation(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -108,7 +121,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_bbox_size_px = Vector2", source)
         self.assertIn("_bbox_image_size = Vector2", source)
 
-    def test_vst_tracker_boxes_drive_bbox_anchor(self):
+    def test_vst_tracker_boxes_drive_proxy_target_not_bbox_anchor(self):
         source = SCRIPT.read_text(encoding="utf-8")
 
         self.assertIn("_apply_vst_tracker_anchor(boxes)", source)
@@ -116,10 +129,66 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_bbox_center_px = Vector2", source)
         self.assertIn("_bbox_size_px = Vector2", source)
         self.assertIn("_bbox_image_size = _vst_right_image_size", source)
-        self.assertIn('_anchor_mode = "bbox"', source)
-        self.assertIn('_last_command = "vst_bbox"', source)
-        self.assertIn("_apply_bbox_anchor()", source)
-        self.assertIn("VST anchor:", source)
+        self.assertIn("var target_transform := _vst_tracker_box_to_target_transform(boxes)", source)
+        self.assertIn("update_vst_target(VST_TRACKED_TARGET_ID, target_transform, confidence, float(Time.get_ticks_msec()))", source)
+        self.assertIn('_last_command = "vst_target"', source)
+        self.assertIn("VST target:", source)
+
+    def test_vst_tracker_updates_standard_trackable_target_proxy(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("class TrackableTarget", source)
+        self.assertIn('const TRACKABLE_STATE_TRACKED := "tracked"', source)
+        self.assertIn('const TRACKABLE_SOURCE_VST := "vst"', source)
+        self.assertIn("class VSTTargetAdapter", source)
+        self.assertIn("func update_target(target_id: String, transform: Transform3D, confidence: float, timestamp_ms: float) -> bool:", source)
+        self.assertIn("func update_vst_target(target_id: String, transform: Transform3D, confidence: float, timestamp_ms: float) -> bool:", source)
+        self.assertIn("var _vst_target_adapter: VSTTargetAdapter = null", source)
+        self.assertIn("var _vst_target_proxy: Node3D = null", source)
+        self.assertIn('register_node3d_target(VST_TRACKED_TARGET_ID, _vst_target_proxy)', source)
+        self.assertIn('attach_to_target(CARD_ANCHOR_NAME, VST_TRACKED_TARGET_ID, VST_TARGET_OFFSET_RULE)', source)
+        self.assertIn("_vst_tracker_box_to_target_transform(boxes)", source)
+        self.assertIn("func _vst_tracker_box_to_target_transform(boxes: PackedFloat32Array) -> Transform3D:", source)
+        self.assertIn("target_transform.origin = _target_position_from_bbox_anchor(anchor)", source)
+
+    def test_vst_target_adapter_tracks_confidence_timestamp_and_fallback_states(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        for marker in [
+            "VST_TARGET_CONFIDENCE_THRESHOLD",
+            "VST_TARGET_PREDICT_MS",
+            "VST_TARGET_STALE_MS",
+            "VST_TARGET_LOST_MS",
+            "VST_TARGET_SMOOTHING_ALPHA",
+            "velocity: Vector3",
+            "confidence: float",
+            "timestamp_ms: float",
+            "state: String",
+            "source: String",
+            "_hold_last_pose",
+            "_predict_pose",
+            "_set_state(TRACKABLE_STATE_PREDICTED)",
+            "_set_state(TRACKABLE_STATE_STALE)",
+            "_set_state(TRACKABLE_STATE_LOST)",
+            "_apply_vst_target_fallback()",
+            "target_state=lost",
+        ]:
+            self.assertIn(marker, source)
+
+    def test_vst_tracker_does_not_use_bbox_direct_anchor_inside_proxy_entrypoint(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        match = re.search(
+            r"func _apply_vst_tracker_anchor\(boxes: PackedFloat32Array\) -> void:(?P<body>.*?)(?=\n\nfunc )",
+            source,
+            re.S,
+        )
+        self.assertIsNotNone(match)
+        body = match.group("body")
+
+        self.assertNotIn('_anchor_mode = "bbox"', body)
+        self.assertNotIn('_last_command = "vst_bbox"', body)
+        self.assertNotIn("_apply_bbox_anchor()", body)
+        self.assertIn("update_vst_target(", body)
 
     def test_vst_bbox_anchor_uses_right_eye_to_head_transform_when_available(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -163,6 +232,60 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("(x + w * 0.5 - 0.5) * overlay_size.x", source)
         self.assertIn("(0.5 - y - h * 0.5) * overlay_size.y", source)
 
+    def test_card_can_attach_to_registered_node3d_targets(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("class TargetRegistry", source)
+        self.assertIn("class Node3DTargetAdapter", source)
+        self.assertIn("var _target_registry := TargetRegistry.new()", source)
+        self.assertIn("func register_node3d_target(target_id: String, node_or_path", source)
+        self.assertIn("func attach_to_target(card_id: String, target_id: String, offset_rule", source)
+        self.assertIn('var _card_attachments := {}', source)
+        self.assertIn('"hold_last_pose"', source)
+        self.assertIn("_update_target_attachments()", source)
+        self.assertIn("_target_registry.resolve(target_id)", source)
+        self.assertIn("adapter.get_global_transform()", source)
+        self.assertIn("_target_offset_transform(adapter.get_global_transform(), offset_rule)", source)
+        self.assertIn('_anchor_mode = "target"', source)
+        self.assertIn("_orient_card_for_3dof_reading()", source)
+        self.assertRegex(source, r"if _anchor_mode == \"target\":\s+_update_target_attachments\(\)")
+
+    def test_debug_marker_target_can_drive_real_device_validation(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("const DEBUG_NODE3D_TARGET_ENABLED := true", source)
+        self.assertIn('const DEBUG_TARGET_ID := "debug_marker"', source)
+        self.assertIn('var _debug_target_marker: MeshInstance3D = null', source)
+        self.assertIn("func _build_debug_target_marker() -> void:", source)
+        self.assertIn('marker.name = "MovingTargetMarker"', source)
+        self.assertIn("BoxMesh.new()", source)
+        self.assertIn("register_node3d_target(DEBUG_TARGET_ID, _debug_target_marker)", source)
+        self.assertIn('attach_to_target(CARD_ANCHOR_NAME, DEBUG_TARGET_ID, {"mode": "right_top"', source)
+        self.assertIn("func _update_debug_target_marker(delta: float) -> void:", source)
+        self.assertIn("_debug_target_marker.position = Vector3(", source)
+        self.assertIn("sin(_debug_target_elapsed_seconds", source)
+        self.assertIn('"debug_target_free"', source)
+        self.assertIn('"debug_target_reset"', source)
+
+    def test_world_target_offset_ignores_target_rotation_for_card_position(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('"offset_space"', source)
+        self.assertIn('"world"', source)
+        self.assertIn('"target"', source)
+        self.assertIn("func _target_world_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:", source)
+        self.assertIn("func _target_local_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:", source)
+        self.assertIn("result.origin = target_transform.origin + _target_offset_vector(rule)", source)
+        self.assertIn("result.origin = target_transform * _target_offset_vector(rule)", source)
+        self.assertIn('if str(rule.get("offset_space", "world")) == "target":', source)
+
+    def test_debug_marker_uses_world_offset_while_rotating_for_pcmr_validation(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('"offset_space": "world"', source)
+        self.assertIn("_debug_target_marker.rotation_degrees", source)
+        self.assertIn("_debug_target_marker.position = Vector3(", source)
+
     def test_moving_card_reports_xr_pose_for_tracking_diagnosis(self):
         source = SCRIPT.read_text(encoding="utf-8")
 
@@ -202,10 +325,69 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertTrue(native_lib.exists())
 
     def test_android_export_is_visible_launcher_app(self):
-        export_presets = (GODOT_ANDROID / "export_presets.cfg").read_text(encoding="utf-8")
+        export_presets = EXPORT_PRESETS.read_text(encoding="utf-8")
 
         self.assertIn('package/unique_name="com.smartxr.godotcontrol"', export_presets)
         self.assertIn("package/show_as_launcher_app=true", export_presets)
+
+    def test_export_presets_support_windows_pcmr_without_regressing_android(self):
+        export_presets = EXPORT_PRESETS.read_text(encoding="utf-8")
+
+        self.assertIn('name="Android"', export_presets)
+        self.assertIn('platform="Android"', export_presets)
+        self.assertIn('export_path="builds/SmartXR-Godot-Control.apk"', export_presets)
+        self.assertIn('package/unique_name="com.smartxr.godotcontrol"', export_presets)
+        self.assertIn('name="Windows Desktop"', export_presets)
+        self.assertIn('platform="Windows Desktop"', export_presets)
+        self.assertIn('export_path="builds/windows/SmartXR-PCMR.exe"', export_presets)
+
+    def test_windows_pcmr_runner_uses_known_godot_path_and_project(self):
+        runner = WINDOWS_PCMR_RUNNER.read_text(encoding="utf-8")
+
+        self.assertTrue(runner.lstrip().startswith("param("))
+        self.assertIn(r"E:\xia\Godot_v4.6.2-stable_win64.exe\Godot_v4.6.2-stable_win64.exe", runner)
+        self.assertIn("SmartXR-PCMR", runner)
+        self.assertIn("godot-android", runner)
+        self.assertIn("--path", runner)
+        self.assertIn("SteamVR", runner)
+        self.assertIn("WMR", runner)
+        self.assertIn("Meta Link", runner)
+        self.assertIn("OpenXR", runner)
+        self.assertIn("$PSScriptRoot", runner)
+
+    def test_gxr_extension_switch_can_disable_for_windows_and_enable_for_android(self):
+        switcher = GXR_EXTENSION_SWITCH.read_text(encoding="utf-8")
+
+        self.assertIn('ValidateSet("enable", "disable")', switcher)
+        self.assertIn("res://addons/gxr_sdk/gxr_sdk.gdextension", switcher)
+        self.assertIn(".godot", switcher)
+        self.assertIn("extension_list.cfg", switcher)
+        self.assertIn(".gdextension.disabled", switcher)
+        self.assertIn('$Mode -eq "disable"', switcher)
+        self.assertIn('$Mode -eq "enable"', switcher)
+        self.assertIn("Move-Item", switcher)
+        self.assertIn("Where-Object", switcher)
+        self.assertIn("Write-Utf8NoBomLines", switcher)
+        self.assertIn("UTF8Encoding($false)", switcher)
+        self.assertIn("WriteAllText", switcher)
+
+    def test_windows_runner_temporarily_disables_gxr_extension(self):
+        runner = WINDOWS_PCMR_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("set_gxr_extension.ps1", runner)
+        self.assertIn("-Mode disable", runner)
+        self.assertIn("-Mode enable", runner)
+        self.assertIn("try {", runner)
+        self.assertIn("finally {", runner)
+
+    def test_android_export_runner_enables_gxr_extension_before_export(self):
+        runner = ANDROID_EXPORT_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("set_gxr_extension.ps1", runner)
+        self.assertIn("-Mode enable", runner)
+        self.assertIn("--export-debug", runner)
+        self.assertIn("Android", runner)
+        self.assertIn("SmartXR-Godot-Control.apk", runner)
 
     def test_android_app_label_is_demo_run_for_device_disambiguation(self):
         project = (GODOT_ANDROID / "project.godot").read_text(encoding="utf-8")

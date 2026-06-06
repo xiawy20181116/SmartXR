@@ -25,6 +25,20 @@ const MAX_SPEED_DEG_PER_SECOND := 45.0
 const MIN_DEPTH_M := 0.65
 const MAX_DEPTH_M := 4.0
 const WS_URL := "ws://10.1.98.195:8766/control"
+const TARGET_FALLBACK_HOLD_LAST_POSE := "hold_last_pose"
+const TARGET_FALLBACK_DETACH := "detach"
+const TARGET_FALLBACK_FADE_OUT := "fade_out"
+const TARGET_DEFAULT_OFFSET_RULE := {
+	"mode": "front",
+	"offset_space": "world",
+	"distance_m": 0.35,
+	"fallback": TARGET_FALLBACK_HOLD_LAST_POSE,
+}
+const DEBUG_NODE3D_TARGET_ENABLED := true
+const DEBUG_TARGET_ID := "debug_marker"
+const DEBUG_TARGET_SIZE_M := Vector3(0.12, 0.12, 0.12)
+const DEBUG_TARGET_BASE_POSITION := Vector3(0.0, 0.0, -1.15)
+const DEBUG_TARGET_RADIUS_M := 0.28
 
 # M1 (YAN-56): on-device VST capture + ncnn tracker scaffold.
 # Functional behaviour is gated on GXRDualVstCapture class registration so the
@@ -42,9 +56,181 @@ const VST_BBOX_FRAME_Z_OFFSET_M := 0.04
 const VST_RAW_DEBUG_PIXEL_SIZE_M := 0.00045
 const VST_RAW_DEBUG_POSITION := Vector3(0.48, -0.28, -1.2)
 const VST_RAW_DEBUG_FRAME_Z_OFFSET_M := 0.025
+const VST_TRACKED_TARGET_ID := "vst_right_target"
+const TRACKABLE_SOURCE_VST := "vst"
+const TRACKABLE_SOURCE_EXTERNAL := "external"
+const TRACKABLE_STATE_TRACKED := "tracked"
+const TRACKABLE_STATE_PREDICTED := "predicted"
+const TRACKABLE_STATE_STALE := "stale"
+const TRACKABLE_STATE_LOST := "lost"
+const VST_TARGET_CONFIDENCE_THRESHOLD := 0.45
+const VST_TARGET_PREDICT_MS := 180.0
+const VST_TARGET_STALE_MS := 650.0
+const VST_TARGET_LOST_MS := 1400.0
+const VST_TARGET_SMOOTHING_ALPHA := 0.38
+const VST_TARGET_OFFSET_RULE := {
+	"mode": "right_top",
+	"offset_space": "world",
+	"right_m": 0.35,
+	"up_m": 0.25,
+	"fallback": TARGET_FALLBACK_HOLD_LAST_POSE,
+}
 const GXR_CAL_CV_DEWARP_L := 0x00400060
 const GXR_CAL_CV_DEWARP_R := 0x00400061
 const GXR_CAL_CV_SLAM := 0x00400070
+
+
+class TrackableTarget:
+	var id: String = ""
+	var transform: Transform3D = Transform3D.IDENTITY
+	var velocity: Vector3 = Vector3.ZERO
+	var confidence: float = 0.0
+	var timestamp_ms: float = 0.0
+	var state: String = TRACKABLE_STATE_LOST
+	var source: String = TRACKABLE_SOURCE_EXTERNAL
+
+
+class VSTTargetAdapter:
+	var target := TrackableTarget.new()
+	var _proxy: Node3D = null
+	var _last_stable_transform := Transform3D.IDENTITY
+	var _has_sample := false
+	var _confidence_threshold := 0.45
+	var _predict_ms := 180.0
+	var _stale_ms := 650.0
+	var _lost_ms := 1400.0
+	var _smoothing_alpha := 0.38
+
+	func _init(
+		target_id: String,
+		proxy: Node3D,
+		confidence_threshold: float,
+		predict_ms: float,
+		stale_ms: float,
+		lost_ms: float,
+		smoothing_alpha: float
+	) -> void:
+		target.id = target_id
+		target.source = TRACKABLE_SOURCE_VST
+		_proxy = proxy
+		_confidence_threshold = confidence_threshold
+		_predict_ms = predict_ms
+		_stale_ms = stale_ms
+		_lost_ms = lost_ms
+		_smoothing_alpha = clampf(smoothing_alpha, 0.0, 1.0)
+
+	func update_target(target_id: String, transform: Transform3D, confidence: float, timestamp_ms: float) -> bool:
+		if target_id.is_empty() or confidence < _confidence_threshold:
+			return false
+		var previous_origin := target.transform.origin
+		var next_transform := transform
+		if _has_sample:
+			next_transform.origin = previous_origin.lerp(transform.origin, _smoothing_alpha)
+			var dt_seconds := maxf((timestamp_ms - target.timestamp_ms) / 1000.0, 0.001)
+			target.velocity = (next_transform.origin - previous_origin) / dt_seconds
+		else:
+			target.velocity = Vector3.ZERO
+		target.id = target_id
+		target.transform = next_transform
+		target.confidence = clampf(confidence, 0.0, 1.0)
+		target.timestamp_ms = timestamp_ms
+		target.source = TRACKABLE_SOURCE_VST
+		_last_stable_transform = next_transform
+		_has_sample = true
+		_set_state(TRACKABLE_STATE_TRACKED)
+		_apply_to_proxy()
+		return true
+
+	func advance(now_ms: float) -> void:
+		if not _has_sample:
+			return
+		var age_ms := now_ms - target.timestamp_ms
+		if age_ms <= _predict_ms:
+			_hold_last_pose()
+		elif age_ms <= _stale_ms:
+			_predict_pose(age_ms)
+			_set_state(TRACKABLE_STATE_PREDICTED)
+		elif age_ms <= _lost_ms:
+			_hold_last_pose()
+			_set_state(TRACKABLE_STATE_STALE)
+		else:
+			_hold_last_pose()
+			_set_state(TRACKABLE_STATE_LOST)
+		_apply_to_proxy()
+
+	func _hold_last_pose() -> void:
+		target.transform = _last_stable_transform
+
+	func _predict_pose(age_ms: float) -> void:
+		var predicted := _last_stable_transform
+		predicted.origin += target.velocity * (age_ms / 1000.0)
+		target.transform = predicted
+
+	func _set_state(next_state: String) -> void:
+		target.state = next_state
+
+	func _apply_to_proxy() -> void:
+		if _proxy != null and is_instance_valid(_proxy):
+			_proxy.global_transform = target.transform
+
+
+class Node3DTargetAdapter:
+	var _root: Node = null
+	var _node: Node3D = null
+	var _path := NodePath()
+	var _uses_path := false
+
+	func _init(root: Node, node_or_path) -> void:
+		_root = root
+		if node_or_path is Node3D:
+			_node = node_or_path
+			return
+		if node_or_path is NodePath:
+			_path = node_or_path
+			_uses_path = true
+			return
+		if typeof(node_or_path) == TYPE_STRING:
+			_path = NodePath(str(node_or_path))
+			_uses_path = true
+
+	func get_node3d() -> Node3D:
+		if _uses_path:
+			if _root == null or not is_instance_valid(_root):
+				return null
+			var resolved := _root.get_node_or_null(_path)
+			return resolved as Node3D
+		if _node == null or not is_instance_valid(_node):
+			return null
+		return _node
+
+	func is_available() -> bool:
+		return get_node3d() != null
+
+	func get_global_transform() -> Transform3D:
+		var target := get_node3d()
+		if target == null:
+			return Transform3D.IDENTITY
+		return target.global_transform
+
+
+class TargetRegistry:
+	var _targets := {}
+
+	func register(target_id: String, adapter: Node3DTargetAdapter) -> bool:
+		if target_id.is_empty() or adapter == null:
+			return false
+		_targets[target_id] = adapter
+		return true
+
+	func unregister(target_id: String) -> void:
+		_targets.erase(target_id)
+
+	func resolve(target_id: String) -> Node3DTargetAdapter:
+		var adapter = _targets.get(target_id)
+		if adapter is Node3DTargetAdapter:
+			return adapter
+		return null
+
 
 var _xr_active := false
 var _xr_interface_found := false
@@ -78,6 +264,12 @@ var _bbox_angular_size_deg := Vector2.ZERO
 var _paused := false
 var _face_camera_enabled := true
 var _last_command := "none"
+var _target_registry := TargetRegistry.new()
+var _card_attachments := {}
+var _debug_target_marker: MeshInstance3D = null
+var _debug_target_elapsed_seconds := 0.0
+var _vst_target_adapter: VSTTargetAdapter = null
+var _vst_target_proxy: Node3D = null
 
 # M1: VST capture state. _vst_capture stays null on vanilla SDK and every helper
 # below short-circuits in that case, so all existing behaviour is preserved.
@@ -106,6 +298,8 @@ func _ready() -> void:
 	_build_xr_render_probe()
 	_build_vst_bbox_frame()
 	_build_status_label()
+	_build_vst_target_proxy()
+	_build_debug_target_marker()
 	_connect_ws()
 	_setup_vst_capture()
 	set_process(true)
@@ -339,6 +533,43 @@ func _build_status_label() -> void:
 	_update_status_label()
 
 
+func _build_debug_target_marker() -> void:
+	if not DEBUG_NODE3D_TARGET_ENABLED:
+		return
+	if _debug_target_marker != null and is_instance_valid(_debug_target_marker):
+		_debug_target_marker.queue_free()
+	var marker := MeshInstance3D.new()
+	marker.name = "MovingTargetMarker"
+	var mesh := BoxMesh.new()
+	mesh.size = DEBUG_TARGET_SIZE_M
+	marker.mesh = mesh
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = Color(1.0, 0.92, 0.1, 1.0)
+	material.no_depth_test = true
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	marker.set_surface_override_material(0, material)
+	marker.position = DEBUG_TARGET_BASE_POSITION
+	add_child(marker)
+	_debug_target_marker = marker
+	_debug_target_elapsed_seconds = 0.0
+	register_node3d_target(DEBUG_TARGET_ID, _debug_target_marker)
+	attach_to_target(CARD_ANCHOR_NAME, DEBUG_TARGET_ID, {"mode": "right_top", "offset_space": "world", "right_m": 0.35, "up_m": 0.25, "fallback": "hold_last_pose"})
+	print("Debug Node3D target attached: %s marker=%s" % [DEBUG_TARGET_ID, marker.name])
+
+
+func _update_debug_target_marker(delta: float) -> void:
+	if _debug_target_marker == null or not is_instance_valid(_debug_target_marker):
+		return
+	_debug_target_elapsed_seconds += delta
+	_debug_target_marker.position = Vector3(
+		DEBUG_TARGET_BASE_POSITION.x + sin(_debug_target_elapsed_seconds * 0.9) * DEBUG_TARGET_RADIUS_M,
+		DEBUG_TARGET_BASE_POSITION.y + sin(_debug_target_elapsed_seconds * 1.7) * 0.08,
+		DEBUG_TARGET_BASE_POSITION.z + cos(_debug_target_elapsed_seconds * 0.9) * 0.12
+	)
+	_debug_target_marker.rotation_degrees = Vector3(0.0, _debug_target_elapsed_seconds * 35.0, 0.0)
+
+
 func _connect_ws() -> void:
 	_ws.close()
 	var result := _ws.connect_to_url(WS_URL)
@@ -351,14 +582,194 @@ func _connect_ws() -> void:
 func _process(delta: float) -> void:
 	_poll_ws(delta)
 	_poll_vst_bbox()
+	_advance_vst_target_state(delta)
+	_update_debug_target_marker(delta)
 	if not _paused and _anchor_mode == "manual":
 		_anchor_yaw_deg -= _speed_deg_per_second * delta
 		if _anchor_yaw_deg < CARD_END_YAW_DEG:
 			_anchor_yaw_deg = CARD_START_YAW_DEG
 	if _anchor_mode == "bbox":
 		_apply_bbox_anchor()
-	_apply_3dof_anchor_transform()
+	if _anchor_mode == "target":
+		_update_target_attachments()
+	else:
+		_apply_3dof_anchor_transform()
 	_update_status_label()
+
+
+func _build_vst_target_proxy() -> void:
+	if _vst_target_proxy != null and is_instance_valid(_vst_target_proxy):
+		return
+	_vst_target_proxy = Node3D.new()
+	_vst_target_proxy.name = "VSTTrackedTargetProxy"
+	_vst_target_proxy.visible = false
+	add_child(_vst_target_proxy)
+	register_node3d_target(VST_TRACKED_TARGET_ID, _vst_target_proxy)
+	_vst_target_adapter = VSTTargetAdapter.new(
+		VST_TRACKED_TARGET_ID,
+		_vst_target_proxy,
+		VST_TARGET_CONFIDENCE_THRESHOLD,
+		VST_TARGET_PREDICT_MS,
+		VST_TARGET_STALE_MS,
+		VST_TARGET_LOST_MS,
+		VST_TARGET_SMOOTHING_ALPHA
+	)
+
+
+func update_vst_target(target_id: String, transform: Transform3D, confidence: float, timestamp_ms: float) -> bool:
+	if _vst_target_adapter == null:
+		_build_vst_target_proxy()
+	if _vst_target_adapter == null:
+		return false
+	var ok := _vst_target_adapter.update_target(target_id, transform, confidence, timestamp_ms)
+	if not ok:
+		return false
+	if _vst_target_proxy != null:
+		_vst_target_proxy.visible = true
+	var attached := attach_to_target(CARD_ANCHOR_NAME, VST_TRACKED_TARGET_ID, VST_TARGET_OFFSET_RULE)
+	if attached:
+		_last_command = "vst_target"
+	return attached
+
+
+func _advance_vst_target_state(_delta: float) -> void:
+	if _vst_target_adapter == null:
+		return
+	_vst_target_adapter.advance(float(Time.get_ticks_msec()))
+	if _vst_target_adapter.target.state == TRACKABLE_STATE_LOST:
+		_apply_vst_target_fallback()
+	elif _anchor_mode == "target" and _card_attachments.has(CARD_ANCHOR_NAME):
+		_update_target_attachments()
+
+
+func _apply_vst_target_fallback() -> void:
+	if _vst_target_proxy != null:
+		_vst_target_proxy.visible = false
+	var attachment = _card_attachments.get(CARD_ANCHOR_NAME)
+	if typeof(attachment) == TYPE_DICTIONARY and str(attachment.get("target_id", "")) == VST_TRACKED_TARGET_ID:
+		_apply_target_fallback(attachment)
+
+
+func register_node3d_target(target_id: String, node_or_path) -> bool:
+	return _target_registry.register(target_id, Node3DTargetAdapter.new(self, node_or_path))
+
+
+func unregister_target(target_id: String) -> void:
+	_target_registry.unregister(target_id)
+
+
+func attach_to_target(card_id: String, target_id: String, offset_rule = {}) -> bool:
+	var adapter := _target_registry.resolve(target_id)
+	if adapter == null:
+		return false
+	var normalized_offset := _normalize_target_offset_rule(offset_rule)
+	_card_attachments[card_id] = {
+		"target_id": target_id,
+		"offset_rule": normalized_offset,
+		"fallback": str(normalized_offset.get("fallback", TARGET_FALLBACK_HOLD_LAST_POSE)),
+		"last_transform": _target_offset_transform(adapter.get_global_transform(), normalized_offset),
+	}
+	_anchor_mode = "target"
+	_last_command = "attach_target:" + target_id
+	_update_target_attachments()
+	return true
+
+
+func detach_card(card_id: String) -> void:
+	_card_attachments.erase(card_id)
+	if _card_attachments.is_empty() and _anchor_mode == "target":
+		_anchor_mode = "manual"
+		_apply_3dof_anchor_transform()
+
+
+func _update_target_attachments() -> void:
+	if _card_anchor == null:
+		return
+	var attachment = _card_attachments.get(CARD_ANCHOR_NAME)
+	if typeof(attachment) != TYPE_DICTIONARY and _card_attachments.size() == 1:
+		attachment = _card_attachments.values()[0]
+	if typeof(attachment) != TYPE_DICTIONARY:
+		return
+	var target_id := str(attachment.get("target_id", ""))
+	var offset_rule = attachment.get("offset_rule", TARGET_DEFAULT_OFFSET_RULE)
+	var adapter := _target_registry.resolve(target_id)
+	if adapter != null and adapter.is_available():
+		var next_transform := _target_offset_transform(adapter.get_global_transform(), offset_rule)
+		_card_anchor.global_transform = next_transform
+		attachment["last_transform"] = next_transform
+		_card_anchor.visible = true
+	else:
+		_apply_target_fallback(attachment)
+	if _face_camera_enabled:
+		_orient_card_for_3dof_reading()
+	_update_vst_bbox_frame()
+
+
+func _apply_target_fallback(attachment: Dictionary) -> void:
+	var fallback := str(attachment.get("fallback", TARGET_FALLBACK_HOLD_LAST_POSE))
+	match fallback:
+		TARGET_FALLBACK_DETACH:
+			detach_card(CARD_ANCHOR_NAME)
+		TARGET_FALLBACK_FADE_OUT:
+			_card_anchor.visible = false
+		_:
+			var last_transform = attachment.get("last_transform", _card_anchor.global_transform)
+			if last_transform is Transform3D:
+				_card_anchor.global_transform = last_transform
+
+
+func _normalize_target_offset_rule(offset_rule) -> Dictionary:
+	var normalized := TARGET_DEFAULT_OFFSET_RULE.duplicate()
+	if typeof(offset_rule) == TYPE_DICTIONARY:
+		for key in offset_rule.keys():
+			normalized[key] = offset_rule[key]
+	elif typeof(offset_rule) == TYPE_STRING:
+		normalized["mode"] = str(offset_rule)
+	return normalized
+
+
+func _target_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:
+	var rule := _normalize_target_offset_rule(offset_rule)
+	if str(rule.get("offset_space", "world")) == "target":
+		return _target_local_offset_transform(target_transform, rule)
+	return _target_world_offset_transform(target_transform, rule)
+
+
+func _target_world_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:
+	var rule := _normalize_target_offset_rule(offset_rule)
+	var result := Transform3D.IDENTITY
+	result.origin = target_transform.origin + _target_offset_vector(rule)
+	return result
+
+
+func _target_local_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:
+	var rule := _normalize_target_offset_rule(offset_rule)
+	var result := target_transform
+	result.origin = target_transform * _target_offset_vector(rule)
+	return result
+
+
+func _target_offset_vector(offset_rule) -> Vector3:
+	var rule := _normalize_target_offset_rule(offset_rule)
+	var mode := str(rule.get("mode", "front"))
+	var distance := float(rule.get("distance_m", 0.35))
+	var local_offset := Vector3.ZERO
+	match mode:
+		"right_top", "top_right":
+			local_offset = Vector3(float(rule.get("right_m", 0.35)), float(rule.get("up_m", 0.35)), float(rule.get("forward_m", 0.0)))
+		"right":
+			local_offset = Vector3(distance, 0.0, 0.0)
+		"top":
+			local_offset = Vector3(0.0, distance, 0.0)
+		"front":
+			local_offset = Vector3(0.0, 0.0, -distance)
+		_:
+			local_offset = Vector3(
+				float(rule.get("x_m", 0.0)),
+				float(rule.get("y_m", 0.0)),
+				float(rule.get("z_m", -distance))
+			)
+	return local_offset
 
 
 func _poll_ws(delta: float) -> void:
@@ -441,6 +852,12 @@ func _apply_command(command: String) -> void:
 			_speed_deg_per_second = clampf(_speed_deg_per_second - CARD_SPEED_STEP_DEG_PER_SECOND, MIN_SPEED_DEG_PER_SECOND, MAX_SPEED_DEG_PER_SECOND)
 		"pause", "toggle_pause", "space":
 			_paused = not _paused
+		"debug_target_free":
+			if _debug_target_marker != null and is_instance_valid(_debug_target_marker):
+				_debug_target_marker.queue_free()
+			_debug_target_marker = null
+		"debug_target_reset":
+			_build_debug_target_marker()
 		"reset", "r":
 			_anchor_yaw_deg = CARD_START_YAW_DEG
 			_anchor_pitch_deg = CARD_START_PITCH_DEG
@@ -498,6 +915,18 @@ func _anchor_from_bbox(center_px: Vector2, size_px: Vector2, image_size: Vector2
 		"depth_m": point_head.length() if _vst_uses_eye_to_head_anchor else depth_m,
 		"angular_size_deg": Vector2(angular_w, angular_h),
 	}
+
+
+func _target_position_from_bbox_anchor(anchor: Dictionary) -> Vector3:
+	var depth_m := float(anchor.get("depth_m", CARD_START_DEPTH_M))
+	var yaw := deg_to_rad(float(anchor.get("yaw_deg", 0.0)))
+	var pitch := deg_to_rad(float(anchor.get("pitch_deg", 0.0)))
+	var horizontal_depth := depth_m * cos(pitch)
+	return Vector3(
+		horizontal_depth * sin(yaw),
+		depth_m * sin(pitch),
+		-horizontal_depth * cos(yaw)
+	)
 
 
 func _convert_vst_camera_point_to_head_convention(point: Vector3) -> Vector3:
@@ -857,26 +1286,44 @@ func _apply_vst_tracker_anchor(boxes: PackedFloat32Array) -> void:
 	var y := clampf(float(boxes[1]), 0.0, 1.0)
 	var w := clampf(float(boxes[2]), 0.02, 1.0)
 	var h := clampf(float(boxes[3]), 0.02, 1.0)
+	var confidence := clampf(float(boxes[4]), 0.0, 1.0)
 	_bbox_center_px = Vector2((x + w * 0.5) * _vst_right_image_size.x, (y + h * 0.5) * _vst_right_image_size.y)
 	_bbox_size_px = Vector2(w * _vst_right_image_size.x, h * _vst_right_image_size.y)
 	_bbox_image_size = _vst_right_image_size
 	_bbox_depth_m = clampf(_bbox_depth_m, MIN_DEPTH_M, MAX_DEPTH_M)
-	_anchor_mode = "bbox"
-	_last_command = "vst_bbox"
-	_apply_bbox_anchor()
+	var target_transform := _vst_tracker_box_to_target_transform(boxes)
+	var updated := update_vst_target(VST_TRACKED_TARGET_ID, target_transform, confidence, float(Time.get_ticks_msec()))
 	_update_vst_bbox_frame()
 	_vst_anchor_updates += 1
-	if _vst_anchor_updates <= 5:
-		print("VST anchor: center=%.1f %.1f size=%.1f %.1f image=%.0f %.0f yaw=%.1f pitch=%.1f" % [
+	if updated and _vst_anchor_updates <= 5:
+		print("VST target: center=%.1f %.1f size=%.1f %.1f image=%.0f %.0f pos=%.2f %.2f %.2f conf=%.2f" % [
 			_bbox_center_px.x,
 			_bbox_center_px.y,
 			_bbox_size_px.x,
 			_bbox_size_px.y,
 			_bbox_image_size.x,
 			_bbox_image_size.y,
-			_anchor_yaw_deg,
-			_anchor_pitch_deg,
+			target_transform.origin.x,
+			target_transform.origin.y,
+			target_transform.origin.z,
+			confidence,
 		])
+
+
+func _vst_tracker_box_to_target_transform(boxes: PackedFloat32Array) -> Transform3D:
+	if boxes.size() < 5:
+		return Transform3D.IDENTITY
+	var x := clampf(float(boxes[0]), 0.0, 1.0)
+	var y := clampf(float(boxes[1]), 0.0, 1.0)
+	var w := clampf(float(boxes[2]), 0.02, 1.0)
+	var h := clampf(float(boxes[3]), 0.02, 1.0)
+	var center_px := Vector2((x + w * 0.5) * _vst_right_image_size.x, (y + h * 0.5) * _vst_right_image_size.y)
+	var size_px := Vector2(w * _vst_right_image_size.x, h * _vst_right_image_size.y)
+	var anchor := _anchor_from_bbox(center_px, size_px, _vst_right_image_size, clampf(_bbox_depth_m, MIN_DEPTH_M, MAX_DEPTH_M))
+	_bbox_angular_size_deg = anchor["angular_size_deg"]
+	var target_transform := Transform3D.IDENTITY
+	target_transform.origin = _target_position_from_bbox_anchor(anchor)
+	return target_transform
 
 
 func _format_vst_status_line() -> String:
@@ -885,8 +1332,11 @@ func _format_vst_status_line() -> String:
 	var box_str := "n/a"
 	if _vst_first_box.size() >= 5:
 		box_str = "%.2f %.2f %.2f %.2f %.2f" % [_vst_first_box[0], _vst_first_box[1], _vst_first_box[2], _vst_first_box[3], _vst_first_box[4]]
+	var target_state_line := "target_state=lost"
+	if _vst_target_adapter != null:
+		target_state_line = "target_state=" + _vst_target_adapter.target.state
 	var err_str := _vst_last_error if not _vst_last_error.is_empty() else "-"
-	return "VST: cls=%s init=%s frames=%d boxes=%d latency=%.1fms img=%.0fx%.0f box0=%s err=%s\nAnchor: %s\n%s\n%s" % [
+	return "VST: cls=%s init=%s frames=%d boxes=%d latency=%.1fms img=%.0fx%.0f box0=%s %s err=%s\nAnchor: %s\n%s\n%s" % [
 		class_state,
 		init_state,
 		_vst_right_frames,
@@ -895,6 +1345,7 @@ func _format_vst_status_line() -> String:
 		_vst_right_image_size.x,
 		_vst_right_image_size.y,
 		box_str,
+		target_state_line,
 		err_str,
 		"eye2head" if _vst_uses_eye_to_head_anchor else "raw-fov",
 		_vst_eye_to_head_status,
