@@ -84,9 +84,10 @@ func _attach_card_to_proxy_target(card_id: String, card: Dictionary) -> bool:
 
 func _default_offset_rule() -> Dictionary:
 	return {
-		"mode": "right_top",
+		"mode": "custom",
 		"offset_space": "world",
-		"right_m": 0.35,
-		"up_m": 0.25,
+		"x_m": 0.0,
+		"y_m": 0.0,
+		"z_m": 0.0,
 		"fallback": "hold_last_pose"
 	}

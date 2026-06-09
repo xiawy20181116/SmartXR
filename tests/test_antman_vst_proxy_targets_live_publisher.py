@@ -54,7 +54,12 @@ class AntmanVstProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(message["sequence"], 3)
         self.assertEqual(message["targets"][0]["target_id"], "vst-person-2")
         self.assertEqual(message["targets"][0]["state"], "tracked")
+        self.assertAlmostEqual(message["targets"][0]["transform"]["position"][2], -5.0)
         self.assertEqual(message["cards"][0]["card_id"], "LiveCard")
+        self.assertEqual(
+            message["cards"][0]["offset_rule"],
+            {"mode": "custom", "offset_space": "world", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0, "fallback": "hold_last_pose"},
+        )
         self.assertEqual(validator.validate_message(message), [])
 
     def test_next_live_message_skips_empty_frames_and_publishes_first_target(self):

@@ -55,10 +55,11 @@ def build_proxy_targets_message(
                 "card_id": card_id,
                 "target_id": target_id,
                 "offset_rule": {
-                    "mode": "right_top",
+                    "mode": "custom",
                     "offset_space": "world",
-                    "right_m": 0.35,
-                    "up_m": 0.25,
+                    "x_m": 0.0,
+                    "y_m": 0.0,
+                    "z_m": 0.0,
                     "fallback": "hold_last_pose",
                 },
             }

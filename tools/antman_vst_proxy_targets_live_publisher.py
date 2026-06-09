@@ -76,7 +76,7 @@ def build_proxy_targets_message_from_live_frame(
     sequence: int,
     card_id: str = "CardAnchor",
     min_confidence: float = 0.5,
-    default_depth_m: float = 1.2,
+    default_depth_m: float = 5.0,
     source_stats: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     record = build_frame_record(
@@ -105,7 +105,7 @@ def next_live_proxy_targets_message(
     sequence: int,
     card_id: str = "CardAnchor",
     min_confidence: float = 0.5,
-    default_depth_m: float = 1.2,
+    default_depth_m: float = 5.0,
     max_empty_reads: int = 120,
     sleep_seconds: float = 0.005,
 ) -> dict[str, Any] | None:
@@ -129,7 +129,7 @@ def next_live_proxy_targets_message_with_diagnostics(
     sequence: int,
     card_id: str = "CardAnchor",
     min_confidence: float = 0.5,
-    default_depth_m: float = 1.2,
+    default_depth_m: float = 5.0,
     max_empty_reads: int = 120,
     sleep_seconds: float = 0.005,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:

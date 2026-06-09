@@ -76,10 +76,11 @@ const VST_TARGET_STALE_MS := 650.0
 const VST_TARGET_LOST_MS := 1400.0
 const VST_TARGET_SMOOTHING_ALPHA := 0.38
 const VST_TARGET_OFFSET_RULE := {
-	"mode": "right_top",
+	"mode": "custom",
 	"offset_space": "world",
-	"right_m": 0.35,
-	"up_m": 0.25,
+	"x_m": 0.0,
+	"y_m": 0.0,
+	"z_m": 0.0,
 	"fallback": TARGET_FALLBACK_HOLD_LAST_POSE,
 }
 const GXR_CAL_CV_DEWARP_L := 0x00400060

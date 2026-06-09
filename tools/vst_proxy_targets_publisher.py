@@ -94,7 +94,7 @@ def normalize_source_payload(
     source_payload: dict[str, Any],
     sequence: int | None = None,
     card_id: str = "CardAnchor",
-    default_depth_m: float = 1.2,
+    default_depth_m: float = 5.0,
 ) -> dict[str, Any]:
     if source_payload.get("type") == "proxy_targets":
         message = json.loads(json.dumps(source_payload))
@@ -139,10 +139,11 @@ def normalize_source_payload(
                 "card_id": card_id,
                 "target_id": targets[0]["target_id"],
                 "offset_rule": {
-                    "mode": "right_top",
+                    "mode": "custom",
                     "offset_space": "world",
-                    "right_m": 0.35,
-                    "up_m": 0.25,
+                    "x_m": 0.0,
+                    "y_m": 0.0,
+                    "z_m": 0.0,
                     "fallback": "hold_last_pose",
                 },
             }
@@ -164,7 +165,7 @@ def load_source_payload(path: Path) -> dict[str, Any]:
     return payload
 
 
-def load_source_messages(path: Path, card_id: str = "CardAnchor", default_depth_m: float = 1.2) -> list[dict[str, Any]]:
+def load_source_messages(path: Path, card_id: str = "CardAnchor", default_depth_m: float = 5.0) -> list[dict[str, Any]]:
     if path.suffix.lower() != ".jsonl":
         return [normalize_source_payload(load_source_payload(path), card_id=card_id, default_depth_m=default_depth_m)]
 

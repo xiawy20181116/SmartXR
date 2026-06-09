@@ -335,6 +335,10 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('"card_id": default_card_id', adapter)
         self.assertIn('"target_id": target_id', adapter)
         self.assertIn("_card_bindings_or_single_target_fallback(proxy_targets)", adapter)
+        self.assertIn('"mode": "custom"', adapter)
+        self.assertIn('"x_m": 0.0', adapter)
+        self.assertIn('"y_m": 0.0', adapter)
+        self.assertIn('"z_m": 0.0', adapter)
 
     def test_proxy_targets_sample_targets_real_card_anchor_without_raw_fields(self):
         sample = json.loads(PROXY_TARGETS_SAMPLE.read_text(encoding="utf-8"))
@@ -343,8 +347,11 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertEqual(sample["schema_version"], 1)
         self.assertEqual(sample["cards"][0]["card_id"], "CardAnchor")
         self.assertEqual(sample["cards"][0]["target_id"], sample["targets"][0]["target_id"])
-        self.assertEqual(sample["cards"][0]["offset_rule"]["mode"], "right_top")
+        self.assertEqual(sample["cards"][0]["offset_rule"]["mode"], "custom")
         self.assertEqual(sample["cards"][0]["offset_rule"]["offset_space"], "world")
+        self.assertEqual(sample["cards"][0]["offset_rule"]["x_m"], 0.0)
+        self.assertEqual(sample["cards"][0]["offset_rule"]["y_m"], 0.0)
+        self.assertEqual(sample["cards"][0]["offset_rule"]["z_m"], 0.0)
         serialized = json.dumps(sample)
         self.assertNotIn("bbox", serialized)
         self.assertNotIn("detection", serialized)
