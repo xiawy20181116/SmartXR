@@ -25,6 +25,8 @@ const MAX_SPEED_DEG_PER_SECOND := 45.0
 const MIN_DEPTH_M := 0.65
 const MAX_DEPTH_M := 4.0
 const WS_URL := "ws://10.1.98.195:8766/control"
+const PROXY_TARGETS_DEFAULT_WS_URL := "ws://127.0.0.1:8766/proxy_targets"
+const PROXY_TARGETS_STATUS_FILE := "user://proxy_targets_live_status.json"
 const TARGET_FALLBACK_HOLD_LAST_POSE := "hold_last_pose"
 const TARGET_FALLBACK_DETACH := "detach"
 const TARGET_FALLBACK_FADE_OUT := "fade_out"
@@ -241,6 +243,18 @@ var _camera: Camera3D = null
 var _ws := WebSocketPeer.new()
 var _ws_connected := false
 var _ws_retry_seconds := 0.0
+var _proxy_targets_ws := WebSocketPeer.new()
+var _proxy_targets_ws_url := PROXY_TARGETS_DEFAULT_WS_URL
+var _proxy_targets_ws_connected := false
+var _proxy_targets_ws_subscribed := false
+var _proxy_targets_ws_retry_seconds := 0.0
+var _proxy_targets_packets := 0
+var _proxy_targets_parsed := 0
+var _proxy_targets_live := 0
+var _proxy_targets_sequence := -1
+var _proxy_targets_packet_bytes := 0
+var _proxy_targets_packet_preview := ""
+var _proxy_targets_error := "-"
 var _card_viewport: SubViewport = null
 var _card_anchor: Node3D = null
 var _card_mesh: MeshInstance3D = null
@@ -266,6 +280,11 @@ var _face_camera_enabled := true
 var _last_command := "none"
 var _target_registry := TargetRegistry.new()
 var _card_attachments := {}
+var _proxy_target_nodes := {}
+var _last_proxy_position := Vector3.ZERO
+var _card_attach_target_id := ""
+var _card_resolved_position := Vector3.ZERO
+var _card_apply_count := 0
 var _debug_target_marker: MeshInstance3D = null
 var _debug_target_elapsed_seconds := 0.0
 var _vst_target_adapter: VSTTargetAdapter = null
@@ -290,6 +309,7 @@ var _vst_uses_eye_to_head_anchor := false
 
 
 func _ready() -> void:
+	_configure_proxy_targets_ws_url()
 	_try_init_xr()
 	_setup_camera()
 	_build_vst_raw_debug_panel()
@@ -301,6 +321,7 @@ func _ready() -> void:
 	_build_vst_target_proxy()
 	_build_debug_target_marker()
 	_connect_ws()
+	_connect_proxy_targets_ws()
 	_setup_vst_capture()
 	set_process(true)
 
@@ -579,8 +600,26 @@ func _connect_ws() -> void:
 		_last_command = "ws connect err " + str(result)
 
 
+func _configure_proxy_targets_ws_url() -> void:
+	var env_url := OS.get_environment("PROXY_TARGETS_WS_URL")
+	if not env_url.is_empty():
+		_proxy_targets_ws_url = env_url
+
+
+func _connect_proxy_targets_ws() -> void:
+	_proxy_targets_ws.close()
+	_proxy_targets_ws_subscribed = false
+	var result := _proxy_targets_ws.connect_to_url(_proxy_targets_ws_url)
+	_proxy_targets_ws_connected = false
+	_proxy_targets_ws_retry_seconds = 0.0
+	if result != OK:
+		_proxy_targets_error = "proxy ws connect err " + str(result)
+	_write_proxy_targets_status()
+
+
 func _process(delta: float) -> void:
 	_poll_ws(delta)
+	_poll_proxy_targets_ws(delta)
 	_poll_vst_bbox()
 	_advance_vst_target_state(delta)
 	_update_debug_target_marker(delta)
@@ -595,6 +634,7 @@ func _process(delta: float) -> void:
 	else:
 		_apply_3dof_anchor_transform()
 	_update_status_label()
+	_write_proxy_targets_status()
 
 
 func _build_vst_target_proxy() -> void:
@@ -698,6 +738,9 @@ func _update_target_attachments() -> void:
 		_card_anchor.global_transform = next_transform
 		attachment["last_transform"] = next_transform
 		_card_anchor.visible = true
+		_card_attach_target_id = target_id
+		_card_resolved_position = next_transform.origin
+		_card_apply_count += 1
 	else:
 		_apply_target_fallback(attachment)
 	if _face_camera_enabled:
@@ -785,6 +828,23 @@ func _poll_ws(delta: float) -> void:
 			_connect_ws()
 
 
+func _poll_proxy_targets_ws(delta: float) -> void:
+	_proxy_targets_ws.poll()
+	var state := _proxy_targets_ws.get_ready_state()
+	_proxy_targets_ws_connected = state == WebSocketPeer.STATE_OPEN
+	if state == WebSocketPeer.STATE_OPEN:
+		if not _proxy_targets_ws_subscribed:
+			_proxy_targets_ws.send_text(JSON.stringify({"type": "subscribe", "stream": "proxy_targets"}))
+			_proxy_targets_ws_subscribed = true
+		while _proxy_targets_ws.get_available_packet_count() > 0:
+			_handle_proxy_targets_packet(_proxy_targets_ws.get_packet().get_string_from_utf8())
+	elif state == WebSocketPeer.STATE_CLOSED:
+		_proxy_targets_ws_subscribed = false
+		_proxy_targets_ws_retry_seconds += delta
+		if _proxy_targets_ws_retry_seconds >= 2.0:
+			_connect_proxy_targets_ws()
+
+
 func _handle_packet(payload: String) -> void:
 	var parsed = JSON.parse_string(payload)
 	if typeof(parsed) != TYPE_DICTIONARY:
@@ -795,6 +855,110 @@ func _handle_packet(payload: String) -> void:
 	if parsed.get("type", "") != "control":
 		return
 	_apply_command(str(parsed.get("command", "")))
+
+
+func _handle_proxy_targets_packet(payload: String) -> void:
+	_proxy_targets_packets += 1
+	_proxy_targets_packet_bytes = payload.to_utf8_buffer().size()
+	_proxy_targets_packet_preview = payload.substr(0, 160)
+	var parsed = JSON.parse_string(payload)
+	if typeof(parsed) != TYPE_DICTIONARY:
+		_proxy_targets_error = "json_parse_failed"
+		return
+	if parsed.get("type", "") != "proxy_targets":
+		return
+	_proxy_targets_parsed += 1
+	_proxy_targets_live += 1
+	_proxy_targets_sequence = int(parsed.get("sequence", _proxy_targets_sequence))
+	_proxy_targets_error = "-"
+	_apply_proxy_targets_payload(parsed)
+
+
+func _apply_proxy_targets_payload(parsed: Dictionary) -> void:
+	var targets = parsed.get("targets", [])
+	if not (targets is Array):
+		_proxy_targets_error = "targets_not_array"
+		return
+	for target in targets:
+		if typeof(target) != TYPE_DICTIONARY:
+			continue
+		var target_id := str(target.get("target_id", ""))
+		if target_id.is_empty():
+			continue
+		var proxy := _ensure_proxy_target_node(target_id)
+		var transform := _proxy_target_transform_from_payload(target)
+		proxy.global_transform = transform
+		proxy.visible = true
+		_last_proxy_position = transform.origin
+		var attached := attach_to_target(CARD_ANCHOR_NAME, target_id, VST_TARGET_OFFSET_RULE)
+		if attached:
+			_last_command = "proxy_live"
+		return
+	_proxy_targets_error = "no_valid_target"
+
+
+func _ensure_proxy_target_node(target_id: String) -> Node3D:
+	var existing = _proxy_target_nodes.get(target_id)
+	if existing is Node3D and is_instance_valid(existing):
+		return existing
+	var proxy := Node3D.new()
+	proxy.name = "ProxyTarget_" + target_id.replace(":", "_").replace("/", "_").replace("\\", "_")
+	proxy.visible = false
+	add_child(proxy)
+	_proxy_target_nodes[target_id] = proxy
+	register_node3d_target(target_id, proxy)
+	return proxy
+
+
+func _proxy_target_transform_from_payload(target: Dictionary) -> Transform3D:
+	var transform := Transform3D.IDENTITY
+	var raw_transform = target.get("transform", {})
+	if typeof(raw_transform) == TYPE_DICTIONARY:
+		transform.origin = _vector3_from_payload(raw_transform.get("position", raw_transform.get("origin", {})), transform.origin)
+	else:
+		transform.origin = _vector3_from_payload(target.get("position", {}), transform.origin)
+	return transform
+
+
+func _vector3_from_payload(value, fallback: Vector3) -> Vector3:
+	if value is Array and value.size() >= 3:
+		return Vector3(float(value[0]), float(value[1]), float(value[2]))
+	if typeof(value) == TYPE_DICTIONARY:
+		return Vector3(
+			float(value.get("x", fallback.x)),
+			float(value.get("y", fallback.y)),
+			float(value.get("z", fallback.z))
+		)
+	return fallback
+
+
+func _write_proxy_targets_status() -> void:
+	var status := {
+		"error": _proxy_targets_error,
+		"last_command": _last_command,
+		"live": _proxy_targets_live,
+		"message_type": "proxy_targets" if _proxy_targets_live > 0 else "-",
+		"packet_bytes": _proxy_targets_packet_bytes,
+		"packet_preview": _proxy_targets_packet_preview,
+		"packets": _proxy_targets_packets,
+		"parsed": _proxy_targets_parsed,
+		"sequence": _proxy_targets_sequence,
+		"ws_connected": _proxy_targets_ws_connected,
+		"ws_subscribed": _proxy_targets_ws_subscribed,
+		"ws_url": _proxy_targets_ws_url,
+		"proxy_target_count": _proxy_target_nodes.size(),
+		"proxy_target_ids": _proxy_target_nodes.keys(),
+		"last_proxy_position": _format_vec3(_last_proxy_position),
+		"card_attach_target_id": _card_attach_target_id,
+		"card_resolved_position": _format_vec3(_card_resolved_position),
+		"card_node_position": _format_vec3(_card_anchor.global_position) if _card_anchor != null else "n/a",
+		"card_apply_count": _card_apply_count,
+	}
+	var file := FileAccess.open(PROXY_TARGETS_STATUS_FILE, FileAccess.WRITE)
+	if file == null:
+		return
+	file.store_string(JSON.stringify(status, "\t"))
+	file.close()
 
 
 func _apply_command(command: String) -> void:

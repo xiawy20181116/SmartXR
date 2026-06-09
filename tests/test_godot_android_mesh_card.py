@@ -22,6 +22,7 @@ ANDROID_ACTIVITY = (
 GODOT_ANDROID = ROOT / "godot-android"
 EXPORT_PRESETS = GODOT_ANDROID / "export_presets.cfg"
 WINDOWS_PCMR_RUNNER = ROOT / "tools" / "run_windows_pcmr.ps1"
+PROXY_TARGETS_STATUS_VALIDATOR = ROOT / "tools" / "validate_proxy_targets_live_status.py"
 GXR_EXTENSION_SWITCH = ROOT / "tools" / "set_gxr_extension.ps1"
 ANDROID_EXPORT_RUNNER = ROOT / "tools" / "export_android.ps1"
 
@@ -250,6 +251,42 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_orient_card_for_3dof_reading()", source)
         self.assertRegex(source, r"if _anchor_mode == \"target\":\s+_update_target_attachments\(\)")
 
+    def test_proxy_targets_live_consumer_binds_card_to_stream_target_id(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('const PROXY_TARGETS_DEFAULT_WS_URL := "ws://127.0.0.1:8766/proxy_targets"', source)
+        self.assertIn('OS.get_environment("PROXY_TARGETS_WS_URL")', source)
+        self.assertIn("var _proxy_targets_ws := WebSocketPeer.new()", source)
+        self.assertIn("_connect_proxy_targets_ws()", source)
+        self.assertIn("_poll_proxy_targets_ws(delta)", source)
+        self.assertIn('parsed.get("type", "") != "proxy_targets"', source)
+        self.assertIn("func _apply_proxy_targets_payload(parsed: Dictionary) -> void:", source)
+        self.assertIn('var target_id := str(target.get("target_id", ""))', source)
+        self.assertIn("_ensure_proxy_target_node(target_id)", source)
+        self.assertIn("register_node3d_target(target_id, proxy)", source)
+        self.assertIn("attach_to_target(CARD_ANCHOR_NAME, target_id, VST_TARGET_OFFSET_RULE)", source)
+        self.assertNotIn("attach_to_target(CARD_ANCHOR_NAME, VST_TRACKED_TARGET_ID, VST_TARGET_OFFSET_RULE)\n\t_proxy_targets", source)
+
+    def test_proxy_targets_live_status_records_apply_layer(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        for marker in [
+            "PROXY_TARGETS_STATUS_FILE",
+            "func _write_proxy_targets_status() -> void:",
+            '"ws_url": _proxy_targets_ws_url',
+            '"packets": _proxy_targets_packets',
+            '"parsed": _proxy_targets_parsed',
+            '"live": _proxy_targets_live',
+            '"proxy_target_count": _proxy_target_nodes.size()',
+            '"proxy_target_ids": _proxy_target_nodes.keys()',
+            '"last_proxy_position": _format_vec3(_last_proxy_position)',
+            '"card_attach_target_id": _card_attach_target_id',
+            '"card_resolved_position": _format_vec3(_card_resolved_position)',
+            '"card_node_position": _format_vec3(_card_anchor.global_position)',
+            '"card_apply_count": _card_apply_count',
+        ]:
+            self.assertIn(marker, source)
+
     def test_debug_marker_target_can_drive_real_device_validation(self):
         source = SCRIPT.read_text(encoding="utf-8")
 
@@ -379,6 +416,29 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("-Mode enable", runner)
         self.assertIn("try {", runner)
         self.assertIn("finally {", runner)
+
+    def test_windows_runner_can_validate_real_proxy_targets_consumer(self):
+        runner = WINDOWS_PCMR_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("[switch]$ValidateProxyTargets", runner)
+        self.assertIn("[string]$ProxyTargetsWsUrl = \"ws://127.0.0.1:8766/proxy_targets\"", runner)
+        self.assertIn("[int]$ProxyTargetsTimeoutSeconds = 20", runner)
+        self.assertIn("PROXY_TARGETS_WS_URL", runner)
+        self.assertIn("validate_proxy_targets_live_status.py", runner)
+        self.assertIn("--require live", runner)
+        self.assertIn("--require-card-apply", runner)
+        self.assertIn("Start-Process", runner)
+        self.assertIn("Stop-Process", runner)
+
+    def test_proxy_targets_status_validator_requires_card_apply_gate(self):
+        validator = PROXY_TARGETS_STATUS_VALIDATOR.read_text(encoding="utf-8")
+
+        self.assertIn("--require-card-apply", validator)
+        self.assertIn("card_apply_count", validator)
+        self.assertIn("card_attach_target_id", validator)
+        self.assertIn("proxy_target_count", validator)
+        self.assertIn("last_proxy_position", validator)
+        self.assertIn("card_node_position", validator)
 
     def test_android_export_runner_enables_gxr_extension_before_export(self):
         runner = ANDROID_EXPORT_RUNNER.read_text(encoding="utf-8")
