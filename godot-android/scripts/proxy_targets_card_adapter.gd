@@ -52,7 +52,7 @@ func sync_card_wrapper() -> bool:
 
 
 func _card_bindings_or_single_target_fallback(proxy_targets: Dictionary) -> Dictionary:
-	var bindings := proxy_targets_consumer.get_card_bindings()
+	var bindings: Dictionary = proxy_targets_consumer.get_card_bindings()
 	if bindings.is_empty() and proxy_targets.size() == 1:
 		var target_id := str(proxy_targets.keys()[0])
 		bindings[default_card_id] = {

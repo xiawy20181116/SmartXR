@@ -330,6 +330,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
         self.assertIn('var default_card_id := "CardAnchor"', adapter)
         self.assertIn("func _card_bindings_or_single_target_fallback(proxy_targets: Dictionary) -> Dictionary:", adapter)
+        self.assertIn("var bindings: Dictionary = proxy_targets_consumer.get_card_bindings()", adapter)
         self.assertIn("if bindings.is_empty() and proxy_targets.size() == 1:", adapter)
         self.assertIn('"card_id": default_card_id', adapter)
         self.assertIn('"target_id": target_id', adapter)
@@ -369,6 +370,8 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("func _connect_proxy_targets_ws() -> void:", source)
         self.assertIn("func _poll_proxy_targets_ws(delta: float) -> void:", source)
         self.assertIn("func _send_proxy_targets_subscribe() -> void:", source)
+        self.assertNotIn("set_write_mode", source)
+        self.assertIn("_proxy_targets_ws.send_text(subscribe_payload)", source)
         self.assertIn("func _apply_proxy_targets_live_payload(payload: String) -> void:", source)
         self.assertIn("func _record_proxy_targets_diagnostics(message: Dictionary) -> void:", source)
         self.assertIn("func _write_proxy_targets_status_file(delta: float) -> void:", source)

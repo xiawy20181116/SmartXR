@@ -655,9 +655,11 @@ func _poll_proxy_targets_ws(delta: float) -> void:
 func _send_proxy_targets_subscribe() -> void:
 	if _proxy_targets_ws_subscribed:
 		return
-	_proxy_targets_ws.set_write_mode(WebSocketPeer.WRITE_MODE_TEXT)
 	var subscribe_payload := JSON.stringify({"type": "subscribe", "stream": "proxy_targets"})
-	_proxy_targets_ws.put_packet(subscribe_payload.to_utf8_buffer())
+	var err := _proxy_targets_ws.send_text(subscribe_payload)
+	if err != OK:
+		_proxy_targets_last_error = "subscribe_failed_" + str(err)
+		return
 	_proxy_targets_ws_subscribed = true
 
 
