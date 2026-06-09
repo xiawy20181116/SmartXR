@@ -325,6 +325,16 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("return registered_ok and attached_ok", adapter)
         self.assertIn("return bool(card_wrapper.call(attach_method_name", adapter)
 
+    def test_proxy_targets_card_adapter_binds_single_live_target_without_card_payload(self):
+        adapter = PROXY_TARGETS_CARD_ADAPTER.read_text(encoding="utf-8")
+
+        self.assertIn('var default_card_id := "CardAnchor"', adapter)
+        self.assertIn("func _card_bindings_or_single_target_fallback(proxy_targets: Dictionary) -> Dictionary:", adapter)
+        self.assertIn("if bindings.is_empty() and proxy_targets.size() == 1:", adapter)
+        self.assertIn('"card_id": default_card_id', adapter)
+        self.assertIn('"target_id": target_id', adapter)
+        self.assertIn("_card_bindings_or_single_target_fallback(proxy_targets)", adapter)
+
     def test_proxy_targets_sample_targets_real_card_anchor_without_raw_fields(self):
         sample = json.loads(PROXY_TARGETS_SAMPLE.read_text(encoding="utf-8"))
 

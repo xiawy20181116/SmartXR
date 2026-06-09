@@ -6,6 +6,7 @@ var proxy_targets_consumer: Node = null
 var card_wrapper: Node = null
 var target_register_method_names := ["register_node3d_target", "register_target", "register_proxy_target"]
 var attach_method_name := "attach_to_target"
+var default_card_id := "CardAnchor"
 
 
 func bind(consumer: Node, wrapper: Node) -> void:
@@ -34,18 +35,32 @@ func sync_card_wrapper() -> bool:
 
 	var registered_ok := false
 	var attached_ok := false
+	var proxy_targets: Dictionary = proxy_targets_consumer.get_proxy_targets()
 
-	for target_id in proxy_targets_consumer.get_proxy_targets().keys():
+	for target_id in proxy_targets.keys():
 		if _register_proxy_target(str(target_id), proxy_targets_consumer.get_proxy_target(str(target_id))):
 			registered_ok = true
 
-	for card_id in proxy_targets_consumer.get_card_bindings().keys():
-		var card: Variant = proxy_targets_consumer.get_card_bindings()[card_id]
+	var card_bindings := _card_bindings_or_single_target_fallback(proxy_targets)
+	for card_id in card_bindings.keys():
+		var card: Variant = card_bindings[card_id]
 		if typeof(card) == TYPE_DICTIONARY:
 			if _attach_card_to_proxy_target(str(card_id), card):
 				attached_ok = true
 
 	return registered_ok and attached_ok
+
+
+func _card_bindings_or_single_target_fallback(proxy_targets: Dictionary) -> Dictionary:
+	var bindings := proxy_targets_consumer.get_card_bindings()
+	if bindings.is_empty() and proxy_targets.size() == 1:
+		var target_id := str(proxy_targets.keys()[0])
+		bindings[default_card_id] = {
+			"card_id": default_card_id,
+			"target_id": target_id,
+			"offset_rule": _default_offset_rule(),
+		}
+	return bindings
 
 
 func _register_proxy_target(target_id: String, proxy: Node3D) -> bool:
