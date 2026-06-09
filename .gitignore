@@ -2,6 +2,9 @@
 __pycache__/
 *.py[cod]
 
+# Local harness/test scratch space
+.tmp/
+
 # Android and Godot build outputs
 *.apk
 *.idsig

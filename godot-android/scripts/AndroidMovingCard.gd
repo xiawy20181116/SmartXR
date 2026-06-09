@@ -34,11 +34,18 @@ const TARGET_DEFAULT_OFFSET_RULE := {
 	"distance_m": 0.35,
 	"fallback": TARGET_FALLBACK_HOLD_LAST_POSE,
 }
-const DEBUG_NODE3D_TARGET_ENABLED := true
+const DEBUG_NODE3D_TARGET_ENABLED := false
 const DEBUG_TARGET_ID := "debug_marker"
 const DEBUG_TARGET_SIZE_M := Vector3(0.12, 0.12, 0.12)
 const DEBUG_TARGET_BASE_POSITION := Vector3(0.0, 0.0, -1.15)
 const DEBUG_TARGET_RADIUS_M := 0.28
+const PROXY_TARGETS_VALIDATION_ENABLED := true
+const PROXY_TARGETS_SAMPLE_RES := "res://fixtures/proxy_targets_sample.json"
+const PROXY_TARGETS_WS_ENABLED := true
+const PROXY_TARGETS_WS_URL := "ws://127.0.0.1:8766/proxy_targets"
+const PROXY_TARGETS_STATUS_RES := "user://proxy_targets_live_status.json"
+const ProxyTargetsConsumerScript := preload("res://scripts/proxy_targets_consumer.gd")
+const ProxyTargetsCardAdapterScript := preload("res://scripts/proxy_targets_card_adapter.gd")
 
 # M1 (YAN-56): on-device VST capture + ncnn tracker scaffold.
 # Functional behaviour is gated on GXRDualVstCapture class registration so the
@@ -270,6 +277,23 @@ var _debug_target_marker: MeshInstance3D = null
 var _debug_target_elapsed_seconds := 0.0
 var _vst_target_adapter: VSTTargetAdapter = null
 var _vst_target_proxy: Node3D = null
+var _proxy_targets_consumer: Node = null
+var _proxy_targets_card_adapter: Node = null
+var _proxy_targets_ws := WebSocketPeer.new()
+var _proxy_targets_ws_connected := false
+var _proxy_targets_ws_subscribed := false
+var _proxy_targets_ws_packets_seen := 0
+var _proxy_targets_ws_retry_seconds := 0.0
+var _proxy_targets_parsed_messages := 0
+var _proxy_targets_live_messages := 0
+var _proxy_targets_last_sequence := -1
+var _proxy_targets_last_position := Vector3.ZERO
+var _proxy_targets_last_packet_bytes := 0
+var _proxy_targets_last_packet_preview := "-"
+var _proxy_targets_last_message_type := "-"
+var _proxy_targets_last_error := "-"
+var _proxy_targets_status_write_elapsed := 0.0
+var _proxy_targets_card_apply_count := 0
 
 # M1: VST capture state. _vst_capture stays null on vanilla SDK and every helper
 # below short-circuits in that case, so all existing behaviour is preserved.
@@ -300,7 +324,9 @@ func _ready() -> void:
 	_build_status_label()
 	_build_vst_target_proxy()
 	_build_debug_target_marker()
+	_build_proxy_targets_validation()
 	_connect_ws()
+	_connect_proxy_targets_ws()
 	_setup_vst_capture()
 	set_process(true)
 
@@ -558,6 +584,212 @@ func _build_debug_target_marker() -> void:
 	print("Debug Node3D target attached: %s marker=%s" % [DEBUG_TARGET_ID, marker.name])
 
 
+func _build_proxy_targets_validation() -> void:
+	if not PROXY_TARGETS_VALIDATION_ENABLED:
+		return
+	_proxy_targets_consumer = ProxyTargetsConsumerScript.new()
+	_proxy_targets_consumer.name = "ProxyTargetsConsumer"
+	add_child(_proxy_targets_consumer)
+	_proxy_targets_card_adapter = ProxyTargetsCardAdapterScript.new()
+	_proxy_targets_card_adapter.name = "ProxyTargetsCardAdapter"
+	add_child(_proxy_targets_card_adapter)
+	_proxy_targets_card_adapter.bind(_proxy_targets_consumer, self)
+	_apply_proxy_targets_sample()
+
+
+func _apply_proxy_targets_sample() -> void:
+	if _proxy_targets_card_adapter == null:
+		return
+	if not FileAccess.file_exists(PROXY_TARGETS_SAMPLE_RES):
+		_last_command = "proxy_sample_missing"
+		return
+	var sample := FileAccess.get_file_as_string(PROXY_TARGETS_SAMPLE_RES)
+	if sample.is_empty():
+		_last_command = "proxy_sample_empty"
+		return
+	var applied: bool = bool(_proxy_targets_card_adapter.apply_proxy_targets_json(sample))
+	_last_command = "proxy_sample" if applied else "proxy_sample_failed"
+
+
+func _connect_proxy_targets_ws() -> void:
+	if not PROXY_TARGETS_WS_ENABLED:
+		return
+	_proxy_targets_ws.close()
+	var result := _proxy_targets_ws.connect_to_url(_proxy_targets_ws_url())
+	_proxy_targets_ws_connected = false
+	_proxy_targets_ws_subscribed = false
+	_proxy_targets_ws_retry_seconds = 0.0
+	if result != OK:
+		_last_command = "proxy_ws_connect_err_" + str(result)
+
+
+func _proxy_targets_ws_url() -> String:
+	var env_url := OS.get_environment("PROXY_TARGETS_WS_URL")
+	if env_url.is_empty():
+		return PROXY_TARGETS_WS_URL
+	return env_url
+
+
+func _poll_proxy_targets_ws(delta: float) -> void:
+	if not PROXY_TARGETS_WS_ENABLED:
+		return
+	_proxy_targets_ws.poll()
+	var state := _proxy_targets_ws.get_ready_state()
+	_proxy_targets_ws_connected = state == WebSocketPeer.STATE_OPEN
+	if state == WebSocketPeer.STATE_OPEN:
+		_send_proxy_targets_subscribe()
+		while _proxy_targets_ws.get_available_packet_count() > 0:
+			var packet := _proxy_targets_ws.get_packet()
+			_proxy_targets_ws_packets_seen += 1
+			_proxy_targets_last_packet_bytes = packet.size()
+			var payload := packet.get_string_from_utf8()
+			_proxy_targets_last_packet_preview = _sanitize_proxy_targets_status_text(payload)
+			_apply_proxy_targets_live_payload(payload)
+	elif state == WebSocketPeer.STATE_CLOSED:
+		_proxy_targets_ws_subscribed = false
+		_proxy_targets_ws_retry_seconds += delta
+		if _proxy_targets_ws_retry_seconds >= 2.0:
+			_connect_proxy_targets_ws()
+
+
+func _send_proxy_targets_subscribe() -> void:
+	if _proxy_targets_ws_subscribed:
+		return
+	_proxy_targets_ws.set_write_mode(WebSocketPeer.WRITE_MODE_TEXT)
+	var subscribe_payload := JSON.stringify({"type": "subscribe", "stream": "proxy_targets"})
+	_proxy_targets_ws.put_packet(subscribe_payload.to_utf8_buffer())
+	_proxy_targets_ws_subscribed = true
+
+
+func _apply_proxy_targets_live_payload(payload: String) -> void:
+	if _proxy_targets_card_adapter == null:
+		_proxy_targets_last_error = "adapter_null"
+		return
+	var parsed = JSON.parse_string(payload)
+	if typeof(parsed) != TYPE_DICTIONARY:
+		_proxy_targets_last_message_type = "invalid"
+		_proxy_targets_last_error = "json_invalid"
+		_last_command = "proxy_live_invalid"
+		return
+	_proxy_targets_parsed_messages += 1
+	_record_proxy_targets_diagnostics(parsed)
+	var applied: bool = bool(_proxy_targets_card_adapter.apply_proxy_targets_message(parsed))
+	if applied:
+		_proxy_targets_live_messages += 1
+		_proxy_targets_last_error = "-"
+		_last_command = "proxy_live"
+	else:
+		_proxy_targets_last_error = "apply_failed"
+		_last_command = "proxy_live_failed"
+
+
+func _record_proxy_targets_diagnostics(message: Dictionary) -> void:
+	_proxy_targets_last_message_type = str(message.get("type", "-"))
+	_proxy_targets_last_sequence = int(message.get("sequence", _proxy_targets_last_sequence))
+	var targets = message.get("targets", [])
+	if not (targets is Array) or targets.is_empty():
+		return
+	var target = targets[0]
+	if typeof(target) != TYPE_DICTIONARY:
+		return
+	var transform = target.get("transform", {})
+	if typeof(transform) != TYPE_DICTIONARY:
+		return
+	var position = transform.get("position", [])
+	if not (position is Array) or position.size() < 3:
+		return
+	_proxy_targets_last_position = Vector3(float(position[0]), float(position[1]), float(position[2]))
+
+
+func _sanitize_proxy_targets_status_text(value: String) -> String:
+	return value.replace("\r", "\\r").replace("\n", "\\n").substr(0, 160)
+
+
+func _write_proxy_targets_status_file(delta: float) -> void:
+	_proxy_targets_status_write_elapsed += delta
+	if _proxy_targets_status_write_elapsed < 0.25:
+		return
+	_proxy_targets_status_write_elapsed = 0.0
+	var status := {
+		"ws_connected": _proxy_targets_ws_connected,
+		"ws_subscribed": _proxy_targets_ws_subscribed,
+		"ws_url": _proxy_targets_ws_url(),
+		"anchor_mode": _anchor_mode,
+		"attachments": _card_attachments.size(),
+		"card_target_id": _proxy_targets_card_target_id(),
+		"proxy_target_count": _proxy_targets_proxy_count(),
+		"proxy_target_ids": _proxy_targets_proxy_ids(),
+		"last_proxy_position": _format_vec3(_proxy_targets_last_position),
+		"card_attach_target_id": _proxy_targets_card_target_id(),
+		"card_resolved_position": _proxy_targets_card_resolved_position(),
+		"card_node_position": _proxy_targets_card_node_position(),
+		"card_apply_count": _proxy_targets_card_apply_count,
+		"packets": _proxy_targets_ws_packets_seen,
+		"parsed": _proxy_targets_parsed_messages,
+		"live": _proxy_targets_live_messages,
+		"sequence": _proxy_targets_last_sequence,
+		"packet_bytes": _proxy_targets_last_packet_bytes,
+		"packet_preview": _proxy_targets_last_packet_preview,
+		"message_type": _proxy_targets_last_message_type,
+		"error": _proxy_targets_last_error,
+		"last_command": _last_command,
+	}
+	var status_file := FileAccess.open(PROXY_TARGETS_STATUS_RES, FileAccess.WRITE)
+	if status_file == null:
+		return
+	status_file.store_string(JSON.stringify(status))
+	status_file.close()
+
+
+func _proxy_targets_card_target_id() -> String:
+	var attachment = _card_attachments.get(CARD_ANCHOR_NAME)
+	if typeof(attachment) != TYPE_DICTIONARY:
+		return ""
+	return str(attachment.get("target_id", ""))
+
+
+func _proxy_targets_proxy_count() -> int:
+	if _proxy_targets_consumer == null:
+		return 0
+	if not _proxy_targets_consumer.has_method("get_proxy_targets"):
+		return 0
+	var targets = _proxy_targets_consumer.get_proxy_targets()
+	if typeof(targets) != TYPE_DICTIONARY:
+		return 0
+	return targets.size()
+
+
+func _proxy_targets_proxy_ids() -> Array:
+	if _proxy_targets_consumer == null:
+		return []
+	if not _proxy_targets_consumer.has_method("get_proxy_targets"):
+		return []
+	var targets = _proxy_targets_consumer.get_proxy_targets()
+	if typeof(targets) != TYPE_DICTIONARY:
+		return []
+	var ids := []
+	for target_id in targets.keys():
+		ids.append(str(target_id))
+	ids.sort()
+	return ids
+
+
+func _proxy_targets_card_resolved_position() -> String:
+	var attachment = _card_attachments.get(CARD_ANCHOR_NAME)
+	if typeof(attachment) != TYPE_DICTIONARY:
+		return "n/a"
+	var last_transform = attachment.get("last_transform")
+	if last_transform is Transform3D:
+		return _format_vec3(last_transform.origin)
+	return "n/a"
+
+
+func _proxy_targets_card_node_position() -> String:
+	if _card_anchor == null:
+		return "n/a"
+	return _format_vec3(_card_anchor.global_transform.origin)
+
+
 func _update_debug_target_marker(delta: float) -> void:
 	if _debug_target_marker == null or not is_instance_valid(_debug_target_marker):
 		return
@@ -581,6 +813,7 @@ func _connect_ws() -> void:
 
 func _process(delta: float) -> void:
 	_poll_ws(delta)
+	_poll_proxy_targets_ws(delta)
 	_poll_vst_bbox()
 	_advance_vst_target_state(delta)
 	_update_debug_target_marker(delta)
@@ -595,6 +828,7 @@ func _process(delta: float) -> void:
 	else:
 		_apply_3dof_anchor_transform()
 	_update_status_label()
+	_write_proxy_targets_status_file(delta)
 
 
 func _build_vst_target_proxy() -> void:
@@ -698,6 +932,7 @@ func _update_target_attachments() -> void:
 		_card_anchor.global_transform = next_transform
 		attachment["last_transform"] = next_transform
 		_card_anchor.visible = true
+		_proxy_targets_card_apply_count += 1
 	else:
 		_apply_target_fallback(attachment)
 	if _face_camera_enabled:
@@ -1068,7 +1303,8 @@ func _update_status_label() -> void:
 		xr_origin_pos = _format_vec3(_xr_origin.global_position)
 	var xr_line := _format_xr_status_line()
 	var vst_line := _format_vst_status_line()
-	_status_label.text = "3DoF Anchor\nWS: %s  Cmd: %s  Face: 3DoF  Mode: %s\nCamera Pos xyz: %s\nCamera Rot xyz: %s\nXROrigin Pos xyz: %s\nBBox cx/cy/w/h: %.0f %.0f %.0f %.0f  Depth: %.2f\nYaw/Pitch/Depth: %.1f %.1f %.2f  Angular W/H: %.1f %.1f  Rot: %.1f %.1f %.1f\nSpeed: %.1f deg/s  Paused: %s\nTL %.2f %.2f %.2f  TR %.2f %.2f %.2f\nBL %.2f %.2f %.2f  BR %.2f %.2f %.2f\n%s\n%s" % [
+	var proxy_targets_line := _format_proxy_targets_status_line()
+	_status_label.text = "3DoF Anchor\nWS: %s  Cmd: %s  Face: 3DoF  Mode: %s\nCamera Pos xyz: %s\nCamera Rot xyz: %s\nXROrigin Pos xyz: %s\nBBox cx/cy/w/h: %.0f %.0f %.0f %.0f  Depth: %.2f\nYaw/Pitch/Depth: %.1f %.1f %.2f  Angular W/H: %.1f %.1f  Rot: %.1f %.1f %.1f\nSpeed: %.1f deg/s  Paused: %s\nTL %.2f %.2f %.2f  TR %.2f %.2f %.2f\nBL %.2f %.2f %.2f  BR %.2f %.2f %.2f\n%s\n%s\n%s" % [
 		"connected" if _ws_connected else "waiting",
 		_last_command,
 		_anchor_mode,
@@ -1102,6 +1338,7 @@ func _update_status_label() -> void:
 		corners["BR"].x,
 		corners["BR"].y,
 		corners["BR"].z,
+		proxy_targets_line,
 		xr_line,
 		vst_line,
 	]
@@ -1115,6 +1352,23 @@ func _format_xr_status_line() -> String:
 		str(_xr_active),
 		str(get_viewport().use_xr),
 		err_str,
+	]
+
+
+func _format_proxy_targets_status_line() -> String:
+	return "ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s err=%s" % [
+		"connected" if _proxy_targets_ws_connected else "waiting",
+		str(_proxy_targets_ws_subscribed),
+		_proxy_targets_ws_packets_seen,
+		_proxy_targets_parsed_messages,
+		_proxy_targets_live_messages,
+		_proxy_targets_card_apply_count,
+		_proxy_targets_last_sequence,
+		_proxy_targets_last_packet_bytes,
+		_proxy_targets_last_message_type,
+		_format_vec3(_proxy_targets_last_position),
+		_proxy_targets_card_node_position(),
+		_proxy_targets_last_error,
 	]
 
 

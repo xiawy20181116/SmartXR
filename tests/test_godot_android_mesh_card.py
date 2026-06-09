@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+import json
 import unittest
 
 
@@ -24,6 +25,10 @@ EXPORT_PRESETS = GODOT_ANDROID / "export_presets.cfg"
 WINDOWS_PCMR_RUNNER = ROOT / "tools" / "run_windows_pcmr.ps1"
 GXR_EXTENSION_SWITCH = ROOT / "tools" / "set_gxr_extension.ps1"
 ANDROID_EXPORT_RUNNER = ROOT / "tools" / "export_android.ps1"
+PROXY_TARGETS_CONSUMER = GODOT_ANDROID / "scripts" / "proxy_targets_consumer.gd"
+PROXY_TARGETS_CARD_ADAPTER = GODOT_ANDROID / "scripts" / "proxy_targets_card_adapter.gd"
+PROXY_TARGETS_SAMPLE = GODOT_ANDROID / "fixtures" / "proxy_targets_sample.json"
+FAKE_PROXY_TARGETS_PUBLISHER = ROOT / "tools" / "fake_proxy_targets_publisher.py"
 
 
 class GodotAndroidMeshCardTests(unittest.TestCase):
@@ -253,7 +258,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
     def test_debug_marker_target_can_drive_real_device_validation(self):
         source = SCRIPT.read_text(encoding="utf-8")
 
-        self.assertIn("const DEBUG_NODE3D_TARGET_ENABLED := true", source)
+        self.assertIn("const DEBUG_NODE3D_TARGET_ENABLED := false", source)
         self.assertIn('const DEBUG_TARGET_ID := "debug_marker"', source)
         self.assertIn('var _debug_target_marker: MeshInstance3D = null', source)
         self.assertIn("func _build_debug_target_marker() -> void:", source)
@@ -285,6 +290,132 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('"offset_space": "world"', source)
         self.assertIn("_debug_target_marker.rotation_degrees", source)
         self.assertIn("_debug_target_marker.position = Vector3(", source)
+
+    def test_proxy_targets_validation_mode_drives_real_card_wrapper(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("const PROXY_TARGETS_VALIDATION_ENABLED := true", source)
+        self.assertIn('const PROXY_TARGETS_SAMPLE_RES := "res://fixtures/proxy_targets_sample.json"', source)
+        self.assertIn('preload("res://scripts/proxy_targets_consumer.gd")', source)
+        self.assertIn('preload("res://scripts/proxy_targets_card_adapter.gd")', source)
+        self.assertIn("var _proxy_targets_consumer: Node = null", source)
+        self.assertIn("var _proxy_targets_card_adapter: Node = null", source)
+        self.assertNotIn("var _proxy_targets_consumer: ProxyTargetsConsumer = null", source)
+        self.assertNotIn("var _proxy_targets_card_adapter: ProxyTargetsCardAdapter = null", source)
+        self.assertIn("func _build_proxy_targets_validation() -> void:", source)
+        self.assertIn("func _apply_proxy_targets_sample() -> void:", source)
+        self.assertIn("_proxy_targets_card_adapter.bind(_proxy_targets_consumer, self)", source)
+        self.assertIn("_proxy_targets_card_adapter.apply_proxy_targets_json", source)
+        self.assertIn("_build_proxy_targets_validation()", source)
+
+    def test_proxy_targets_card_adapter_uses_offset_rule_contract(self):
+        self.assertTrue(PROXY_TARGETS_CONSUMER.exists())
+        self.assertTrue(PROXY_TARGETS_CARD_ADAPTER.exists())
+
+        adapter = PROXY_TARGETS_CARD_ADAPTER.read_text(encoding="utf-8")
+        self.assertIn("class_name ProxyTargetsCardAdapter", adapter)
+        self.assertIn("var proxy_targets_consumer: Node = null", adapter)
+        self.assertIn("func bind(consumer: Node, wrapper: Node) -> void:", adapter)
+        self.assertNotIn("ProxyTargetsConsumer = null", adapter)
+        self.assertIn('"register_node3d_target"', adapter)
+        self.assertIn('"attach_to_target"', adapter)
+        self.assertIn('card.get("offset_rule"', adapter)
+        self.assertIn("_default_offset_rule", adapter)
+        self.assertIn("func sync_card_wrapper() -> bool:", adapter)
+        self.assertIn("return registered_ok and attached_ok", adapter)
+        self.assertIn("return bool(card_wrapper.call(attach_method_name", adapter)
+
+    def test_proxy_targets_sample_targets_real_card_anchor_without_raw_fields(self):
+        sample = json.loads(PROXY_TARGETS_SAMPLE.read_text(encoding="utf-8"))
+
+        self.assertEqual(sample["type"], "proxy_targets")
+        self.assertEqual(sample["schema_version"], 1)
+        self.assertEqual(sample["cards"][0]["card_id"], "CardAnchor")
+        self.assertEqual(sample["cards"][0]["target_id"], sample["targets"][0]["target_id"])
+        self.assertEqual(sample["cards"][0]["offset_rule"]["mode"], "right_top")
+        self.assertEqual(sample["cards"][0]["offset_rule"]["offset_space"], "world")
+        serialized = json.dumps(sample)
+        self.assertNotIn("bbox", serialized)
+        self.assertNotIn("detection", serialized)
+
+    def test_proxy_targets_live_websocket_consumer_is_wired(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("const PROXY_TARGETS_WS_ENABLED := true", source)
+        self.assertIn('const PROXY_TARGETS_WS_URL := "ws://127.0.0.1:8766/proxy_targets"', source)
+        self.assertIn('const PROXY_TARGETS_STATUS_RES := "user://proxy_targets_live_status.json"', source)
+        self.assertIn("var _proxy_targets_ws := WebSocketPeer.new()", source)
+        self.assertIn("var _proxy_targets_live_messages := 0", source)
+        self.assertIn("var _proxy_targets_ws_subscribed := false", source)
+        self.assertIn("var _proxy_targets_ws_packets_seen := 0", source)
+        self.assertIn("var _proxy_targets_parsed_messages := 0", source)
+        self.assertIn("var _proxy_targets_last_sequence := -1", source)
+        self.assertIn("var _proxy_targets_last_position := Vector3.ZERO", source)
+        self.assertIn("var _proxy_targets_last_packet_bytes := 0", source)
+        self.assertIn('var _proxy_targets_last_packet_preview := "-"', source)
+        self.assertIn('var _proxy_targets_last_message_type := "-"', source)
+        self.assertIn('var _proxy_targets_last_error := "-"', source)
+        self.assertIn("var _proxy_targets_status_write_elapsed := 0.0", source)
+        self.assertIn("func _connect_proxy_targets_ws() -> void:", source)
+        self.assertIn("func _poll_proxy_targets_ws(delta: float) -> void:", source)
+        self.assertIn("func _send_proxy_targets_subscribe() -> void:", source)
+        self.assertIn("func _apply_proxy_targets_live_payload(payload: String) -> void:", source)
+        self.assertIn("func _record_proxy_targets_diagnostics(message: Dictionary) -> void:", source)
+        self.assertIn("func _write_proxy_targets_status_file(delta: float) -> void:", source)
+        self.assertIn("func _format_proxy_targets_status_line() -> String:", source)
+        self.assertIn("_connect_proxy_targets_ws()", source)
+        self.assertIn("_poll_proxy_targets_ws(delta)", source)
+        self.assertIn("_send_proxy_targets_subscribe()", source)
+        self.assertIn("_proxy_targets_ws_url()", source)
+        self.assertIn('OS.get_environment("PROXY_TARGETS_WS_URL")', source)
+        self.assertIn("connect_to_url(_proxy_targets_ws_url())", source)
+        self.assertIn("_proxy_targets_ws_packets_seen += 1", source)
+        self.assertIn("_proxy_targets_last_packet_bytes = packet.size()", source)
+        self.assertIn("_proxy_targets_last_packet_preview = _sanitize_proxy_targets_status_text(payload)", source)
+        self.assertIn("_record_proxy_targets_diagnostics(parsed)", source)
+        self.assertIn("_write_proxy_targets_status_file(delta)", source)
+        self.assertIn("FileAccess.open(PROXY_TARGETS_STATUS_RES, FileAccess.WRITE)", source)
+        self.assertIn('"anchor_mode": _anchor_mode', source)
+        self.assertIn('"attachments": _card_attachments.size()', source)
+        self.assertIn('"card_target_id": _proxy_targets_card_target_id()', source)
+        self.assertIn("func _proxy_targets_card_target_id() -> String:", source)
+        self.assertIn('"proxy_target_count": _proxy_targets_proxy_count()', source)
+        self.assertIn('"proxy_target_ids": _proxy_targets_proxy_ids()', source)
+        self.assertIn('"last_proxy_position": _format_vec3(_proxy_targets_last_position)', source)
+        self.assertIn('"card_attach_target_id": _proxy_targets_card_target_id()', source)
+        self.assertIn('"card_resolved_position": _proxy_targets_card_resolved_position()', source)
+        self.assertIn('"card_node_position": _proxy_targets_card_node_position()', source)
+        self.assertIn('"card_apply_count": _proxy_targets_card_apply_count', source)
+        self.assertIn("var _proxy_targets_card_apply_count := 0", source)
+        self.assertIn("func _proxy_targets_proxy_count() -> int:", source)
+        self.assertIn("func _proxy_targets_proxy_ids() -> Array:", source)
+        self.assertIn("func _proxy_targets_card_resolved_position() -> String:", source)
+        self.assertIn("func _proxy_targets_card_node_position() -> String:", source)
+        self.assertIn("_proxy_targets_card_apply_count += 1", source)
+        self.assertIn('"packet_preview": _proxy_targets_last_packet_preview', source)
+        self.assertLess(source.index("_record_proxy_targets_diagnostics(parsed)"), source.index("_proxy_targets_card_adapter.apply_proxy_targets_message(parsed)"))
+        self.assertIn("ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s err=%s", source)
+        self.assertIn('_last_command = "proxy_live"', source)
+
+    def test_fake_proxy_targets_publisher_exists_and_uses_stdlib_websocket(self):
+        self.assertTrue(FAKE_PROXY_TARGETS_PUBLISHER.exists())
+        source = FAKE_PROXY_TARGETS_PUBLISHER.read_text(encoding="utf-8")
+
+        self.assertIn("def build_proxy_targets_message(", source)
+        self.assertIn("def encode_websocket_text_frame(", source)
+        self.assertIn("def serve(", source)
+        self.assertIn("sequence: int = 0", source)
+        self.assertIn("mode: str = \"moving\"", source)
+        self.assertIn('"sequence": sequence', source)
+        self.assertIn("sent seq=", source)
+        self.assertIn('choices=["moving", "static"]', source)
+        self.assertIn('"type": "proxy_targets"', source)
+        self.assertIn('"schema_version": 1', source)
+        self.assertIn('"card_id": card_id', source)
+        self.assertIn('"target_id": target_id', source)
+        self.assertNotIn("import websockets", source)
+        self.assertNotIn("bbox", source)
+        self.assertNotIn("detection", source)
 
     def test_moving_card_reports_xr_pose_for_tracking_diagnosis(self):
         source = SCRIPT.read_text(encoding="utf-8")

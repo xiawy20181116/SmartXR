@@ -1,0 +1,32 @@
+{
+  "type": "proxy_targets",
+  "schema_version": 1,
+  "sequence": 1,
+  "targets": [
+    {
+      "target_id": "vst-person-7",
+      "source": "vst",
+      "state": "tracked",
+      "confidence": 0.94,
+      "timestamp_ms": 1780898400000,
+      "transform": {
+        "position": [0.18, -0.02, -1.35],
+        "rotation_xyzw": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.0, 1.0, 1.0]
+      }
+    }
+  ],
+  "cards": [
+    {
+      "card_id": "CardAnchor",
+      "target_id": "vst-person-7",
+      "offset_rule": {
+        "mode": "right_top",
+        "offset_space": "world",
+        "right_m": 0.35,
+        "up_m": 0.25,
+        "fallback": "hold_last_pose"
+      }
+    }
+  ]
+}
