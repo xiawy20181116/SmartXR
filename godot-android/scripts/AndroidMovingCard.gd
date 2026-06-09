@@ -44,6 +44,11 @@ const PROXY_TARGETS_SAMPLE_RES := "res://fixtures/proxy_targets_sample.json"
 const PROXY_TARGETS_WS_ENABLED := true
 const PROXY_TARGETS_WS_URL := "ws://127.0.0.1:8766/proxy_targets"
 const PROXY_TARGETS_STATUS_RES := "user://proxy_targets_live_status.json"
+const PASSTHROUGH_OVERLAY_ENV := "SMARTXR_USE_PASSTHROUGH_OVERLAY"
+const PASSTHROUGH_OVERLAY_STATUS_RES := "user://passthrough_overlay_status.json"
+const PASSTHROUGH_OVERLAY_VIEWPORT_SIZE := Vector2i(512, 256)
+const PASSTHROUGH_OVERLAY_QUAD_SIZE_M := Vector2(0.42, 0.20)
+const PASSTHROUGH_OVERLAY_DEPTH_M := 1.5
 const ProxyTargetsConsumerScript := preload("res://scripts/proxy_targets_consumer.gd")
 const ProxyTargetsCardAdapterScript := preload("res://scripts/proxy_targets_card_adapter.gd")
 
@@ -295,6 +300,12 @@ var _proxy_targets_last_message_type := "-"
 var _proxy_targets_last_error := "-"
 var _proxy_targets_status_write_elapsed := 0.0
 var _proxy_targets_card_apply_count := 0
+var _passthrough_overlay_enabled := false
+var _passthrough_overlay_blend_ok := false
+var _passthrough_overlay_requested_blend_mode := "opaque"
+var _passthrough_overlay_viewport: SubViewport = null
+var _passthrough_overlay_layer: OpenXRCompositionLayerQuad = null
+var _passthrough_overlay_status_write_elapsed := 0.0
 
 # M1: VST capture state. _vst_capture stays null on vanilla SDK and every helper
 # below short-circuits in that case, so all existing behaviour is preserved.
@@ -315,8 +326,10 @@ var _vst_uses_eye_to_head_anchor := false
 
 
 func _ready() -> void:
+	_passthrough_overlay_enabled = _use_passthrough_overlay()
 	_try_init_xr()
 	_setup_camera()
+	_build_passthrough_overlay_layer()
 	_build_vst_raw_debug_panel()
 	_setup_light()
 	_build_card_anchor()
@@ -349,11 +362,23 @@ func _try_init_xr() -> void:
 		return
 	_xr_active = true
 	get_viewport().use_xr = true
-	get_viewport().transparent_bg = false
-	xr.environment_blend_mode = XRInterface.XR_ENV_BLEND_MODE_OPAQUE
+	if _passthrough_overlay_enabled:
+		get_viewport().transparent_bg = true
+		_passthrough_overlay_requested_blend_mode = "alpha_blend"
+		if xr.has_method("set_environment_blend_mode"):
+			_passthrough_overlay_blend_ok = bool(xr.call("set_environment_blend_mode", XRInterface.XR_ENV_BLEND_MODE_ALPHA_BLEND))
+		else:
+			xr.environment_blend_mode = XRInterface.XR_ENV_BLEND_MODE_ALPHA_BLEND
+			_passthrough_overlay_blend_ok = true
+	else:
+		get_viewport().transparent_bg = false
+		xr.environment_blend_mode = XRInterface.XR_ENV_BLEND_MODE_OPAQUE
+		_passthrough_overlay_requested_blend_mode = "opaque"
+		_passthrough_overlay_blend_ok = true
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	_xr_init_error = ""
-	print("XR init: active use_xr=%s transparent=%s blend=opaque" % [str(get_viewport().use_xr), str(get_viewport().transparent_bg)])
+	var blend_label := "alpha_blend" if _passthrough_overlay_enabled else "opaque"
+	print("XR init: active use_xr=%s transparent=%s blend=%s" % [str(get_viewport().use_xr), str(get_viewport().transparent_bg), blend_label])
 
 
 func _setup_camera() -> void:
@@ -378,6 +403,60 @@ func _setup_camera() -> void:
 	camera.make_current()
 	_xr_origin = null
 	_camera = camera
+
+
+func _use_passthrough_overlay() -> bool:
+	var value := OS.get_environment(PASSTHROUGH_OVERLAY_ENV).strip_edges().to_lower()
+	return ["1", "true", "yes", "on"].has(value)
+
+
+func _build_passthrough_overlay_layer() -> void:
+	if not _passthrough_overlay_enabled:
+		return
+	if not _xr_active:
+		return
+	_passthrough_overlay_viewport = SubViewport.new()
+	_passthrough_overlay_viewport.name = "PassthroughOverlayViewport"
+	_passthrough_overlay_viewport.size = PASSTHROUGH_OVERLAY_VIEWPORT_SIZE
+	_passthrough_overlay_viewport.transparent_bg = true
+	_passthrough_overlay_viewport.disable_3d = true
+	_passthrough_overlay_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	add_child(_passthrough_overlay_viewport)
+	_passthrough_overlay_viewport.add_child(_make_passthrough_overlay_ui())
+
+	_passthrough_overlay_layer = OpenXRCompositionLayerQuad.new()
+	_passthrough_overlay_layer.name = "AntmanPassthroughOverlayLayer"
+	_passthrough_overlay_layer.layer_viewport = _passthrough_overlay_viewport
+	_passthrough_overlay_layer.quad_size = PASSTHROUGH_OVERLAY_QUAD_SIZE_M
+	# Antman_Smart gotcha: default false makes transparent viewport areas compose as black.
+	_passthrough_overlay_layer.alpha_blend = true
+	_passthrough_overlay_layer.visible = true
+	add_child(_passthrough_overlay_layer)
+	_update_passthrough_overlay_layer()
+
+
+func _make_passthrough_overlay_ui() -> Control:
+	var root := Control.new()
+	root.name = "PassthroughOverlayUI"
+	root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	root.size = Vector2(PASSTHROUGH_OVERLAY_VIEWPORT_SIZE)
+
+	var panel := ColorRect.new()
+	panel.name = "PassthroughOverlayPanel"
+	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	panel.color = Color(0.05, 1.0, 0.35, 0.58)
+	root.add_child(panel)
+
+	var label := Label.new()
+	label.name = "PassthroughOverlayLabel"
+	label.text = "PASSTHROUGH OVERLAY"
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	label.add_theme_font_size_override("font_size", 34)
+	label.add_theme_color_override("font_color", Color(0.0, 0.05, 0.02, 1.0))
+	root.add_child(label)
+	return root
 
 
 func _setup_light() -> void:
@@ -744,6 +823,44 @@ func _write_proxy_targets_status_file(delta: float) -> void:
 	status_file.close()
 
 
+func _write_passthrough_overlay_status_file(delta: float) -> void:
+	_passthrough_overlay_status_write_elapsed += delta
+	if _passthrough_overlay_status_write_elapsed < 0.25:
+		return
+	_passthrough_overlay_status_write_elapsed = 0.0
+	var status := {
+		"overlay_enabled": _passthrough_overlay_enabled,
+		"xr_interface_found": _xr_interface_found,
+		"xr_initialize_ok": _xr_initialize_ok,
+		"xr_active": _xr_active,
+		"viewport_transparent_bg": get_viewport().transparent_bg,
+		"requested_blend_mode": _passthrough_overlay_requested_blend_mode,
+		"blend_request_ok": _passthrough_overlay_blend_ok,
+		"layer_created": _passthrough_overlay_layer != null,
+		"layer_visible": _passthrough_overlay_layer.visible if _passthrough_overlay_layer != null else false,
+		"layer_alpha_blend": _passthrough_overlay_layer_alpha_blend(),
+		"layer_position": _passthrough_overlay_layer_position(),
+		"status": "ready" if _passthrough_overlay_enabled and _passthrough_overlay_layer != null else "disabled",
+	}
+	var status_file := FileAccess.open(PASSTHROUGH_OVERLAY_STATUS_RES, FileAccess.WRITE)
+	if status_file == null:
+		return
+	status_file.store_string(JSON.stringify(status))
+	status_file.close()
+
+
+func _passthrough_overlay_layer_alpha_blend() -> bool:
+	if _passthrough_overlay_layer == null:
+		return false
+	return bool(_passthrough_overlay_layer.alpha_blend)
+
+
+func _passthrough_overlay_layer_position() -> String:
+	if _passthrough_overlay_layer == null:
+		return "n/a"
+	return _format_vec3(_passthrough_overlay_layer.global_transform.origin)
+
+
 func _proxy_targets_card_target_id() -> String:
 	var attachment = _card_attachments.get(CARD_ANCHOR_NAME)
 	if typeof(attachment) != TYPE_DICTIONARY:
@@ -805,6 +922,16 @@ func _update_debug_target_marker(delta: float) -> void:
 	_debug_target_marker.rotation_degrees = Vector3(0.0, _debug_target_elapsed_seconds * 35.0, 0.0)
 
 
+func _update_passthrough_overlay_layer() -> void:
+	if not _passthrough_overlay_enabled:
+		return
+	if _passthrough_overlay_layer == null or _camera == null:
+		return
+	var camera_transform := _camera.global_transform
+	var world_position: Vector3 = camera_transform * Vector3(0.0, 0.0, -PASSTHROUGH_OVERLAY_DEPTH_M)
+	_passthrough_overlay_layer.global_transform = Transform3D(camera_transform.basis, world_position)
+
+
 func _connect_ws() -> void:
 	_ws.close()
 	var result := _ws.connect_to_url(WS_URL)
@@ -820,6 +947,7 @@ func _process(delta: float) -> void:
 	_poll_vst_bbox()
 	_advance_vst_target_state(delta)
 	_update_debug_target_marker(delta)
+	_update_passthrough_overlay_layer()
 	if not _paused and _anchor_mode == "manual":
 		_anchor_yaw_deg -= _speed_deg_per_second * delta
 		if _anchor_yaw_deg < CARD_END_YAW_DEG:
@@ -832,6 +960,7 @@ func _process(delta: float) -> void:
 		_apply_3dof_anchor_transform()
 	_update_status_label()
 	_write_proxy_targets_status_file(delta)
+	_write_passthrough_overlay_status_file(delta)
 
 
 func _build_vst_target_proxy() -> void:

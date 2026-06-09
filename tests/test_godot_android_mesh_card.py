@@ -35,12 +35,28 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
     def test_moving_card_uses_regular_mesh_card_anchor(self):
         source = SCRIPT.read_text(encoding="utf-8")
 
-        self.assertNotIn("OpenXRCompositionLayerQuad", source)
         self.assertIn('CARD_ANCHOR_NAME := "CardAnchor"', source)
         self.assertIn("MeshInstance3D.new()", source)
         self.assertIn("QuadMesh.new()", source)
         self.assertIn("StandardMaterial3D.new()", source)
         self.assertIn("albedo_texture = _card_viewport.get_texture()", source)
+
+    def test_antman_passthrough_overlay_layer_path_is_gated_by_env(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('const PASSTHROUGH_OVERLAY_ENV := "SMARTXR_USE_PASSTHROUGH_OVERLAY"', source)
+        self.assertIn('const PASSTHROUGH_OVERLAY_STATUS_RES := "user://passthrough_overlay_status.json"', source)
+        self.assertIn("var _passthrough_overlay_enabled := false", source)
+        self.assertIn("func _use_passthrough_overlay() -> bool:", source)
+        self.assertIn("OS.get_environment(PASSTHROUGH_OVERLAY_ENV)", source)
+        self.assertIn("func _build_passthrough_overlay_layer() -> void:", source)
+        self.assertIn("OpenXRCompositionLayerQuad.new()", source)
+        self.assertIn("_passthrough_overlay_layer.layer_viewport = _passthrough_overlay_viewport", source)
+        self.assertIn("_passthrough_overlay_layer.alpha_blend = true", source)
+        self.assertIn("PASSTHROUGH OVERLAY", source)
+        self.assertIn("func _write_passthrough_overlay_status_file(delta: float) -> void:", source)
+        self.assertIn('"overlay_enabled": _passthrough_overlay_enabled', source)
+        self.assertIn('"layer_alpha_blend": _passthrough_overlay_layer_alpha_blend()', source)
 
     def test_validate_project_wrapper_exists(self):
         source = VALIDATOR.read_text(encoding="utf-8")
@@ -551,13 +567,19 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('package/name="demo_run"', export_presets)
         self.assertIn(">demo_run<", android_label)
 
-    def test_xr_visibility_diagnostic_uses_opaque_composition(self):
+    def test_xr_visibility_diagnostic_defaults_to_opaque_but_supports_antman_overlay(self):
         source = SCRIPT.read_text(encoding="utf-8")
         project = (GODOT_ANDROID / "project.godot").read_text(encoding="utf-8")
 
         self.assertIn("get_viewport().transparent_bg = false", source)
         self.assertIn("XRInterface.XR_ENV_BLEND_MODE_OPAQUE", source)
-        self.assertIn("blend=opaque", source)
+        self.assertIn('_passthrough_overlay_requested_blend_mode = "opaque"', source)
+        self.assertIn('var blend_label := "alpha_blend" if _passthrough_overlay_enabled else "opaque"', source)
+        self.assertIn("get_viewport().transparent_bg = true", source)
+        self.assertIn("XRInterface.XR_ENV_BLEND_MODE_ALPHA_BLEND", source)
+        self.assertIn("set_environment_blend_mode", source)
+        self.assertIn('_passthrough_overlay_requested_blend_mode = "alpha_blend"', source)
+        self.assertIn("blend=%s", source)
         self.assertIn("environment/defaults/default_clear_color=Color(0.02, 0.025, 0.03, 1)", project)
 
     def test_android_adaptive_icon_references_existing_mipmap_resources(self):
