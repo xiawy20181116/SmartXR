@@ -1,0 +1,2 @@
+{"frame_id":1,"timestamp_ms":1780899000000,"image_width":872,"image_height":652,"people":[]}
+{"frame_id":2,"timestamp_ms":1780899000016,"image_width":872,"image_height":652,"people":[{"track_id":7,"bbox":[100,120,260,340],"confidence":0.91,"tracking_status":"tracked"}]}
