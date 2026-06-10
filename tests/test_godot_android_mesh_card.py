@@ -355,6 +355,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('var _proxy_targets_last_packet_preview := "-"', source)
         self.assertIn('var _proxy_targets_last_message_type := "-"', source)
         self.assertIn('var _proxy_targets_last_error := "-"', source)
+        self.assertIn("var _proxy_targets_last_source_coordinate := {}", source)
         self.assertIn("var _proxy_targets_status_write_elapsed := 0.0", source)
         self.assertIn("func _connect_proxy_targets_ws() -> void:", source)
         self.assertIn("func _poll_proxy_targets_ws(delta: float) -> void:", source)
@@ -393,8 +394,11 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("func _proxy_targets_card_node_position() -> String:", source)
         self.assertIn("_proxy_targets_card_apply_count += 1", source)
         self.assertIn('"packet_preview": _proxy_targets_last_packet_preview', source)
+        self.assertIn('"source_coordinate": _proxy_targets_last_source_coordinate', source)
+        self.assertIn('"source_coordinate_summary": _proxy_targets_source_coordinate_summary()', source)
+        self.assertIn("func _proxy_targets_source_coordinate_summary() -> String:", source)
         self.assertLess(source.index("_record_proxy_targets_diagnostics(parsed)"), source.index("_proxy_targets_card_adapter.apply_proxy_targets_message(parsed)"))
-        self.assertIn("ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s err=%s", source)
+        self.assertIn("ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s src=%s err=%s", source)
         self.assertIn('_last_command = "proxy_live"', source)
 
     def test_fake_proxy_targets_publisher_exists_and_uses_stdlib_websocket(self):
