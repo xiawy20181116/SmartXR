@@ -294,6 +294,10 @@ var _proxy_targets_parsed_messages := 0
 var _proxy_targets_live_messages := 0
 var _proxy_targets_last_sequence := -1
 var _proxy_targets_last_position := Vector3.ZERO
+var _proxy_targets_last_coordinate_space := "-"
+var _proxy_targets_last_world_from_head_applied := false
+var _proxy_targets_last_world_position := Vector3.ZERO
+var _proxy_targets_last_local_position := Vector3.ZERO
 var _proxy_targets_last_packet_bytes := 0
 var _proxy_targets_last_packet_preview := "-"
 var _proxy_targets_last_message_type := "-"
@@ -670,6 +674,8 @@ func _build_proxy_targets_validation() -> void:
 	_proxy_targets_consumer = ProxyTargetsConsumerScript.new()
 	_proxy_targets_consumer.name = "ProxyTargetsConsumer"
 	add_child(_proxy_targets_consumer)
+	if _camera != null and _proxy_targets_consumer.has_method("set_head_reference"):
+		_proxy_targets_consumer.set_head_reference(_camera)
 	_proxy_targets_card_adapter = ProxyTargetsCardAdapterScript.new()
 	_proxy_targets_card_adapter.name = "ProxyTargetsCardAdapter"
 	add_child(_proxy_targets_card_adapter)
@@ -757,6 +763,7 @@ func _apply_proxy_targets_live_payload(payload: String) -> void:
 	_record_proxy_targets_diagnostics(parsed)
 	var applied: bool = bool(_proxy_targets_card_adapter.apply_proxy_targets_message(parsed))
 	if applied:
+		_record_proxy_targets_apply_diagnostics()
 		_proxy_targets_live_messages += 1
 		_proxy_targets_last_error = "-"
 		_last_command = "proxy_live"
@@ -783,6 +790,26 @@ func _record_proxy_targets_diagnostics(message: Dictionary) -> void:
 	_proxy_targets_last_position = Vector3(float(position[0]), float(position[1]), float(position[2]))
 
 
+func _record_proxy_targets_apply_diagnostics() -> void:
+	if _proxy_targets_consumer == null:
+		return
+	if not _proxy_targets_consumer.has_method("get_last_applied_target_info"):
+		return
+	var info = _proxy_targets_consumer.get_last_applied_target_info()
+	if typeof(info) != TYPE_DICTIONARY:
+		return
+	_proxy_targets_last_coordinate_space = str(info.get("coordinate_space", _proxy_targets_last_coordinate_space))
+	_proxy_targets_last_world_from_head_applied = bool(info.get("world_from_head_applied", false))
+	_proxy_targets_last_local_position = _vector3_from_status_array(info.get("local_position", []), _proxy_targets_last_local_position)
+	_proxy_targets_last_world_position = _vector3_from_status_array(info.get("world_position", []), _proxy_targets_last_world_position)
+
+
+func _vector3_from_status_array(value, fallback: Vector3) -> Vector3:
+	if typeof(value) != TYPE_ARRAY or value.size() < 3:
+		return fallback
+	return Vector3(float(value[0]), float(value[1]), float(value[2]))
+
+
 func _sanitize_proxy_targets_status_text(value: String) -> String:
 	return value.replace("\r", "\\r").replace("\n", "\\n").substr(0, 160)
 
@@ -802,6 +829,10 @@ func _write_proxy_targets_status_file(delta: float) -> void:
 		"proxy_target_count": _proxy_targets_proxy_count(),
 		"proxy_target_ids": _proxy_targets_proxy_ids(),
 		"last_proxy_position": _format_vec3(_proxy_targets_last_position),
+		"target_coordinate_space": _proxy_targets_last_coordinate_space,
+		"world_from_head_applied": _proxy_targets_last_world_from_head_applied,
+		"proxy_local_position": _format_vec3(_proxy_targets_last_local_position),
+		"proxy_world_position": _format_vec3(_proxy_targets_last_world_position),
 		"card_attach_target_id": _proxy_targets_card_target_id(),
 		"card_resolved_position": _proxy_targets_card_resolved_position(),
 		"card_node_position": _proxy_targets_card_node_position(),

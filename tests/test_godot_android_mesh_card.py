@@ -433,6 +433,32 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s err=%s", source)
         self.assertIn('_last_command = "proxy_live"', source)
 
+    def test_proxy_targets_consumer_converts_vst_head_space_to_world(self):
+        consumer = PROXY_TARGETS_CONSUMER.read_text(encoding="utf-8")
+
+        self.assertIn("var head_reference: Node3D = null", consumer)
+        self.assertIn("func set_head_reference(reference: Node3D) -> void:", consumer)
+        self.assertIn('source == "vst"', consumer)
+        self.assertIn('coordinate_space = "head"', consumer)
+        self.assertIn("_head_transform_to_world(parsed_transform)", consumer)
+        self.assertIn("world_from_head_applied", consumer)
+        self.assertIn('"local_position": _vec3_to_array(local_position)', consumer)
+        self.assertIn('"world_position": _vec3_to_array(parsed_transform.origin)', consumer)
+
+    def test_proxy_targets_status_reports_head_to_world_diagnostics(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("_proxy_targets_consumer.set_head_reference(_camera)", source)
+        self.assertIn("var _proxy_targets_last_coordinate_space := \"-\"", source)
+        self.assertIn("var _proxy_targets_last_world_from_head_applied := false", source)
+        self.assertIn("var _proxy_targets_last_world_position := Vector3.ZERO", source)
+        self.assertIn("var _proxy_targets_last_local_position := Vector3.ZERO", source)
+        self.assertIn("func _record_proxy_targets_apply_diagnostics() -> void:", source)
+        self.assertIn('"target_coordinate_space": _proxy_targets_last_coordinate_space', source)
+        self.assertIn('"world_from_head_applied": _proxy_targets_last_world_from_head_applied', source)
+        self.assertIn('"proxy_local_position": _format_vec3(_proxy_targets_last_local_position)', source)
+        self.assertIn('"proxy_world_position": _format_vec3(_proxy_targets_last_world_position)', source)
+
     def test_fake_proxy_targets_publisher_exists_and_uses_stdlib_websocket(self):
         self.assertTrue(FAKE_PROXY_TARGETS_PUBLISHER.exists())
         source = FAKE_PROXY_TARGETS_PUBLISHER.read_text(encoding="utf-8")

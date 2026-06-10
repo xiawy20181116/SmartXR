@@ -3,8 +3,10 @@ class_name ProxyTargetsConsumer
 
 
 var proxy_root: Node3D = null
+var head_reference: Node3D = null
 var _proxies := {}
 var _card_bindings := {}
+var _last_applied_target_info := {}
 
 
 func _ready() -> void:
@@ -51,6 +53,14 @@ func get_card_bindings() -> Dictionary:
 	return _card_bindings.duplicate(true)
 
 
+func set_head_reference(reference: Node3D) -> void:
+	head_reference = reference
+
+
+func get_last_applied_target_info() -> Dictionary:
+	return _last_applied_target_info.duplicate(true)
+
+
 func _apply_target(target: Dictionary) -> void:
 	var target_id := str(target.get("target_id", ""))
 	if target_id.is_empty():
@@ -65,7 +75,31 @@ func _apply_target(target: Dictionary) -> void:
 
 	var transform_data: Variant = target.get("transform", {})
 	if typeof(transform_data) == TYPE_DICTIONARY:
-		proxy.global_transform = _parse_transform(transform_data, proxy.global_transform)
+		var source := str(target.get("source", "")).strip_edges().to_lower()
+		var coordinate_space := str(target.get("coordinate_space", "")).strip_edges().to_lower()
+		if coordinate_space.is_empty() and source == "vst":
+			coordinate_space = "head"
+		if coordinate_space.is_empty():
+			coordinate_space = "world"
+		var parsed_transform := _parse_transform(transform_data, proxy.global_transform)
+		var local_position := parsed_transform.origin
+		var world_from_head_applied := false
+		if _is_head_coordinate_space(coordinate_space) and head_reference != null:
+			parsed_transform = _head_transform_to_world(parsed_transform)
+			world_from_head_applied = true
+		proxy.global_transform = parsed_transform
+		proxy.set_meta("proxy_coordinate_space", coordinate_space)
+		proxy.set_meta("proxy_world_from_head_applied", world_from_head_applied)
+		proxy.set_meta("proxy_local_position", local_position)
+		proxy.set_meta("proxy_world_position", parsed_transform.origin)
+		_last_applied_target_info = {
+			"target_id": target_id,
+			"source": source,
+			"coordinate_space": coordinate_space,
+			"world_from_head_applied": world_from_head_applied,
+			"local_position": _vec3_to_array(local_position),
+			"world_position": _vec3_to_array(parsed_transform.origin),
+		}
 	proxy.visible = str(target.get("state", "tracked")) != "lost"
 	proxy.set_meta("proxy_target_id", target_id)
 	proxy.set_meta("proxy_source", str(target.get("source", "")))
@@ -94,3 +128,17 @@ func _parse_quaternion(value, fallback: Quaternion) -> Quaternion:
 	if typeof(value) != TYPE_ARRAY or value.size() < 4:
 		return fallback
 	return Quaternion(float(value[0]), float(value[1]), float(value[2]), float(value[3])).normalized()
+
+
+func _is_head_coordinate_space(coordinate_space: String) -> bool:
+	return ["head", "camera", "xr_camera"].has(coordinate_space.strip_edges().to_lower())
+
+
+func _head_transform_to_world(head_transform: Transform3D) -> Transform3D:
+	if head_reference == null:
+		return head_transform
+	return head_reference.global_transform * head_transform
+
+
+func _vec3_to_array(value: Vector3) -> Array:
+	return [value.x, value.y, value.z]
