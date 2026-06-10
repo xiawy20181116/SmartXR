@@ -2,6 +2,7 @@ param(
     [switch]$Editor,
     [switch]$ExportDebug,
     [switch]$ValidateProxyTargets,
+    [switch]$UseAntmanPassthroughOverlay,
     [string]$ProxyTargetsWsUrl = "ws://127.0.0.1:8766/proxy_targets",
     [double]$ProxyTargetsTimeoutSeconds = 15.0,
     [string]$GodotExe = "E:\xia\Godot_v4.6.2-stable_win64.exe\Godot_v4.6.2-stable_win64.exe"
@@ -15,6 +16,7 @@ $ExportPath = Join-Path $ProjectDir "builds\windows\SmartXR-PCMR.exe"
 $GxrExtensionSwitch = Join-Path $PSScriptRoot "set_gxr_extension.ps1"
 $StatusValidator = Join-Path $RepoRoot "tools\validate_proxy_targets_live_status.py"
 $StatusFile = Join-Path $env:APPDATA "Godot\app_userdata\demo_run\proxy_targets_live_status.json"
+$PassthroughOverlayStatusFile = Join-Path $env:APPDATA "Godot\app_userdata\demo_run\passthrough_overlay_status.json"
 $WorkDir = Join-Path $RepoRoot ".tmp\windows_pcmr_proxy_targets"
 $GodotLog = Join-Path $WorkDir "godot_pcmr.log"
 $GodotErr = Join-Path $WorkDir "godot_pcmr.err.log"
@@ -69,14 +71,25 @@ if ($ValidateProxyTargets) {
     Write-Host "Timeout: $ProxyTargetsTimeoutSeconds seconds"
     Write-Host "Publisher: external/already running; this script does not start one."
 }
+if ($UseAntmanPassthroughOverlay) {
+    Write-Host "SmartXR-PCMR Antman passthrough overlay"
+    Write-Host "Passthrough overlay status file: $PassthroughOverlayStatusFile"
+}
 
 & $GxrExtensionSwitch -Mode disable -ProjectDir $ProjectDir
 $ExitCode = 0
 $OldProxyTargetsWsUrl = $env:PROXY_TARGETS_WS_URL
+$OldPassthroughOverlay = $env:SMARTXR_USE_PASSTHROUGH_OVERLAY
 $GodotProcess = $null
 
 try {
     $env:PROXY_TARGETS_WS_URL = $ProxyTargetsWsUrl
+    if ($UseAntmanPassthroughOverlay) {
+        $env:SMARTXR_USE_PASSTHROUGH_OVERLAY = "1"
+        Remove-Item -LiteralPath $PassthroughOverlayStatusFile -Force -ErrorAction SilentlyContinue
+    } else {
+        Remove-Item "Env:\SMARTXR_USE_PASSTHROUGH_OVERLAY" -ErrorAction SilentlyContinue
+    }
 
     if ($ExportDebug) {
         $BuildDir = Split-Path -Parent $ExportPath
@@ -110,14 +123,20 @@ try {
 } finally {
     Stop-ChildProcess -Process $GodotProcess
     Restore-EnvVar -Name "PROXY_TARGETS_WS_URL" -Value $OldProxyTargetsWsUrl
+    Restore-EnvVar -Name "SMARTXR_USE_PASSTHROUGH_OVERLAY" -Value $OldPassthroughOverlay
     & $GxrExtensionSwitch -Mode enable -ProjectDir $ProjectDir
 
-    if ($ValidateProxyTargets) {
+    if ($ValidateProxyTargets -or $UseAntmanPassthroughOverlay) {
         Write-Host ""
         Write-Host "Logs:"
         Write-Host "  Godot stdout: $GodotLog"
         Write-Host "  Godot stderr: $GodotErr"
-        Write-Host "  Status JSON:  $StatusFile"
+        if ($ValidateProxyTargets) {
+            Write-Host "  Status JSON:  $StatusFile"
+        }
+        if ($UseAntmanPassthroughOverlay) {
+            Write-Host "  Passthrough overlay JSON: $PassthroughOverlayStatusFile"
+        }
     }
 }
 
