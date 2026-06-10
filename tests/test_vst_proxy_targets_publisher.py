@@ -37,6 +37,75 @@ class VSTProxyTargetsPublisherTests(unittest.TestCase):
         serialized = json.dumps(message)
         self.assertNotIn("bbox", serialized)
         self.assertNotIn("detection", serialized)
+        self.assertEqual(message["targets"][0]["source_coordinate"]["coordinate_space"], "vst_camera_right")
+        self.assertEqual(message["targets"][0]["source_coordinate"]["publisher_convention"], "godot_head")
+        self.assertEqual(message["targets"][0]["source_coordinate"]["anchor"], "target_center")
+
+    def test_vst_bbox_projection_uses_fov_and_head_coordinate_convention(self):
+        publisher = load_module(PUBLISHER, "vst_proxy_targets_publisher")
+
+        message = publisher.normalize_source_payload(
+            {
+                "source": "vst",
+                "timestamp_ms": 1780911169157,
+                "image": {
+                    "w": 872,
+                    "h": 652,
+                    "camera": {"horizontal_fov_deg": 70.0, "vertical_fov_deg": 43.0},
+                },
+                "detections": [
+                    {
+                        "id": "person-right-low",
+                        "confidence": 0.9,
+                        "depth_m": 2.0,
+                        "bbox": {"cx": 872.0, "cy": 652.0, "w": 100.0, "h": 200.0},
+                    }
+                ],
+            }
+        )
+
+        position = message["targets"][0]["transform"]["position"]
+        self.assertGreater(position[0], 0.0)
+        self.assertLess(position[1], 0.0)
+        self.assertLess(position[2], 0.0)
+        self.assertAlmostEqual(sum(component * component for component in position) ** 0.5, 2.0, places=6)
+        self.assertEqual(message["targets"][0]["source_coordinate"]["source_frame"]["horizontal_fov_deg"], 70.0)
+
+    def test_vst_bbox_projection_can_apply_right_eye_to_head_matrix(self):
+        publisher = load_module(PUBLISHER, "vst_proxy_targets_publisher")
+
+        message = publisher.normalize_source_payload(
+            {
+                "source": "vst",
+                "timestamp_ms": 1780911169157,
+                "image": {
+                    "w": 872,
+                    "h": 652,
+                    "camera": {
+                        "right_eye_to_head_matrix": [
+                            1.0, 0.0, 0.0, 0.03,
+                            0.0, -1.0, 0.0, 0.02,
+                            0.0, 0.0, -1.0, 0.0,
+                            0.0, 0.0, 0.0, 1.0,
+                        ]
+                    },
+                },
+                "detections": [
+                    {
+                        "id": "person-center",
+                        "confidence": 0.9,
+                        "depth_m": 1.5,
+                        "bbox": {"cx": 436.0, "cy": 326.0, "w": 100.0, "h": 200.0},
+                    }
+                ],
+            }
+        )
+
+        position = message["targets"][0]["transform"]["position"]
+        self.assertAlmostEqual(position[0], 0.03)
+        self.assertAlmostEqual(position[1], 0.02)
+        self.assertAlmostEqual(position[2], -1.5)
+        self.assertTrue(message["targets"][0]["source_coordinate"]["uses_right_eye_to_head"])
 
     def test_print_once_outputs_schema_valid_payload(self):
         completed = subprocess.run(

@@ -23,6 +23,10 @@ Required target fields:
 - `transform.rotation_xyzw`: quaternion `[x, y, z, w]`
 - `transform.scale`: `[x, y, z]`
 
+Optional target diagnostics:
+
+- `source_coordinate`: compact publisher-side calibration metadata for real-device alignment checks. For VST bbox sources this records `coordinate_space`, `publisher_convention`, `camera_axes`, `head_axes`, `anchor`, `depth_source`, `uses_right_eye_to_head`, `source_frame`, `camera_point_m`, and `head_position_m`. The `source_frame.anchor_depth` field is diagnostic depth in meters; it intentionally avoids raw field names that the canonical schema rejects.
+
 Required card fields:
 
 - `card_id`: card wrapper ID, such as `CardAnchor`
@@ -30,6 +34,14 @@ Required card fields:
 - `offset_rule`: optional object; if omitted, adapter defaults apply
 
 Godot consumer/adapter must not read bbox or detection fields. Raw VST/external fields such as `bbox`, `boxes`, `detection`, `detections`, `image`, or `depth_m` belong on the publisher side and must be converted before reaching `proxy_targets`.
+
+VST bbox publisher convention:
+
+- Raw VST camera axes are treated as `+X right`, `+Y down`, `+Z forward`.
+- The publisher projects bbox center through the configured camera FOV, defaulting to `70.0` horizontal and `43.0` vertical degrees.
+- The default conversion to Godot/head convention is `[x, -y, -z]`, so forward targets have negative Godot Z.
+- If a 4x4 `right_eye_to_head_matrix` is supplied under the source camera metadata, the publisher applies it instead of the default axis flip.
+- The anchor point is the target center at the source-provided depth or the configured default depth.
 
 Current gate:
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import socket
 import sys
 import time
@@ -19,6 +20,11 @@ from fake_proxy_targets_publisher import (  # noqa: E402
     encode_websocket_text_frame,
 )
 from capture_vst_target_sample_session import normalize_frame  # noqa: E402
+
+
+DEFAULT_HORIZONTAL_FOV_DEG = 70.0
+DEFAULT_VERTICAL_FOV_DEG = 43.0
+DEFAULT_COORDINATE_SPACE = "vst_camera_right"
 
 
 def _as_float(value: Any, fallback: float) -> float:
@@ -49,21 +55,127 @@ def _canonical_state(raw_state: Any) -> str:
     return "tracked"
 
 
-def _bbox_position(detection: dict[str, Any], root_image: dict[str, Any], default_depth_m: float) -> list[float]:
+def _clamped_fov_deg(value: Any, fallback: float) -> float:
+    return min(max(_as_float(value, fallback), 1.0), 179.0)
+
+
+def _fov_degrees(detection: dict[str, Any], root_image: dict[str, Any]) -> tuple[float, float]:
+    camera = detection.get("camera", root_image.get("camera", {}))
+    if not isinstance(camera, dict):
+        camera = {}
+    return (
+        _clamped_fov_deg(camera.get("horizontal_fov_deg"), DEFAULT_HORIZONTAL_FOV_DEG),
+        _clamped_fov_deg(camera.get("vertical_fov_deg"), DEFAULT_VERTICAL_FOV_DEG),
+    )
+
+
+def _right_eye_to_head_matrix(detection: dict[str, Any], root_image: dict[str, Any]) -> list[float] | None:
+    camera = detection.get("camera", root_image.get("camera", {}))
+    if not isinstance(camera, dict):
+        return None
+    value = camera.get("right_eye_to_head_matrix")
+    if not isinstance(value, list) or len(value) < 16:
+        return None
+    matrix: list[float] = []
+    for item in value[:16]:
+        if not isinstance(item, (int, float)) or isinstance(item, bool):
+            return None
+        matrix.append(float(item))
+    return matrix
+
+
+def _camera_coordinate_space(detection: dict[str, Any], root_image: dict[str, Any]) -> str:
+    camera = detection.get("camera", root_image.get("camera", {}))
+    if isinstance(camera, dict) and camera.get("coordinate_space"):
+        return str(camera["coordinate_space"])
+    return DEFAULT_COORDINATE_SPACE
+
+
+def _camera_point_from_bbox(
+    detection: dict[str, Any],
+    root_image: dict[str, Any],
+    default_depth_m: float,
+) -> tuple[list[float], dict[str, float]]:
     bbox = detection.get("bbox", {})
     image = detection.get("image", root_image)
     depth_m = _as_float(detection.get("depth_m"), default_depth_m)
     if not isinstance(bbox, dict) or not isinstance(image, dict):
-        return [0.0, 0.0, -depth_m]
+        return [0.0, 0.0, depth_m], {
+            "image_w": 1.0,
+            "image_h": 1.0,
+            "cx": 0.5,
+            "cy": 0.5,
+            "depth_m": depth_m,
+            "horizontal_fov_deg": DEFAULT_HORIZONTAL_FOV_DEG,
+            "vertical_fov_deg": DEFAULT_VERTICAL_FOV_DEG,
+        }
 
     image_w = max(_as_float(image.get("w"), 1.0), 1.0)
     image_h = max(_as_float(image.get("h"), 1.0), 1.0)
     cx = _as_float(bbox.get("cx"), image_w * 0.5)
     cy = _as_float(bbox.get("cy"), image_h * 0.5)
+    horizontal_fov_deg, vertical_fov_deg = _fov_degrees(detection, root_image)
+    fx = (image_w * 0.5) / math.tan(math.radians(horizontal_fov_deg) * 0.5)
+    fy = (image_h * 0.5) / math.tan(math.radians(vertical_fov_deg) * 0.5)
+    nx = (cx - image_w * 0.5) / fx
+    ny = (cy - image_h * 0.5) / fy
+    length = math.sqrt(nx * nx + ny * ny + 1.0)
+    point_vst = [nx / length * depth_m, ny / length * depth_m, 1.0 / length * depth_m]
+    return point_vst, {
+        "image_w": image_w,
+        "image_h": image_h,
+        "cx": cx,
+        "cy": cy,
+        "depth_m": depth_m,
+        "horizontal_fov_deg": horizontal_fov_deg,
+        "vertical_fov_deg": vertical_fov_deg,
+    }
 
-    nx = (cx / image_w - 0.5) * 2.0
-    ny = (0.5 - cy / image_h) * 2.0
-    return [nx * depth_m * 0.5, ny * depth_m * 0.5, -depth_m]
+
+def _vst_camera_point_to_head(point: list[float], right_eye_to_head: list[float] | None = None) -> list[float]:
+    if right_eye_to_head is None:
+        return [point[0], -point[1], -point[2]]
+    matrix = right_eye_to_head
+    return [
+        matrix[0] * point[0] + matrix[1] * point[1] + matrix[2] * point[2] + matrix[3],
+        matrix[4] * point[0] + matrix[5] * point[1] + matrix[6] * point[2] + matrix[7],
+        matrix[8] * point[0] + matrix[9] * point[1] + matrix[10] * point[2] + matrix[11],
+    ]
+
+
+def _bbox_position(detection: dict[str, Any], root_image: dict[str, Any], default_depth_m: float) -> list[float]:
+    point_vst, _diagnostics = _camera_point_from_bbox(detection, root_image, default_depth_m)
+    return _vst_camera_point_to_head(point_vst, _right_eye_to_head_matrix(detection, root_image))
+
+
+def _source_coordinate_diagnostics(
+    detection: dict[str, Any],
+    root_image: dict[str, Any],
+    default_depth_m: float,
+    position: list[float],
+) -> dict[str, Any]:
+    point_vst, camera = _camera_point_from_bbox(detection, root_image, default_depth_m)
+    right_eye_to_head = _right_eye_to_head_matrix(detection, root_image)
+    return {
+        "coordinate_space": _camera_coordinate_space(detection, root_image),
+        "publisher_convention": "godot_head",
+        "camera_axes": "+X right,+Y down,+Z forward",
+        "head_axes": "+X right,+Y up,-Z forward",
+        "anchor": "target_center",
+        "depth_source": "provided_depth" if "depth_m" in detection else "default_depth",
+        "uses_right_eye_to_head": right_eye_to_head is not None,
+        "source_frame": {
+            "w": camera["image_w"],
+            "h": camera["image_h"],
+            "center_x": camera["cx"],
+            "center_y": camera["cy"],
+            "anchor_depth": camera["depth_m"],
+            "horizontal_fov_deg": camera["horizontal_fov_deg"],
+            "vertical_fov_deg": camera["vertical_fov_deg"],
+        },
+        "camera_point_m": point_vst,
+        "head_position_m": position,
+    }
 
 
 def _transform_from_detection(
@@ -121,16 +233,22 @@ def normalize_source_payload(
             continue
         raw_id = detection.get("target_id", detection.get("id", detection.get("track_id")))
         target_id = _target_id(source, raw_id, index)
-        targets.append(
-            {
-                "target_id": target_id,
-                "source": source,
-                "state": _canonical_state(detection.get("state", "tracked")),
-                "confidence": _as_float(detection.get("confidence"), 1.0),
-                "timestamp_ms": _as_float(detection.get("timestamp_ms"), timestamp_ms),
-                "transform": _transform_from_detection(detection, root_image, default_depth_m),
-            }
-        )
+        target = {
+            "target_id": target_id,
+            "source": source,
+            "state": _canonical_state(detection.get("state", "tracked")),
+            "confidence": _as_float(detection.get("confidence"), 1.0),
+            "timestamp_ms": _as_float(detection.get("timestamp_ms"), timestamp_ms),
+            "transform": _transform_from_detection(detection, root_image, default_depth_m),
+        }
+        if isinstance(detection.get("bbox"), dict):
+            target["source_coordinate"] = _source_coordinate_diagnostics(
+                detection,
+                root_image,
+                default_depth_m,
+                target["transform"]["position"],
+            )
+        targets.append(target)
 
     cards = []
     if targets:

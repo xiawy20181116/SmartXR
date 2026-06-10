@@ -292,6 +292,7 @@ var _proxy_targets_last_packet_bytes := 0
 var _proxy_targets_last_packet_preview := "-"
 var _proxy_targets_last_message_type := "-"
 var _proxy_targets_last_error := "-"
+var _proxy_targets_last_source_coordinate := {}
 var _proxy_targets_status_write_elapsed := 0.0
 var _proxy_targets_card_apply_count := 0
 
@@ -699,6 +700,11 @@ func _record_proxy_targets_diagnostics(message: Dictionary) -> void:
 	if not (position is Array) or position.size() < 3:
 		return
 	_proxy_targets_last_position = Vector3(float(position[0]), float(position[1]), float(position[2]))
+	var source_coordinate = target.get("source_coordinate", {})
+	if typeof(source_coordinate) == TYPE_DICTIONARY:
+		_proxy_targets_last_source_coordinate = source_coordinate.duplicate(true)
+	else:
+		_proxy_targets_last_source_coordinate = {}
 
 
 func _sanitize_proxy_targets_status_text(value: String) -> String:
@@ -731,6 +737,8 @@ func _write_proxy_targets_status_file(delta: float) -> void:
 		"packet_bytes": _proxy_targets_last_packet_bytes,
 		"packet_preview": _proxy_targets_last_packet_preview,
 		"message_type": _proxy_targets_last_message_type,
+		"source_coordinate": _proxy_targets_last_source_coordinate,
+		"source_coordinate_summary": _proxy_targets_source_coordinate_summary(),
 		"error": _proxy_targets_last_error,
 		"last_command": _last_command,
 	}
@@ -1356,7 +1364,7 @@ func _format_xr_status_line() -> String:
 
 
 func _format_proxy_targets_status_line() -> String:
-	return "ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s err=%s" % [
+	return "ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s src=%s err=%s" % [
 		"connected" if _proxy_targets_ws_connected else "waiting",
 		str(_proxy_targets_ws_subscribed),
 		_proxy_targets_ws_packets_seen,
@@ -1368,7 +1376,28 @@ func _format_proxy_targets_status_line() -> String:
 		_proxy_targets_last_message_type,
 		_format_vec3(_proxy_targets_last_position),
 		_proxy_targets_card_node_position(),
+		_proxy_targets_source_coordinate_summary(),
 		_proxy_targets_last_error,
+	]
+
+
+func _proxy_targets_source_coordinate_summary() -> String:
+	if _proxy_targets_last_source_coordinate.is_empty():
+		return "-"
+	var space := str(_proxy_targets_last_source_coordinate.get("coordinate_space", "-"))
+	var anchor := str(_proxy_targets_last_source_coordinate.get("anchor", "-"))
+	var source_frame = _proxy_targets_last_source_coordinate.get("source_frame", {})
+	var fov := "-"
+	if typeof(source_frame) == TYPE_DICTIONARY:
+		fov = "%.1fx%.1f" % [
+			float(source_frame.get("horizontal_fov_deg", 0.0)),
+			float(source_frame.get("vertical_fov_deg", 0.0)),
+		]
+	return "%s %s fov=%s eye2head=%s" % [
+		space,
+		anchor,
+		fov,
+		str(_proxy_targets_last_source_coordinate.get("uses_right_eye_to_head", false)),
 	]
 
 
