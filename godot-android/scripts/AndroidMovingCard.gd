@@ -51,6 +51,12 @@ const PASSTHROUGH_OVERLAY_QUAD_SIZE_M := Vector2(0.42, 0.20)
 const PASSTHROUGH_OVERLAY_DEPTH_M := 1.5
 const ProxyTargetsConsumerScript := preload("res://scripts/proxy_targets_consumer.gd")
 const ProxyTargetsCardAdapterScript := preload("res://scripts/proxy_targets_card_adapter.gd")
+const SmartXROptionsScript := preload("res://scripts/smartxr_options.gd")
+
+# Centralized runtime configuration (env var -> user://smartxr_options.json
+# -> script const default). The consts below stay as the defaults; deployment
+# overrides go through SmartXROptions instead of source edits.
+var _options = SmartXROptionsScript.load_options()
 
 # M1 (YAN-56): on-device VST capture + ncnn tracker scaffold.
 # Functional behaviour is gated on GXRDualVstCapture class registration so the
@@ -690,7 +696,7 @@ func _apply_proxy_targets_sample() -> void:
 
 
 func _connect_proxy_targets_ws() -> void:
-	if not PROXY_TARGETS_WS_ENABLED:
+	if not _proxy_targets_ws_enabled():
 		return
 	_proxy_targets_ws.close()
 	var result := _proxy_targets_ws.connect_to_url(_proxy_targets_ws_url())
@@ -701,15 +707,20 @@ func _connect_proxy_targets_ws() -> void:
 		_last_command = "proxy_ws_connect_err_" + str(result)
 
 
+func _proxy_targets_ws_enabled() -> bool:
+	return _options.proxy_targets_ws_enabled(PROXY_TARGETS_WS_ENABLED)
+
+
 func _proxy_targets_ws_url() -> String:
-	var env_url := OS.get_environment("PROXY_TARGETS_WS_URL")
-	if env_url.is_empty():
-		return PROXY_TARGETS_WS_URL
-	return env_url
+	return _options.proxy_targets_ws_url(PROXY_TARGETS_WS_URL)
+
+
+func _control_ws_url() -> String:
+	return _options.control_ws_url(WS_URL)
 
 
 func _poll_proxy_targets_ws(delta: float) -> void:
-	if not PROXY_TARGETS_WS_ENABLED:
+	if not _proxy_targets_ws_enabled():
 		return
 	_proxy_targets_ws.poll()
 	var state := _proxy_targets_ws.get_ready_state()
@@ -913,7 +924,7 @@ func _update_debug_target_marker(delta: float) -> void:
 
 func _connect_ws() -> void:
 	_ws.close()
-	var result := _ws.connect_to_url(WS_URL)
+	var result := _ws.connect_to_url(_control_ws_url())
 	_ws_connected = false
 	_ws_retry_seconds = 0.0
 	if result != OK:

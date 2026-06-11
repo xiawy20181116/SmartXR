@@ -1,0 +1,13 @@
+[project]
+name = "smartxr"
+version = "0.1.0"
+description = "SmartXR shared Python library: proxy_targets schema, WebSocket transport, and publishers"
+requires-python = ">=3.10"
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["smartxr*"]

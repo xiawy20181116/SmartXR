@@ -6,130 +6,16 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable
 
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from smartxr.frames import normalize_frame  # noqa: E402,F401
+
 
 SESSION_FILE = "vst_capture_session.jsonl"
 FIRST_TARGET_FILE = "vst_first_target_sample.json"
 STATUS_FILE = "vst_capture_status.json"
-
-
-def _as_float(value: Any, fallback: float) -> float:
-    if isinstance(value, bool):
-        return fallback
-    if isinstance(value, (int, float)):
-        return float(value)
-    return fallback
-
-
-def _as_int(value: Any, fallback: int) -> int:
-    if isinstance(value, bool):
-        return fallback
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    return fallback
-
-
-def _image_from_frame(frame: dict[str, Any]) -> dict[str, int]:
-    image = frame.get("image")
-    if isinstance(image, dict):
-        width = _as_int(image.get("w", image.get("width")), 0)
-        height = _as_int(image.get("h", image.get("height")), 0)
-    else:
-        width = _as_int(frame.get("image_width", frame.get("width")), 0)
-        height = _as_int(frame.get("image_height", frame.get("height")), 0)
-    result: dict[str, int] = {}
-    if width > 0:
-        result["w"] = width
-    if height > 0:
-        result["h"] = height
-    return result
-
-
-def _frame_sequence(frame: dict[str, Any], index: int) -> int:
-    return _as_int(frame.get("sequence", frame.get("frame_id", frame.get("frame_index"))), index)
-
-
-def _target_source_items(frame: dict[str, Any]) -> list[dict[str, Any]]:
-    for key in ("detections", "targets", "people"):
-        value = frame.get(key)
-        if isinstance(value, list):
-            return [item for item in value if isinstance(item, dict)]
-    return []
-
-
-def _bbox_from_value(value: Any) -> dict[str, float]:
-    if isinstance(value, dict):
-        if all(key in value for key in ("cx", "cy", "w", "h")):
-            return {
-                "cx": _as_float(value.get("cx"), 0.0),
-                "cy": _as_float(value.get("cy"), 0.0),
-                "w": _as_float(value.get("w"), 0.0),
-                "h": _as_float(value.get("h"), 0.0),
-            }
-        if all(key in value for key in ("x1", "y1", "x2", "y2")):
-            x1 = _as_float(value.get("x1"), 0.0)
-            y1 = _as_float(value.get("y1"), 0.0)
-            x2 = _as_float(value.get("x2"), x1)
-            y2 = _as_float(value.get("y2"), y1)
-            return {"cx": (x1 + x2) * 0.5, "cy": (y1 + y2) * 0.5, "w": x2 - x1, "h": y2 - y1}
-    if isinstance(value, list) and len(value) >= 4:
-        x1 = _as_float(value[0], 0.0)
-        y1 = _as_float(value[1], 0.0)
-        x2 = _as_float(value[2], x1)
-        y2 = _as_float(value[3], y1)
-        return {"cx": (x1 + x2) * 0.5, "cy": (y1 + y2) * 0.5, "w": x2 - x1, "h": y2 - y1}
-    return {}
-
-
-def _detection_id(item: dict[str, Any], index: int) -> str:
-    raw_id = item.get("id", item.get("target_id", item.get("track_id")))
-    if raw_id is None or raw_id == "":
-        raw_id = index
-    value = str(raw_id)
-    if value.startswith("person-"):
-        return value
-    return f"person-{value}"
-
-
-def normalize_frame(frame: dict[str, Any], index: int, min_confidence: float) -> dict[str, Any]:
-    sequence = _frame_sequence(frame, index)
-    image = _image_from_frame(frame)
-    timestamp_ms = frame.get("timestamp_ms", frame.get("ts_ms"))
-    normalized: dict[str, Any] = {
-        "source": str(frame.get("source", "vst")),
-        "sequence": sequence,
-        "detections": [],
-        "pose_quality": str(frame.get("pose_quality", "projected_2d")),
-    }
-    if timestamp_ms is not None:
-        normalized["timestamp_ms"] = _as_float(timestamp_ms, 0.0)
-    if image:
-        normalized["image"] = image
-
-    detections: list[dict[str, Any]] = []
-    for item_index, item in enumerate(_target_source_items(frame)):
-        confidence = _as_float(item.get("confidence", item.get("score")), 1.0)
-        if confidence < min_confidence:
-            continue
-        detection: dict[str, Any] = {
-            "id": _detection_id(item, item_index),
-            "state": str(item.get("state", item.get("tracking_status", "tracked"))),
-            "confidence": confidence,
-        }
-        bbox = _bbox_from_value(item.get("bbox", item.get("box")))
-        if bbox:
-            detection["bbox"] = bbox
-        if "depth_m" in item:
-            detection["depth_m"] = _as_float(item.get("depth_m"), 1.2)
-        if "position" in item:
-            detection["position"] = item["position"]
-        if "transform" in item:
-            detection["transform"] = item["transform"]
-        detections.append(detection)
-
-    normalized["detections"] = detections
-    return normalized
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:

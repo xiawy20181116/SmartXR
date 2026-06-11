@@ -386,8 +386,14 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_poll_proxy_targets_ws(delta)", source)
         self.assertIn("_send_proxy_targets_subscribe()", source)
         self.assertIn("_proxy_targets_ws_url()", source)
-        self.assertIn('OS.get_environment("PROXY_TARGETS_WS_URL")', source)
+        # URL/enable resolution is centralized in SmartXROptions (env var ->
+        # user://smartxr_options.json -> const default); see
+        # tests/test_godot_smartxr_options.py for the resolution contract.
+        self.assertIn("_options.proxy_targets_ws_url(PROXY_TARGETS_WS_URL)", source)
+        self.assertIn("_options.proxy_targets_ws_enabled(PROXY_TARGETS_WS_ENABLED)", source)
+        self.assertIn("_options.control_ws_url(WS_URL)", source)
         self.assertIn("connect_to_url(_proxy_targets_ws_url())", source)
+        self.assertIn("connect_to_url(_control_ws_url())", source)
         self.assertIn("_proxy_targets_ws_packets_seen += 1", source)
         self.assertIn("_proxy_targets_last_packet_bytes = packet.size()", source)
         self.assertIn("_proxy_targets_last_packet_preview = _sanitize_proxy_targets_status_text(payload)", source)
@@ -420,26 +426,35 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('_last_command = "proxy_live"', source)
 
     def test_fake_proxy_targets_publisher_exists_and_uses_stdlib_websocket(self):
+        # The tools file is a compatibility wrapper; implementation lives in
+        # the smartxr package (publisher/transport/cli layers).
         self.assertTrue(FAKE_PROXY_TARGETS_PUBLISHER.exists())
-        source = FAKE_PROXY_TARGETS_PUBLISHER.read_text(encoding="utf-8")
+        wrapper = FAKE_PROXY_TARGETS_PUBLISHER.read_text(encoding="utf-8")
+        publisher = (ROOT / "smartxr" / "publisher.py").read_text(encoding="utf-8")
+        transport = (ROOT / "smartxr" / "transport.py").read_text(encoding="utf-8")
+        schema = (ROOT / "smartxr" / "schema.py").read_text(encoding="utf-8")
+        cli = (ROOT / "smartxr" / "cli" / "fake_publisher.py").read_text(encoding="utf-8")
 
-        self.assertIn("def build_proxy_targets_message(", source)
-        self.assertIn("def encode_websocket_text_frame(", source)
-        self.assertIn("def serve(", source)
-        self.assertIn("sequence: int = 0", source)
-        self.assertIn("mode: str = \"moving\"", source)
-        self.assertIn('"sequence": sequence', source)
-        self.assertIn("sent seq=", source)
-        self.assertIn('choices=["moving", "static"]', source)
-        self.assertIn('"type": "proxy_targets"', source)
-        self.assertIn('"schema_version": 1', source)
-        self.assertIn('"coordinate_space": "world"', source)
-        self.assertIn('"transform_space": "world"', source)
-        self.assertIn('"card_id": card_id', source)
-        self.assertIn('"target_id": target_id', source)
-        self.assertNotIn("import websockets", source)
-        self.assertNotIn("bbox", source)
-        self.assertNotIn("detection", source)
+        self.assertIn("build_fake_proxy_targets_message as build_proxy_targets_message", wrapper)
+        self.assertIn("def build_fake_proxy_targets_message(", publisher)
+        self.assertIn("def encode_websocket_text_frame(", transport)
+        self.assertIn("def serve(", cli)
+        self.assertIn("sequence: int = 0", publisher)
+        self.assertIn("mode: str = \"moving\"", publisher)
+        self.assertIn('"sequence": sequence', publisher)
+        self.assertIn("sent seq=", cli)
+        self.assertIn('choices=["moving", "static"]', cli)
+        self.assertIn('"type": "proxy_targets"', publisher)
+        self.assertIn("SCHEMA_VERSION = 1", schema)
+        self.assertIn('"coordinate_space": "world"', publisher)
+        self.assertIn('"transform_space": "world"', publisher)
+        self.assertIn('"card_id": card_id', publisher)
+        self.assertIn('"target_id": target_id', publisher)
+        for source in (wrapper, publisher, transport, cli):
+            self.assertNotIn("import websockets", source)
+        for source in (wrapper, transport, cli):
+            self.assertNotIn("bbox", source)
+            self.assertNotIn("detection", source)
 
     def test_proxy_targets_consumer_converts_head_space_to_world(self):
         consumer = PROXY_TARGETS_CONSUMER.read_text(encoding="utf-8")
