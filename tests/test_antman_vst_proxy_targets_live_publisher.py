@@ -54,6 +54,8 @@ class AntmanVstProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(message["sequence"], 3)
         self.assertEqual(message["targets"][0]["target_id"], "vst-person-2")
         self.assertEqual(message["targets"][0]["state"], "tracked")
+        self.assertEqual(message["targets"][0]["source_coordinate"]["depth_source"], "default_depth")
+        self.assertEqual(message["targets"][0]["source_coordinate"]["source_frame"]["anchor_depth"], 5.0)
         self.assertEqual(message["cards"][0]["card_id"], "LiveCard")
         self.assertEqual(validator.validate_message(message), [])
 
