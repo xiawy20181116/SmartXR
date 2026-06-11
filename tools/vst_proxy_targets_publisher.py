@@ -20,6 +20,11 @@ from fake_proxy_targets_publisher import (  # noqa: E402
     encode_websocket_text_frame,
 )
 from capture_vst_target_sample_session import normalize_frame  # noqa: E402
+from proxy_targets_smoothing import (  # noqa: E402
+    TargetPositionSmoother,
+    add_smoothing_arguments,
+    smoother_from_args,
+)
 
 
 DEFAULT_HORIZONTAL_FOV_DEG = 70.0
@@ -319,14 +324,25 @@ def replay_message_at(source_messages: list[dict[str, Any]], sequence: int) -> d
     return message
 
 
-def _publish_loop(conn: socket.socket, input_path: Path, hz: float, card_id: str, log_every: int) -> None:
+def _publish_loop(
+    conn: socket.socket,
+    input_path: Path,
+    hz: float,
+    card_id: str,
+    log_every: int,
+    smoother: TargetPositionSmoother | None = None,
+) -> None:
     interval_s = 1.0 / max(hz, 0.1)
     source_messages = load_source_messages(input_path, card_id=card_id)
     sequence = 0
     while True:
         if not _drain_client_frames(conn):
             return
+        if smoother is not None and sequence > 0 and sequence % len(source_messages) == 0:
+            smoother.reset()
         message = replay_message_at(source_messages, sequence)
+        if smoother is not None:
+            message = smoother.smooth_message(message)
         payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False)
         conn.sendall(encode_websocket_text_frame(payload))
         if log_every > 0 and sequence % log_every == 0:
@@ -348,13 +364,23 @@ def _publish_loop(conn: socket.socket, input_path: Path, hz: float, card_id: str
         time.sleep(interval_s)
 
 
-def serve(host: str, port: int, input_path: Path, hz: float, card_id: str, log_every: int) -> None:
+def serve(
+    host: str,
+    port: int,
+    input_path: Path,
+    hz: float,
+    card_id: str,
+    log_every: int,
+    smoother: TargetPositionSmoother | None = None,
+) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind((host, port))
         server.listen(1)
         print(f"proxy_targets publisher listening on ws://{host}:{port}/proxy_targets", flush=True)
         print(f"source input: {input_path}", flush=True)
+        if smoother is not None and smoother.mode != "none":
+            print(f"smoothing: {smoother.describe()}", flush=True)
         while True:
             conn, address = server.accept()
             with conn:
@@ -363,8 +389,17 @@ def serve(host: str, port: int, input_path: Path, hz: float, card_id: str, log_e
                     print(f"rejected {address}: {first_line}", flush=True)
                     continue
                 print(f"client connected from {address}: {first_line}", flush=True)
+                if smoother is not None:
+                    smoother.reset()
                 try:
-                    _publish_loop(conn, input_path=input_path, hz=hz, card_id=card_id, log_every=log_every)
+                    _publish_loop(
+                        conn,
+                        input_path=input_path,
+                        hz=hz,
+                        card_id=card_id,
+                        log_every=log_every,
+                        smoother=smoother,
+                    )
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     print(f"client disconnected: {address}", flush=True)
 
@@ -378,6 +413,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--hz", type=float, default=20.0)
     parser.add_argument("--card-id", default="CardAnchor")
     parser.add_argument("--log-every", type=int, default=20)
+    add_smoothing_arguments(parser)
     return parser.parse_args()
 
 
@@ -386,7 +422,8 @@ def main() -> int:
     if args.print_once:
         print(json.dumps(load_source_messages(args.input, card_id=args.card_id)[0], separators=(",", ":")))
         return 0
-    serve(args.host, args.port, args.input, args.hz, args.card_id, args.log_every)
+    smoother = smoother_from_args(args, default_dt_s=1.0 / max(args.hz, 0.1))
+    serve(args.host, args.port, args.input, args.hz, args.card_id, args.log_every, smoother=smoother)
     return 0
 
 
