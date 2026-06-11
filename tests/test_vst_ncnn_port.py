@@ -19,6 +19,9 @@ NCNN_BIN = NCNN_DIR / "yolov8n_320.opt.ncnn.bin"
 JNI_DEBUG = ANDROID / "android" / "build" / "libs" / "debug" / "arm64-v8a"
 JNI_RELEASE = ANDROID / "android" / "build" / "libs" / "release" / "arm64-v8a"
 SCRIPT = ANDROID / "scripts" / "AndroidMovingCard.gd"
+# Status-line rendering moved to the StatusHud subsystem in M3 step 1 (YAN-74);
+# the card assembles the xr/vst snapshots that feed those lines.
+STATUS_HUD = ANDROID / "scripts" / "status_hud.gd"
 
 
 ADDON_LIBS = [
@@ -134,13 +137,19 @@ class AndroidMovingCardVstScaffoldTests(unittest.TestCase):
         self.assertIn("get_right_tracker_total_latency_ms", self.source)
 
     def test_script_reports_vst_diagnostics_in_status_label(self):
-        self.assertIn("_format_vst_status_line()", self.source)
-        self.assertIn("VST:", self.source)
-        self.assertIn("vst_line", self.source)
+        hud = STATUS_HUD.read_text(encoding="utf-8")
+
+        self.assertIn("func _build_vst_status_snapshot() -> Dictionary:", self.source)
+        self.assertIn("func _format_vst_status_line(vst: Dictionary) -> String:", hud)
+        self.assertIn("VST:", hud)
+        self.assertIn("vst_line", hud)
 
     def test_script_reports_xr_diagnostics_before_vst_status(self):
-        self.assertIn("_format_xr_status_line()", self.source)
-        self.assertIn("XR:", self.source)
+        hud = STATUS_HUD.read_text(encoding="utf-8")
+
+        self.assertIn("func _build_xr_status_snapshot() -> Dictionary:", self.source)
+        self.assertIn("func _format_xr_status_line(snapshot: Dictionary) -> String:", hud)
+        self.assertIn("XR:", hud)
         self.assertIn("_xr_interface_found", self.source)
         self.assertIn("_xr_initialize_ok", self.source)
         self.assertIn("_xr_init_error", self.source)

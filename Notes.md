@@ -1,4 +1,66 @@
-# Notes — M1+M2 change log (YAN-73)
+# Notes — change log
+
+## M3 step 1 — StatusHud extraction (YAN-74)
+
+### Files added
+
+- `godot-android/scripts/status_hud.gd` — StatusHud node: builds the
+  `MeshCardStatus` Label3D, renders the status text, and writes
+  `user://proxy_targets_live_status.json` and
+  `user://passthrough_overlay_status.json` from a snapshot Dictionary.
+  Owns the 0.25 s write throttle and all `_format_*` helpers
+  (`_format_vec3`, `_format_vec3_or_na`, XR/VST/ProxyWS lines,
+  `_source_coordinate_summary`, static `sanitize_status_text`). File paths
+  are overridable vars so probes can redirect writes. No class_name
+  self-references (no-project-mode rule).
+- `godot-android/tests/script_only_status_hud_probe.gd` — script-only
+  runtime probe (29 checks: label build/parenting, snapshot rendering,
+  throttled writes, JSON keys/format parity, sanitize behavior).
+- `tools/run_godot_status_hud_probe.ps1` — headless no-project runner for
+  the probe, following run_godot_smartxr_options_probe.ps1.
+- `tests/test_godot_status_hud.py` — 3 static tests pinning the StatusHud
+  contract, the card-side snapshot seam, and the probe/runner pair.
+
+### Files modified
+
+- `godot-android/scripts/AndroidMovingCard.gd` — removed the label/file
+  rendering code (~210 lines): `_build_status_label`, `_update_status_label`,
+  `_format_vec3`, `_format_xr_status_line`, `_format_proxy_targets_status_line`,
+  `_format_vst_status_line`, `_proxy_targets_source_coordinate_summary`,
+  `_sanitize_proxy_targets_status_text`, both `_write_*_status_file` writers,
+  both write-elapsed vars, `_status_label`, and the two `user://` status
+  consts. Added `_status_hud` child node (created in `_build_status_hud()`),
+  `_update_status_hud(delta)` in `_process`, and the snapshot builders
+  (`_build_status_snapshot` + xr/vst/proxy_targets/passthrough_overlay
+  sub-builders). `_proxy_targets_card_resolved_position`,
+  `_proxy_targets_card_node_position`, `_passthrough_overlay_layer_position`
+  now return Vector3-or-null (StatusHud formats null as "n/a"). Packet
+  preview sanitizing now calls `StatusHudScript.sanitize_status_text`.
+  No behavior change; the scene tree gains one runtime child (`StatusHud`).
+- `tests/test_godot_android_mesh_card.py` — pinned display/format/file-writer
+  assertions repointed at `status_hud.gd` (per ADR-3); snapshot-assembly
+  assertions stay on the card.
+- `tests/test_vst_ncnn_port.py` — XR/VST status-line pins repointed at
+  `status_hud.gd`; card pins now target the snapshot builders.
+- `tests/validate_project.ps1` — registers `tests/test_godot_status_hud.py`.
+- `TASKS.md` / `DECISIONS.md` (ADR-4) / `HANDOFF.md` — bookkeeping.
+
+### Verification run
+
+- `python -m unittest tests/test_*.py` → 122 tests, OK.
+- `tools\run_godot_status_hud_probe.ps1` → PASS (29/29 checks).
+- `tools\run_godot_smartxr_options_probe.ps1` → PASS (10/10 checks).
+- `tools\run_godot_script_only_websocket_probe.ps1` → ws_connected=true,
+  packets=1.
+- `tools\run_godot_proxy_targets_consumer_only.ps1` against a live
+  `fake_proxy_targets_publisher.py` on :8766 → parsed=1, live=1,
+  registered_targets=1.
+- One-off compile check: `AndroidMovingCard.gd` + `status_hud.gd` load and
+  `can_instantiate()` in script-only mode (Godot 4.6.2 headless). Note:
+  `godot --check-only` hangs in this repo (GXR extension + OpenXR boot), so
+  the loader-probe approach is the usable compile gate.
+
+# M1+M2 change log (YAN-73)
 
 ## Files added
 
