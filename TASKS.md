@@ -17,14 +17,22 @@ side.
   framing deduplicated out of `ws_control.py`, `fake_*` and `vst_*`
   publishers; antman live publisher no longer imports private functions from
   sibling tools. `pyproject.toml` added.
+- [x] **M3 step 1 — StatusHud** (YAN-74): status label rendering and the
+  `user://` status-file writers (`proxy_targets_live_status.json`,
+  `passthrough_overlay_status.json`) extracted from `AndroidMovingCard.gd`
+  into `godot-android/scripts/status_hud.gd`. Seam: the card assembles a
+  per-frame snapshot Dictionary (`_build_status_snapshot()`), StatusHud only
+  formats and writes (ADR-4). Runtime probe:
+  `tools/run_godot_status_hud_probe.ps1` (29 checks). Tests:
+  `tests/test_godot_status_hud.py`.
 
 ## Next (not started)
 
-- [ ] **M3 — Split `AndroidMovingCard.gd`** (~1500 lines) into subsystem nodes:
-  XRBootstrap, WSTransport, TargetRegistry, CardAttachment, StatusHud, with
-  the scene tree unchanged. Move one subsystem at a time; keep
+- [ ] **M3 — Split `AndroidMovingCard.gd`** remaining subsystem nodes:
+  XRBootstrap, WSTransport, TargetRegistry, CardAttachment, with the scene
+  tree unchanged. Move one subsystem at a time; keep
   `tests/test_godot_android_mesh_card.py` green at each step (update pinned
-  assertions alongside each move).
+  assertions alongside each move). StatusHud (step 1) is done — see above.
 - [ ] **M4 — TargetSource strategy interface**: unify on-device ncnn, remote
   proxy_targets WS, and fixture replay behind one source interface; promote
   the payload contract doc into shared test vectors used by both the Python
@@ -34,9 +42,16 @@ side.
 ## Verification
 
 ```powershell
-# Full suite (118 tests)
+# Full suite (122 tests)
 python -m unittest (Get-ChildItem tests\test_*.py | ForEach-Object { "tests/$($_.Name)" })
 
 # Schema gate
 python tools\validate_proxy_targets_payload_schema.py --input godot-android\fixtures\proxy_targets_sample.json --input godot-android\fixtures\vst_proxy_targets_sample.json
+
+# Godot runtime probes (headless, no-project mode)
+powershell -File tools\run_godot_smartxr_options_probe.ps1
+powershell -File tools\run_godot_status_hud_probe.ps1
+powershell -File tools\run_godot_script_only_websocket_probe.ps1
+# consumer-only needs a publisher on :8766 first (fake_proxy_targets_publisher.py)
+powershell -File tools\run_godot_proxy_targets_consumer_only.ps1
 ```

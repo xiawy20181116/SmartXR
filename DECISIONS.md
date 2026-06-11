@@ -45,3 +45,28 @@ to satisfy greps.
 **Consequences.** Tests keep guarding the real implementation; two test
 methods were updated (`test_fake_proxy_targets_publisher.py` banner check,
 `test_godot_android_mesh_card.py` publisher/URL checks).
+
+## ADR-4: Snapshot-Dictionary seam for AndroidMovingCard subsystem extraction (M3-1)
+
+**Context.** M3 splits the ~1800-line `AndroidMovingCard.gd` god object into
+subsystem nodes. The first slice, the status HUD + diagnostics-file writers,
+reads ~40 pieces of card state (WS counters, XR flags, VST tracker state,
+attachment positions), so a naive extraction would either need a back-pointer
+to the card (circular coupling) or dozens of setter calls per frame.
+
+**Decision.** The card assembles one plain snapshot Dictionary per frame
+(`_build_status_snapshot()`, with nested `xr` / `vst` / `proxy_targets` /
+`passthrough_overlay` sub-dictionaries) and passes it to the extracted node;
+`StatusHud` only formats and writes (label text, the two `user://` status
+files, throttling). Nullable values (camera pose, layer position, resolved
+card position) travel as `Vector3`-or-`null` and StatusHud renders `null` as
+the historical `"n/a"`. Like `smartxr_options.gd`, `status_hud.gd` never
+references its own `class_name`, so a script-only probe can load it in
+no-project mode (`tools/run_godot_status_hud_probe.ps1`).
+
+**Consequences.** StatusHud is dependency-free and runtime-verifiable headless
+(29 probe checks pin label text, JSON keys/format, and throttle behavior);
+the card keeps all state resolution; later M3 extractions should reuse the
+same pattern (resolve in card, format/act in subsystem node). The JSON shape
+of both status files is unchanged, so `validate_proxy_targets_live_status.py`
+and on-device pulls keep working.

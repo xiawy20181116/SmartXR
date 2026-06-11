@@ -6,6 +6,10 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "godot-android" / "scripts" / "AndroidMovingCard.gd"
+# Status label rendering and the user:// status-file writers moved to the
+# StatusHud subsystem in M3 step 1 (YAN-74); display/format assertions are
+# pinned there, snapshot-assembly assertions stay on the card script.
+STATUS_HUD = ROOT / "godot-android" / "scripts" / "status_hud.gd"
 VALIDATOR = ROOT / "tests" / "validate_project.ps1"
 ANDROID_ACTIVITY = (
     ROOT
@@ -43,9 +47,10 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_antman_passthrough_overlay_layer_path_is_gated_by_env(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        hud = STATUS_HUD.read_text(encoding="utf-8")
 
         self.assertIn('const PASSTHROUGH_OVERLAY_ENV := "SMARTXR_USE_PASSTHROUGH_OVERLAY"', source)
-        self.assertIn('const PASSTHROUGH_OVERLAY_STATUS_RES := "user://passthrough_overlay_status.json"', source)
+        self.assertIn('const PASSTHROUGH_OVERLAY_STATUS_RES := "user://passthrough_overlay_status.json"', hud)
         self.assertIn("var _passthrough_overlay_enabled := false", source)
         self.assertIn("func _use_passthrough_overlay() -> bool:", source)
         self.assertIn("OS.get_environment(PASSTHROUGH_OVERLAY_ENV)", source)
@@ -54,9 +59,11 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_passthrough_overlay_layer.layer_viewport = _passthrough_overlay_viewport", source)
         self.assertIn("_passthrough_overlay_layer.alpha_blend = true", source)
         self.assertIn("PASSTHROUGH OVERLAY", source)
-        self.assertIn("func _write_passthrough_overlay_status_file(delta: float) -> void:", source)
-        self.assertIn('"overlay_enabled": _passthrough_overlay_enabled', source)
+        # The card assembles the overlay status snapshot; StatusHud writes the file.
+        self.assertIn("func _build_passthrough_overlay_status_snapshot() -> Dictionary:", source)
         self.assertIn('"layer_alpha_blend": _passthrough_overlay_layer_alpha_blend()', source)
+        self.assertIn("func _write_passthrough_overlay_status_file(snapshot: Dictionary, delta: float) -> void:", hud)
+        self.assertIn('"overlay_enabled": overlay.get("enabled", false)', hud)
 
     def test_validate_project_wrapper_exists(self):
         source = VALIDATOR.read_text(encoding="utf-8")
@@ -77,14 +84,16 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_moving_card_defaults_to_fixed_world_orientation_with_toggle(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        hud = STATUS_HUD.read_text(encoding="utf-8")
 
         self.assertIn("var _face_camera_enabled := true", source)
         self.assertIn("_orient_card_for_3dof_reading()", source)
-        self.assertIn("Face: 3DoF", source)
+        self.assertIn("Face: 3DoF", hud)
         self.assertIn("_card_anchor.rotation_degrees", source)
 
     def test_moving_card_uses_yaw_pitch_depth_anchor_model(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        hud = STATUS_HUD.read_text(encoding="utf-8")
 
         self.assertIn("CARD_START_YAW_DEG", source)
         self.assertIn("CARD_START_PITCH_DEG", source)
@@ -99,9 +108,10 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('"pitch_down", "down", "move_down", "s":', source)
         self.assertIn('"depth_in", "closer":', source)
         self.assertIn('"depth_out", "farther":', source)
-        self.assertIn("3DoF Anchor", source)
-        self.assertIn("Yaw/Pitch/Depth", source)
+        self.assertIn("3DoF Anchor", hud)
+        self.assertIn("Yaw/Pitch/Depth", hud)
         self.assertNotIn("world anchor", source.lower())
+        self.assertNotIn("world anchor", hud.lower())
 
     def test_moving_card_starts_centered_for_visibility(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -114,6 +124,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_moving_card_supports_mock_bbox_anchor_mode(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        hud = STATUS_HUD.read_text(encoding="utf-8")
 
         self.assertIn("BBOX_IMAGE_SIZE", source)
         self.assertIn("var _anchor_mode := \"manual\"", source)
@@ -129,9 +140,9 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('"bbox_down"', source)
         self.assertIn('"bbox_depth_in"', source)
         self.assertIn('"bbox_depth_out"', source)
-        self.assertIn("Mode: %s", source)
-        self.assertIn("BBox cx/cy/w/h", source)
-        self.assertIn("Angular W/H", source)
+        self.assertIn("Mode: %s", hud)
+        self.assertIn("BBox cx/cy/w/h", hud)
+        self.assertIn("Angular W/H", hud)
 
     def test_moving_card_accepts_bbox_payloads_from_websocket(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -174,7 +185,10 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_vst_target_adapter_tracks_confidence_timestamp_and_fallback_states(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        hud = STATUS_HUD.read_text(encoding="utf-8")
 
+        # The lost-state display default is rendered by StatusHud.
+        self.assertIn("target_state=lost", hud)
         for marker in [
             "VST_TARGET_CONFIDENCE_THRESHOLD",
             "VST_TARGET_PREDICT_MS",
@@ -192,7 +206,6 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
             "_set_state(TRACKABLE_STATE_STALE)",
             "_set_state(TRACKABLE_STATE_LOST)",
             "_apply_vst_target_fallback()",
-            "target_state=lost",
         ]:
             self.assertIn(marker, source)
 
@@ -213,6 +226,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_vst_bbox_anchor_uses_right_eye_to_head_transform_when_available(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        hud = STATUS_HUD.read_text(encoding="utf-8")
 
         self.assertIn("var _vst_right_eye_to_head_matrix := PackedFloat64Array()", source)
         self.assertIn("var _vst_uses_eye_to_head_anchor := false", source)
@@ -222,8 +236,10 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_store_right_eye_to_head_matrix(eye_info)", source)
         self.assertIn("func _transform_right_vst_point_to_head(point: Vector3) -> Vector3:", source)
         self.assertIn("point_head = _transform_right_vst_point_to_head(point_vst)", source)
-        self.assertIn("Anchor: %s", source)
-        self.assertIn('"eye2head" if _vst_uses_eye_to_head_anchor else "raw-fov"', source)
+        # The anchor-mode line is rendered by StatusHud from the vst snapshot.
+        self.assertIn('"uses_eye_to_head_anchor": _vst_uses_eye_to_head_anchor', source)
+        self.assertIn("Anchor: %s", hud)
+        self.assertIn('"eye2head" if bool(vst.get("uses_eye_to_head_anchor", false)) else "raw-fov"', hud)
 
     def test_vst_tracker_boxes_draw_visible_3d_bbox_frame(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -358,10 +374,11 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_proxy_targets_live_websocket_consumer_is_wired(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        hud = STATUS_HUD.read_text(encoding="utf-8")
 
         self.assertIn("const PROXY_TARGETS_WS_ENABLED := true", source)
         self.assertIn('const PROXY_TARGETS_WS_URL := "ws://127.0.0.1:8766/proxy_targets"', source)
-        self.assertIn('const PROXY_TARGETS_STATUS_RES := "user://proxy_targets_live_status.json"', source)
+        self.assertIn('const PROXY_TARGETS_STATUS_RES := "user://proxy_targets_live_status.json"', hud)
         self.assertIn("var _proxy_targets_ws := WebSocketPeer.new()", source)
         self.assertIn("var _proxy_targets_live_messages := 0", source)
         self.assertIn("var _proxy_targets_ws_subscribed := false", source)
@@ -374,14 +391,14 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('var _proxy_targets_last_message_type := "-"', source)
         self.assertIn('var _proxy_targets_last_error := "-"', source)
         self.assertIn("var _proxy_targets_last_source_coordinate := {}", source)
-        self.assertIn("var _proxy_targets_status_write_elapsed := 0.0", source)
+        self.assertIn("var _proxy_targets_status_write_elapsed := 0.0", hud)
         self.assertIn("func _connect_proxy_targets_ws() -> void:", source)
         self.assertIn("func _poll_proxy_targets_ws(delta: float) -> void:", source)
         self.assertIn("func _send_proxy_targets_subscribe() -> void:", source)
         self.assertIn("func _apply_proxy_targets_live_payload(payload: String) -> void:", source)
         self.assertIn("func _record_proxy_targets_diagnostics(message: Dictionary) -> void:", source)
-        self.assertIn("func _write_proxy_targets_status_file(delta: float) -> void:", source)
-        self.assertIn("func _format_proxy_targets_status_line() -> String:", source)
+        self.assertIn("func _write_proxy_targets_status_file(snapshot: Dictionary, delta: float) -> void:", hud)
+        self.assertIn("func _format_proxy_targets_status_line(proxy: Dictionary) -> String:", hud)
         self.assertIn("_connect_proxy_targets_ws()", source)
         self.assertIn("_poll_proxy_targets_ws(delta)", source)
         self.assertIn("_send_proxy_targets_subscribe()", source)
@@ -396,33 +413,36 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("connect_to_url(_control_ws_url())", source)
         self.assertIn("_proxy_targets_ws_packets_seen += 1", source)
         self.assertIn("_proxy_targets_last_packet_bytes = packet.size()", source)
-        self.assertIn("_proxy_targets_last_packet_preview = _sanitize_proxy_targets_status_text(payload)", source)
+        self.assertIn("_proxy_targets_last_packet_preview = StatusHudScript.sanitize_status_text(payload)", source)
         self.assertIn("_record_proxy_targets_diagnostics(parsed)", source)
-        self.assertIn("_write_proxy_targets_status_file(delta)", source)
-        self.assertIn("FileAccess.open(PROXY_TARGETS_STATUS_RES, FileAccess.WRITE)", source)
+        # Per-frame seam: the card assembles the snapshot, StatusHud writes the files.
+        self.assertIn("_update_status_hud(delta)", source)
+        self.assertIn("_status_hud.write_status_files(snapshot, delta)", source)
+        self.assertIn("FileAccess.open(proxy_targets_status_path, FileAccess.WRITE)", hud)
         self.assertIn('"anchor_mode": _anchor_mode', source)
         self.assertIn('"attachments": _card_attachments.size()', source)
         self.assertIn('"card_target_id": _proxy_targets_card_target_id()', source)
         self.assertIn("func _proxy_targets_card_target_id() -> String:", source)
         self.assertIn('"proxy_target_count": _proxy_targets_proxy_count()', source)
         self.assertIn('"proxy_target_ids": _proxy_targets_proxy_ids()', source)
-        self.assertIn('"last_proxy_position": _format_vec3(_proxy_targets_last_position)', source)
-        self.assertIn('"card_attach_target_id": _proxy_targets_card_target_id()', source)
+        self.assertIn('"last_proxy_position": _format_vec3(proxy.get("last_position", Vector3.ZERO))', hud)
+        self.assertIn('"card_attach_target_id": str(proxy.get("card_target_id", ""))', hud)
         self.assertIn('"card_resolved_position": _proxy_targets_card_resolved_position()', source)
         self.assertIn('"card_node_position": _proxy_targets_card_node_position()', source)
         self.assertIn('"card_apply_count": _proxy_targets_card_apply_count', source)
         self.assertIn("var _proxy_targets_card_apply_count := 0", source)
         self.assertIn("func _proxy_targets_proxy_count() -> int:", source)
         self.assertIn("func _proxy_targets_proxy_ids() -> Array:", source)
-        self.assertIn("func _proxy_targets_card_resolved_position() -> String:", source)
-        self.assertIn("func _proxy_targets_card_node_position() -> String:", source)
+        # Untyped returns (Vector3 or null); StatusHud formats null as "n/a".
+        self.assertIn("func _proxy_targets_card_resolved_position():", source)
+        self.assertIn("func _proxy_targets_card_node_position():", source)
         self.assertIn("_proxy_targets_card_apply_count += 1", source)
         self.assertIn('"packet_preview": _proxy_targets_last_packet_preview', source)
         self.assertIn('"source_coordinate": _proxy_targets_last_source_coordinate', source)
-        self.assertIn('"source_coordinate_summary": _proxy_targets_source_coordinate_summary()', source)
-        self.assertIn("func _proxy_targets_source_coordinate_summary() -> String:", source)
+        self.assertIn('"source_coordinate_summary": _source_coordinate_summary(proxy.get("source_coordinate", {}))', hud)
+        self.assertIn("func _source_coordinate_summary(source_coordinate: Dictionary) -> String:", hud)
         self.assertLess(source.index("_record_proxy_targets_diagnostics(parsed)"), source.index("_proxy_targets_card_adapter.apply_proxy_targets_message(parsed)"))
-        self.assertIn("ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s src=%s err=%s", source)
+        self.assertIn("ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s src=%s err=%s", hud)
         self.assertIn('_last_command = "proxy_live"', source)
 
     def test_fake_proxy_targets_publisher_exists_and_uses_stdlib_websocket(self):
@@ -473,6 +493,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_proxy_targets_status_reports_head_to_world_diagnostics(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        hud = STATUS_HUD.read_text(encoding="utf-8")
 
         self.assertIn("_proxy_targets_consumer.set_head_reference(_camera)", source)
         self.assertIn("var _proxy_targets_last_world_from_head_applied := false", source)
@@ -480,19 +501,24 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("var _proxy_targets_last_world_position := Vector3.ZERO", source)
         self.assertIn("get_last_applied_target_info", source)
         self.assertIn('"world_from_head_applied": _proxy_targets_last_world_from_head_applied', source)
-        self.assertIn('"proxy_local_position": _format_vec3(_proxy_targets_last_local_position)', source)
-        self.assertIn('"proxy_world_position": _format_vec3(_proxy_targets_last_world_position)', source)
+        self.assertIn('"local_position": _proxy_targets_last_local_position', source)
+        self.assertIn('"world_position": _proxy_targets_last_world_position', source)
+        self.assertIn('"proxy_local_position": _format_vec3(proxy.get("local_position", Vector3.ZERO))', hud)
+        self.assertIn('"proxy_world_position": _format_vec3(proxy.get("world_position", Vector3.ZERO))', hud)
 
     def test_moving_card_reports_xr_pose_for_tracking_diagnosis(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        hud = STATUS_HUD.read_text(encoding="utf-8")
 
         self.assertIn("var _xr_origin: XROrigin3D = null", source)
-        self.assertIn("_format_vec3(_camera.global_position)", source)
-        self.assertIn("_format_vec3(_camera.global_rotation_degrees)", source)
-        self.assertIn("_format_vec3(_xr_origin.global_position)", source)
-        self.assertIn("Camera Pos xyz: %s", source)
-        self.assertIn("Camera Rot xyz: %s", source)
-        self.assertIn("XROrigin Pos xyz: %s", source)
+        # The card snapshots the raw poses; StatusHud formats them (null -> "n/a").
+        self.assertIn('"camera_position": _camera.global_position if _camera != null else null', source)
+        self.assertIn('"camera_rotation_degrees": _camera.global_rotation_degrees if _camera != null else null', source)
+        self.assertIn('"xr_origin_position": _xr_origin.global_position if _xr_origin != null else null', source)
+        self.assertIn('_format_vec3_or_na(snapshot.get("camera_position"))', hud)
+        self.assertIn("Camera Pos xyz: %s", hud)
+        self.assertIn("Camera Rot xyz: %s", hud)
+        self.assertIn("XROrigin Pos xyz: %s", hud)
 
     def test_android_template_has_concrete_godot_activity(self):
         source = ANDROID_ACTIVITY.read_text(encoding="utf-8")

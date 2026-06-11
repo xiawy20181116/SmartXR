@@ -43,15 +43,14 @@ const PROXY_TARGETS_VALIDATION_ENABLED := true
 const PROXY_TARGETS_SAMPLE_RES := "res://fixtures/proxy_targets_sample.json"
 const PROXY_TARGETS_WS_ENABLED := true
 const PROXY_TARGETS_WS_URL := "ws://127.0.0.1:8766/proxy_targets"
-const PROXY_TARGETS_STATUS_RES := "user://proxy_targets_live_status.json"
 const PASSTHROUGH_OVERLAY_ENV := "SMARTXR_USE_PASSTHROUGH_OVERLAY"
-const PASSTHROUGH_OVERLAY_STATUS_RES := "user://passthrough_overlay_status.json"
 const PASSTHROUGH_OVERLAY_VIEWPORT_SIZE := Vector2i(512, 256)
 const PASSTHROUGH_OVERLAY_QUAD_SIZE_M := Vector2(0.42, 0.20)
 const PASSTHROUGH_OVERLAY_DEPTH_M := 1.5
 const ProxyTargetsConsumerScript := preload("res://scripts/proxy_targets_consumer.gd")
 const ProxyTargetsCardAdapterScript := preload("res://scripts/proxy_targets_card_adapter.gd")
 const SmartXROptionsScript := preload("res://scripts/smartxr_options.gd")
+const StatusHudScript := preload("res://scripts/status_hud.gd")
 
 # Centralized runtime configuration (env var -> user://smartxr_options.json
 # -> script const default). The consts below stay as the defaults; deployment
@@ -268,7 +267,11 @@ var _vst_bbox_frame_parts: Array[MeshInstance3D] = []
 var _vst_raw_debug_anchor: Node3D = null
 var _vst_raw_right_sprite: Sprite3D = null
 var _vst_raw_bbox_parts: Array[MeshInstance3D] = []
-var _status_label: Label3D = null
+# Status HUD subsystem (scripts/status_hud.gd): renders the diagnostics label
+# and writes the user:// status files from the snapshot this script assembles
+# per frame in _build_status_snapshot(). Untyped Node on purpose (no
+# class_name reference) so script-only probes can load both scripts.
+var _status_hud: Node = null
 var _speed_deg_per_second := CARD_DEFAULT_SPEED_DEG_PER_SECOND
 var _anchor_yaw_deg := CARD_START_YAW_DEG
 var _anchor_pitch_deg := CARD_START_PITCH_DEG
@@ -307,14 +310,12 @@ var _proxy_targets_last_source_coordinate := {}
 var _proxy_targets_last_world_from_head_applied := false
 var _proxy_targets_last_local_position := Vector3.ZERO
 var _proxy_targets_last_world_position := Vector3.ZERO
-var _proxy_targets_status_write_elapsed := 0.0
 var _proxy_targets_card_apply_count := 0
 var _passthrough_overlay_enabled := false
 var _passthrough_overlay_blend_ok := false
 var _passthrough_overlay_requested_blend_mode := "alpha_blend"
 var _passthrough_overlay_viewport: SubViewport = null
 var _passthrough_overlay_layer: OpenXRCompositionLayerQuad = null
-var _passthrough_overlay_status_write_elapsed := 0.0
 
 # M1: VST capture state. _vst_capture stays null on vanilla SDK and every helper
 # below short-circuits in that case, so all existing behaviour is preserved.
@@ -344,7 +345,7 @@ func _ready() -> void:
 	_build_card_anchor()
 	_build_xr_render_probe()
 	_build_vst_bbox_frame()
-	_build_status_label()
+	_build_status_hud()
 	_build_vst_target_proxy()
 	_build_debug_target_marker()
 	_build_proxy_targets_validation()
@@ -628,17 +629,12 @@ func _make_label(text: String, font_size: int, color: Color) -> Label:
 	return label
 
 
-func _build_status_label() -> void:
-	_status_label = Label3D.new()
-	_status_label.name = "MeshCardStatus"
-	_status_label.font_size = 22
-	_status_label.outline_size = 8
-	_status_label.no_depth_test = true
-	_status_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	_status_label.modulate = Color(0.72, 0.95, 1.0, 1.0)
-	_status_label.position = Vector3(0.0, -0.72, 0.03)
-	_card_anchor.add_child(_status_label)
-	_update_status_label()
+func _build_status_hud() -> void:
+	_status_hud = StatusHudScript.new()
+	_status_hud.name = "StatusHud"
+	add_child(_status_hud)
+	_status_hud.build_status_label(_card_anchor)
+	_status_hud.update_status_label(_build_status_snapshot())
 
 
 func _build_debug_target_marker() -> void:
@@ -732,7 +728,7 @@ func _poll_proxy_targets_ws(delta: float) -> void:
 			_proxy_targets_ws_packets_seen += 1
 			_proxy_targets_last_packet_bytes = packet.size()
 			var payload := packet.get_string_from_utf8()
-			_proxy_targets_last_packet_preview = _sanitize_proxy_targets_status_text(payload)
+			_proxy_targets_last_packet_preview = StatusHudScript.sanitize_status_text(payload)
 			_apply_proxy_targets_live_payload(payload)
 	elif state == WebSocketPeer.STATE_CLOSED:
 		_proxy_targets_ws_subscribed = false
@@ -810,51 +806,6 @@ func _record_proxy_targets_head_to_world_diagnostics() -> void:
 	_proxy_targets_last_world_position = _vector3_from_status_array(info.get("world_position", []), _proxy_targets_last_world_position)
 
 
-func _sanitize_proxy_targets_status_text(value: String) -> String:
-	return value.replace("\r", "\\r").replace("\n", "\\n").substr(0, 160)
-
-
-func _write_proxy_targets_status_file(delta: float) -> void:
-	_proxy_targets_status_write_elapsed += delta
-	if _proxy_targets_status_write_elapsed < 0.25:
-		return
-	_proxy_targets_status_write_elapsed = 0.0
-	var status := {
-		"ws_connected": _proxy_targets_ws_connected,
-		"ws_subscribed": _proxy_targets_ws_subscribed,
-		"ws_url": _proxy_targets_ws_url(),
-		"anchor_mode": _anchor_mode,
-		"attachments": _card_attachments.size(),
-		"card_target_id": _proxy_targets_card_target_id(),
-		"proxy_target_count": _proxy_targets_proxy_count(),
-		"proxy_target_ids": _proxy_targets_proxy_ids(),
-		"last_proxy_position": _format_vec3(_proxy_targets_last_position),
-		"card_attach_target_id": _proxy_targets_card_target_id(),
-		"card_resolved_position": _proxy_targets_card_resolved_position(),
-		"card_node_position": _proxy_targets_card_node_position(),
-		"card_apply_count": _proxy_targets_card_apply_count,
-		"packets": _proxy_targets_ws_packets_seen,
-		"parsed": _proxy_targets_parsed_messages,
-		"live": _proxy_targets_live_messages,
-		"sequence": _proxy_targets_last_sequence,
-		"packet_bytes": _proxy_targets_last_packet_bytes,
-		"packet_preview": _proxy_targets_last_packet_preview,
-		"message_type": _proxy_targets_last_message_type,
-		"source_coordinate": _proxy_targets_last_source_coordinate,
-		"source_coordinate_summary": _proxy_targets_source_coordinate_summary(),
-		"world_from_head_applied": _proxy_targets_last_world_from_head_applied,
-		"proxy_local_position": _format_vec3(_proxy_targets_last_local_position),
-		"proxy_world_position": _format_vec3(_proxy_targets_last_world_position),
-		"error": _proxy_targets_last_error,
-		"last_command": _last_command,
-	}
-	var status_file := FileAccess.open(PROXY_TARGETS_STATUS_RES, FileAccess.WRITE)
-	if status_file == null:
-		return
-	status_file.store_string(JSON.stringify(status))
-	status_file.close()
-
-
 func _proxy_targets_card_target_id() -> String:
 	var attachment = _card_attachments.get(CARD_ANCHOR_NAME)
 	if typeof(attachment) != TYPE_DICTIONARY:
@@ -894,20 +845,22 @@ func _vector3_from_status_array(value, fallback: Vector3) -> Vector3:
 	return Vector3(float(value[0]), float(value[1]), float(value[2]))
 
 
-func _proxy_targets_card_resolved_position() -> String:
+# Untyped returns: Vector3 when resolvable, null otherwise. StatusHud formats
+# null as "n/a" in the label and status files.
+func _proxy_targets_card_resolved_position():
 	var attachment = _card_attachments.get(CARD_ANCHOR_NAME)
 	if typeof(attachment) != TYPE_DICTIONARY:
-		return "n/a"
+		return null
 	var last_transform = attachment.get("last_transform")
 	if last_transform is Transform3D:
-		return _format_vec3(last_transform.origin)
-	return "n/a"
+		return last_transform.origin
+	return null
 
 
-func _proxy_targets_card_node_position() -> String:
+func _proxy_targets_card_node_position():
 	if _card_anchor == null:
-		return "n/a"
-	return _format_vec3(_card_anchor.global_transform.origin)
+		return null
+	return _card_anchor.global_transform.origin
 
 
 func _update_debug_target_marker(delta: float) -> void:
@@ -948,9 +901,7 @@ func _process(delta: float) -> void:
 	else:
 		_apply_3dof_anchor_transform()
 	_update_passthrough_overlay_layer()
-	_update_status_label()
-	_write_proxy_targets_status_file(delta)
-	_write_passthrough_overlay_status_file(delta)
+	_update_status_hud(delta)
 
 
 func _update_passthrough_overlay_layer() -> void:
@@ -963,42 +914,18 @@ func _update_passthrough_overlay_layer() -> void:
 	_passthrough_overlay_layer.global_transform = Transform3D(camera_transform.basis, world_position)
 
 
-func _write_passthrough_overlay_status_file(delta: float) -> void:
-	_passthrough_overlay_status_write_elapsed += delta
-	if _passthrough_overlay_status_write_elapsed < 0.25:
-		return
-	_passthrough_overlay_status_write_elapsed = 0.0
-	var status := {
-		"overlay_enabled": _passthrough_overlay_enabled,
-		"xr_interface_found": _xr_interface_found,
-		"xr_initialize_ok": _xr_initialize_ok,
-		"xr_active": _xr_active,
-		"viewport_transparent_bg": get_viewport().transparent_bg,
-		"requested_blend_mode": _passthrough_overlay_requested_blend_mode,
-		"blend_request_ok": _passthrough_overlay_blend_ok,
-		"layer_created": _passthrough_overlay_layer != null,
-		"layer_visible": _passthrough_overlay_layer.visible if _passthrough_overlay_layer != null else false,
-		"layer_alpha_blend": _passthrough_overlay_layer_alpha_blend(),
-		"layer_position": _passthrough_overlay_layer_position(),
-		"status": "ready" if _passthrough_overlay_enabled and _passthrough_overlay_layer != null else "disabled",
-	}
-	var status_file := FileAccess.open(PASSTHROUGH_OVERLAY_STATUS_RES, FileAccess.WRITE)
-	if status_file == null:
-		return
-	status_file.store_string(JSON.stringify(status))
-	status_file.close()
-
-
 func _passthrough_overlay_layer_alpha_blend() -> bool:
 	if _passthrough_overlay_layer == null:
 		return false
 	return bool(_passthrough_overlay_layer.alpha_blend)
 
 
-func _passthrough_overlay_layer_position() -> String:
+# Untyped return: Vector3 when the layer exists, null otherwise (StatusHud
+# formats null as "n/a").
+func _passthrough_overlay_layer_position():
 	if _passthrough_overlay_layer == null:
-		return "n/a"
-	return _format_vec3(_passthrough_overlay_layer.global_transform.origin)
+		return null
+	return _passthrough_overlay_layer.global_transform.origin
 
 
 func _build_vst_target_proxy() -> void:
@@ -1454,113 +1381,113 @@ func _corner_world_points() -> Dictionary:
 	}
 
 
-func _format_vec3(value: Vector3) -> String:
-	return "%.2f %.2f %.2f" % [value.x, value.y, value.z]
-
-
-func _update_status_label() -> void:
-	if _status_label == null or _card_anchor == null:
+func _update_status_hud(delta: float) -> void:
+	if _status_hud == null:
 		return
-	var corners := _corner_world_points()
-	var rotation := _card_anchor.rotation_degrees
-	var camera_pos := "n/a"
-	var camera_rot := "n/a"
-	if _camera != null:
-		camera_pos = _format_vec3(_camera.global_position)
-		camera_rot = _format_vec3(_camera.global_rotation_degrees)
-	var xr_origin_pos := "n/a"
-	if _xr_origin != null:
-		xr_origin_pos = _format_vec3(_xr_origin.global_position)
-	var xr_line := _format_xr_status_line()
-	var vst_line := _format_vst_status_line()
-	var proxy_targets_line := _format_proxy_targets_status_line()
-	_status_label.text = "3DoF Anchor\nWS: %s  Cmd: %s  Face: 3DoF  Mode: %s\nCamera Pos xyz: %s\nCamera Rot xyz: %s\nXROrigin Pos xyz: %s\nBBox cx/cy/w/h: %.0f %.0f %.0f %.0f  Depth: %.2f\nYaw/Pitch/Depth: %.1f %.1f %.2f  Angular W/H: %.1f %.1f  Rot: %.1f %.1f %.1f\nSpeed: %.1f deg/s  Paused: %s\nTL %.2f %.2f %.2f  TR %.2f %.2f %.2f\nBL %.2f %.2f %.2f  BR %.2f %.2f %.2f\n%s\n%s\n%s" % [
-		"connected" if _ws_connected else "waiting",
-		_last_command,
-		_anchor_mode,
-		camera_pos,
-		camera_rot,
-		xr_origin_pos,
-		_bbox_center_px.x,
-		_bbox_center_px.y,
-		_bbox_size_px.x,
-		_bbox_size_px.y,
-		_bbox_depth_m,
-		_anchor_yaw_deg,
-		_anchor_pitch_deg,
-		_anchor_depth_m,
-		_bbox_angular_size_deg.x,
-		_bbox_angular_size_deg.y,
-		rotation.x,
-		rotation.y,
-		rotation.z,
-		_speed_deg_per_second,
-		str(_paused),
-		corners["TL"].x,
-		corners["TL"].y,
-		corners["TL"].z,
-		corners["TR"].x,
-		corners["TR"].y,
-		corners["TR"].z,
-		corners["BL"].x,
-		corners["BL"].y,
-		corners["BL"].z,
-		corners["BR"].x,
-		corners["BR"].y,
-		corners["BR"].z,
-		proxy_targets_line,
-		xr_line,
-		vst_line,
-	]
+	var snapshot := _build_status_snapshot()
+	if _card_anchor != null:
+		_status_hud.update_status_label(snapshot)
+	_status_hud.write_status_files(snapshot, delta)
 
 
-func _format_xr_status_line() -> String:
-	var err_str := _xr_init_error if not _xr_init_error.is_empty() else "-"
-	return "XR: iface=%s init=%s active=%s use_xr=%s err=%s" % [
-		str(_xr_interface_found),
-		str(_xr_initialize_ok),
-		str(_xr_active),
-		str(get_viewport().use_xr),
-		err_str,
-	]
+## Per-frame status snapshot consumed by StatusHud (label rendering + the
+## user:// status file writers). This script resolves every value; StatusHud
+## only formats and writes.
+func _build_status_snapshot() -> Dictionary:
+	return {
+		"ws_connected": _ws_connected,
+		"last_command": _last_command,
+		"anchor_mode": _anchor_mode,
+		"camera_position": _camera.global_position if _camera != null else null,
+		"camera_rotation_degrees": _camera.global_rotation_degrees if _camera != null else null,
+		"xr_origin_position": _xr_origin.global_position if _xr_origin != null else null,
+		"bbox_center_px": _bbox_center_px,
+		"bbox_size_px": _bbox_size_px,
+		"bbox_depth_m": _bbox_depth_m,
+		"anchor_yaw_deg": _anchor_yaw_deg,
+		"anchor_pitch_deg": _anchor_pitch_deg,
+		"anchor_depth_m": _anchor_depth_m,
+		"bbox_angular_size_deg": _bbox_angular_size_deg,
+		"card_rotation_degrees": _card_anchor.rotation_degrees if _card_anchor != null else Vector3.ZERO,
+		"speed_deg_per_second": _speed_deg_per_second,
+		"paused": _paused,
+		"corners": _corner_world_points() if _card_mesh != null else {},
+		"viewport_use_xr": get_viewport().use_xr,
+		"viewport_transparent_bg": get_viewport().transparent_bg,
+		"xr": _build_xr_status_snapshot(),
+		"vst": _build_vst_status_snapshot(),
+		"proxy_targets": _build_proxy_targets_status_snapshot(),
+		"passthrough_overlay": _build_passthrough_overlay_status_snapshot(),
+	}
 
 
-func _format_proxy_targets_status_line() -> String:
-	return "ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s src=%s err=%s" % [
-		"connected" if _proxy_targets_ws_connected else "waiting",
-		str(_proxy_targets_ws_subscribed),
-		_proxy_targets_ws_packets_seen,
-		_proxy_targets_parsed_messages,
-		_proxy_targets_live_messages,
-		_proxy_targets_card_apply_count,
-		_proxy_targets_last_sequence,
-		_proxy_targets_last_packet_bytes,
-		_proxy_targets_last_message_type,
-		_format_vec3(_proxy_targets_last_position),
-		_proxy_targets_card_node_position(),
-		_proxy_targets_source_coordinate_summary(),
-		_proxy_targets_last_error,
-	]
+func _build_xr_status_snapshot() -> Dictionary:
+	return {
+		"interface_found": _xr_interface_found,
+		"initialize_ok": _xr_initialize_ok,
+		"active": _xr_active,
+		"init_error": _xr_init_error,
+	}
 
 
-func _proxy_targets_source_coordinate_summary() -> String:
-	if _proxy_targets_last_source_coordinate.is_empty():
-		return "-"
-	var space := str(_proxy_targets_last_source_coordinate.get("coordinate_space", "-"))
-	var anchor := str(_proxy_targets_last_source_coordinate.get("anchor", "-"))
-	var source_frame = _proxy_targets_last_source_coordinate.get("source_frame", {})
-	var fov := "-"
-	if typeof(source_frame) == TYPE_DICTIONARY:
-		fov = "%.1fx%.1f" % [
-			float(source_frame.get("horizontal_fov_deg", 0.0)),
-			float(source_frame.get("vertical_fov_deg", 0.0)),
-		]
-	return "%s %s fov=%s eye2head=%s" % [
-		space,
-		anchor,
-		fov,
-		str(_proxy_targets_last_source_coordinate.get("uses_right_eye_to_head", false)),
-	]
+func _build_vst_status_snapshot() -> Dictionary:
+	var target_state := "lost"
+	if _vst_target_adapter != null:
+		target_state = _vst_target_adapter.target.state
+	return {
+		"class_registered": _vst_class_registered,
+		"init_ok": _vst_init_ok,
+		"frames": _vst_right_frames,
+		"box_count": _vst_box_count,
+		"latency_ms": _vst_tracker_latency_ms,
+		"image_size": _vst_right_image_size,
+		"first_box": _vst_first_box,
+		"target_state": target_state,
+		"last_error": _vst_last_error,
+		"uses_eye_to_head_anchor": _vst_uses_eye_to_head_anchor,
+		"eye_to_head_status": _vst_eye_to_head_status,
+		"calibration_status": _vst_calibration_status,
+	}
+
+
+func _build_proxy_targets_status_snapshot() -> Dictionary:
+	return {
+		"ws_connected": _proxy_targets_ws_connected,
+		"ws_subscribed": _proxy_targets_ws_subscribed,
+		"ws_url": _proxy_targets_ws_url(),
+		"attachments": _card_attachments.size(),
+		"card_target_id": _proxy_targets_card_target_id(),
+		"proxy_target_count": _proxy_targets_proxy_count(),
+		"proxy_target_ids": _proxy_targets_proxy_ids(),
+		"last_position": _proxy_targets_last_position,
+		"card_resolved_position": _proxy_targets_card_resolved_position(),
+		"card_node_position": _proxy_targets_card_node_position(),
+		"card_apply_count": _proxy_targets_card_apply_count,
+		"packets": _proxy_targets_ws_packets_seen,
+		"parsed": _proxy_targets_parsed_messages,
+		"live": _proxy_targets_live_messages,
+		"sequence": _proxy_targets_last_sequence,
+		"packet_bytes": _proxy_targets_last_packet_bytes,
+		"packet_preview": _proxy_targets_last_packet_preview,
+		"message_type": _proxy_targets_last_message_type,
+		"source_coordinate": _proxy_targets_last_source_coordinate,
+		"world_from_head_applied": _proxy_targets_last_world_from_head_applied,
+		"local_position": _proxy_targets_last_local_position,
+		"world_position": _proxy_targets_last_world_position,
+		"error": _proxy_targets_last_error,
+	}
+
+
+func _build_passthrough_overlay_status_snapshot() -> Dictionary:
+	return {
+		"enabled": _passthrough_overlay_enabled,
+		"requested_blend_mode": _passthrough_overlay_requested_blend_mode,
+		"blend_request_ok": _passthrough_overlay_blend_ok,
+		"layer_created": _passthrough_overlay_layer != null,
+		"layer_visible": _passthrough_overlay_layer.visible if _passthrough_overlay_layer != null else false,
+		"layer_alpha_blend": _passthrough_overlay_layer_alpha_blend(),
+		"layer_position": _passthrough_overlay_layer_position(),
+	}
 
 
 func _exit_tree() -> void:
@@ -1769,33 +1696,6 @@ func _vst_tracker_box_to_target_transform(boxes: PackedFloat32Array) -> Transfor
 	var target_transform := Transform3D.IDENTITY
 	target_transform.origin = _target_position_from_bbox_anchor(anchor)
 	return target_transform
-
-
-func _format_vst_status_line() -> String:
-	var class_state := "registered" if _vst_class_registered else "missing"
-	var init_state := "ok" if _vst_init_ok else "blocked"
-	var box_str := "n/a"
-	if _vst_first_box.size() >= 5:
-		box_str = "%.2f %.2f %.2f %.2f %.2f" % [_vst_first_box[0], _vst_first_box[1], _vst_first_box[2], _vst_first_box[3], _vst_first_box[4]]
-	var target_state_line := "target_state=lost"
-	if _vst_target_adapter != null:
-		target_state_line = "target_state=" + _vst_target_adapter.target.state
-	var err_str := _vst_last_error if not _vst_last_error.is_empty() else "-"
-	return "VST: cls=%s init=%s frames=%d boxes=%d latency=%.1fms img=%.0fx%.0f box0=%s %s err=%s\nAnchor: %s\n%s\n%s" % [
-		class_state,
-		init_state,
-		_vst_right_frames,
-		_vst_box_count,
-		_vst_tracker_latency_ms,
-		_vst_right_image_size.x,
-		_vst_right_image_size.y,
-		box_str,
-		target_state_line,
-		err_str,
-		"eye2head" if _vst_uses_eye_to_head_anchor else "raw-fov",
-		_vst_eye_to_head_status,
-		_vst_calibration_status,
-	]
 
 
 func _make_panel_style() -> StyleBoxFlat:
