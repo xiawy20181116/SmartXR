@@ -40,6 +40,8 @@ def build_proxy_targets_message(
             {
                 "target_id": target_id,
                 "source": "fake_vst",
+                "coordinate_space": "world",
+                "transform_space": "world",
                 "state": "tracked",
                 "confidence": 0.96,
                 "timestamp_ms": int(time.time() * 1000),
