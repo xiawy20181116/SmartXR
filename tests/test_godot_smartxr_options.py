@@ -14,7 +14,11 @@ class GodotSmartXROptionsTests(unittest.TestCase):
 
         self.assertIn("class_name SmartXROptions", source)
         self.assertIn('const CONFIG_RES := "user://smartxr_options.json"', source)
-        self.assertIn("static func load_options() -> SmartXROptions:", source)
+        # Untyped static constructors on purpose: self-referencing the
+        # class_name breaks compilation in no-project (script-only) mode.
+        self.assertIn("static func load_options():", source)
+        self.assertIn("static func load_options_from(config_path: String):", source)
+        self.assertNotIn("SmartXROptions.new()", source)
         # Resolution order: env var first, then config file, then default.
         self.assertIn("func resolve_string(config_key: String, env_name: String, default_value: String) -> String:", source)
         self.assertIn("func resolve_bool(config_key: String, env_name: String, default_value: bool) -> bool:", source)
@@ -39,7 +43,7 @@ class GodotSmartXROptionsTests(unittest.TestCase):
         source = SCRIPT.read_text(encoding="utf-8")
 
         self.assertIn('const SmartXROptionsScript := preload("res://scripts/smartxr_options.gd")', source)
-        self.assertIn("var _options := SmartXROptionsScript.load_options()", source)
+        self.assertIn("var _options = SmartXROptionsScript.load_options()", source)
         # The control channel URL must no longer be hardwired at the call site.
         self.assertNotIn("connect_to_url(WS_URL)", source)
         self.assertIn("connect_to_url(_control_ws_url())", source)
@@ -56,6 +60,23 @@ class GodotSmartXROptionsTests(unittest.TestCase):
         self.assertIn("SMARTXR_CONTROL_WS_URL", doc)
         self.assertIn("PROXY_TARGETS_WS_URL", doc)
         self.assertIn("SMARTXR_PROXY_TARGETS_WS_ENABLED", doc)
+        self.assertIn("run_godot_smartxr_options_probe.ps1", doc)
+
+    def test_runtime_probe_and_runner_exist(self):
+        probe = (ROOT / "godot-android" / "tests" / "script_only_smartxr_options_probe.gd").read_text(encoding="utf-8")
+        runner = (ROOT / "tools" / "run_godot_smartxr_options_probe.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("extends SceneTree", probe)
+        # No-project mode: scripts and paths are injected via env vars, and
+        # quit() must happen in _process, not _initialize.
+        self.assertIn('OS.get_environment("SMARTXR_OPTIONS_SCRIPT")', probe)
+        self.assertIn("SMARTXR_OPTIONS_PROBE_STATUS_PATH", probe)
+        self.assertIn("func _process(_delta: float) -> bool:", probe)
+        self.assertIn("load_options_from(_config_path)", probe)
+        self.assertIn("env_beats_config", probe)
+        self.assertIn('"--script", $ProbeScript', runner)
+        self.assertNotIn('"--path"', runner)
+        self.assertIn("SMARTXR_OPTIONS_SCRIPT", runner)
 
 
 if __name__ == "__main__":

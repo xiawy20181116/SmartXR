@@ -23,18 +23,27 @@ var _config := {}
 var _config_loaded := false
 
 
-static func load_options() -> SmartXROptions:
-	var options := SmartXROptions.new()
-	options._load_config_file()
+# Untyped returns and bare new() on purpose: naming SmartXROptions inside its
+# own file breaks compilation in no-project mode (script-only probes), where
+# class_name global registration does not happen.
+static func load_options():
+	return load_options_from(CONFIG_RES)
+
+
+## Same as load_options() but reading the config from an explicit path.
+## Used by the script-only runtime probe; production code uses CONFIG_RES.
+static func load_options_from(config_path: String):
+	var options = new()
+	options._load_config_file(config_path)
 	return options
 
 
-func _load_config_file() -> void:
+func _load_config_file(config_path: String = CONFIG_RES) -> void:
 	_config_loaded = true
 	_config = {}
-	if not FileAccess.file_exists(CONFIG_RES):
+	if not FileAccess.file_exists(config_path):
 		return
-	var file := FileAccess.open(CONFIG_RES, FileAccess.READ)
+	var file := FileAccess.open(config_path, FileAccess.READ)
 	if file == null:
 		return
 	var text := file.get_as_text()
@@ -43,7 +52,7 @@ func _load_config_file() -> void:
 	if typeof(parsed) == TYPE_DICTIONARY:
 		_config = parsed
 	else:
-		push_warning("SmartXROptions: %s is not a JSON object; ignoring" % CONFIG_RES)
+		push_warning("SmartXROptions: %s is not a JSON object; ignoring" % config_path)
 
 
 func resolve_string(config_key: String, env_name: String, default_value: String) -> String:

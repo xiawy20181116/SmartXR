@@ -45,6 +45,44 @@ other non-empty value is false.
 On Android, `user://` resolves under the app's files directory, e.g.
 `/sdcard/Android/data/com.smartxr.godotcontrol/files/`.
 
+## Runtime verification
+
+Three levels, no device needed for the first two:
+
+1. **Options resolution probe** (runtime, headless, ~3 s):
+
+   ```powershell
+   powershell -File tools\run_godot_smartxr_options_probe.ps1 [-GodotExe <path to Godot 4 exe>]
+   ```
+
+   Runs `godot-android/tests/script_only_smartxr_options_probe.gd` in
+   no-project mode and asserts default / config-file / env resolution and
+   bool parsing against the real script. Exit 0 + `PASS` means the M1 logic
+   works at runtime. Status JSON lands in `.tmp\smartxr_options_probe\`.
+
+2. **End-to-end pipeline harnesses** (runtime, headless):
+
+   ```powershell
+   # publisher started for you:
+   powershell -File tools\run_godot_script_only_websocket_probe.ps1
+   # or against a publisher you started yourself on :8766:
+   python tools\fake_proxy_targets_publisher.py --host 127.0.0.1 --port 8766
+   powershell -File tools\run_godot_proxy_targets_consumer_only.ps1
+   ```
+
+   Verifies Python publisher -> WebSocket -> Godot consumer -> card adapter
+   (`ws_connected/parsed/registered_targets` in the status JSON).
+
+3. **Full app** (`AndroidMovingCard.gd` end to end): requires the editor or a
+   device — headless project mode boots the main scene, which reconnects
+   WebSockets forever and never exits, so it cannot be scripted this way.
+   Open the project once in Godot 4 (parse check) and use
+   `tools\run_proxy_targets_live_manual_check.ps1` / on-device flows.
+
+Note for probe authors: scripts loaded by the probes must not self-reference
+their own `class_name` (no `-> SmartXROptions` return types, use bare
+`new()`), because global class registration only happens in project mode.
+
 ## Adding a new setting
 
 1. Add an `ENV_*` const and a typed accessor to `smartxr_options.gd`.

@@ -35,6 +35,27 @@
 - `tests/test_godot_android_mesh_card.py` — publisher-source and URL
   assertions repointed to the package / options delegation.
 
+## Runtime verification addendum (same branch, follow-up commit)
+
+- Added `godot-android/tests/script_only_smartxr_options_probe.gd` +
+  `tools/run_godot_smartxr_options_probe.ps1`: headless no-project runtime
+  probe for SmartXROptions (10 checks: default / config / env priority /
+  bool parsing). PASSES on Godot 4.6.2.
+- Fixed a real bug the probe caught: `smartxr_options.gd` self-referenced its
+  `class_name` (typed static constructors + `SmartXROptions.new()`), which
+  fails to compile in no-project (script-only) mode. Constructors are now
+  untyped with bare `new()`; `AndroidMovingCard.gd` `_options` uses `=`
+  instead of `:=` accordingly.
+- `load_options_from(path)` added so the probe (and future tests) can point
+  the config at a temp file instead of `user://`.
+- Existing harnesses re-run against the refactored M2 publisher:
+  `run_godot_script_only_websocket_probe.ps1` -> `ws_connected=true, packets=1`;
+  `run_godot_proxy_targets_consumer_only.ps1` + live fake publisher ->
+  `parsed=1, registered_targets=1`.
+- `docs/smartxr_options.md` gained a "Runtime verification" section;
+  `tests/test_godot_smartxr_options.py` pins the probe/runner contract
+  (now 5 test methods).
+
 ## Verification run
 
 - `python -m unittest tests/test_*.py` → 118 tests, OK.

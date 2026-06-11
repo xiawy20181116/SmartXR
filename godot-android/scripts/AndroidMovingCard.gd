@@ -56,7 +56,7 @@ const SmartXROptionsScript := preload("res://scripts/smartxr_options.gd")
 # Centralized runtime configuration (env var -> user://smartxr_options.json
 # -> script const default). The consts below stay as the defaults; deployment
 # overrides go through SmartXROptions instead of source edits.
-var _options := SmartXROptionsScript.load_options()
+var _options = SmartXROptionsScript.load_options()
 
 # M1 (YAN-56): on-device VST capture + ncnn tracker scaffold.
 # Functional behaviour is gated on GXRDualVstCapture class registration so the
