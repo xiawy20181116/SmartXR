@@ -61,7 +61,9 @@ class FakeProxyTargetsPublisherTests(unittest.TestCase):
         self.assertEqual(second["sequence"], 2)
 
     def test_server_status_logs_flush_immediately(self):
-        source = PUBLISHER.read_text(encoding="utf-8")
+        # Serve-loop implementation lives in the smartxr package; the tools
+        # file is a compatibility wrapper.
+        source = (ROOT / "smartxr" / "cli" / "fake_publisher.py").read_text(encoding="utf-8")
 
         self.assertIn("proxy_targets fake publisher listening", source)
         self.assertIn("flush=True", source)

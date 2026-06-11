@@ -1,0 +1,82 @@
+extends RefCounted
+class_name SmartXROptions
+
+## Centralized runtime configuration for SmartXR (M1 of the encapsulation plan).
+##
+## Resolution order for every setting, highest priority first:
+##   1. environment variable (e.g. set per adb session or test harness)
+##   2. user://smartxr_options.json config file on the device
+##   3. the default value passed by the caller (usually a script const)
+##
+## Keep this class dependency-free: it must stay loadable in script-only
+## probes and on a vanilla GXR SDK.
+
+const CONFIG_RES := "user://smartxr_options.json"
+
+## Environment variable names. PROXY_TARGETS_WS_URL predates this class and
+## keeps its historical name; new settings use the SMARTXR_ prefix.
+const ENV_CONTROL_WS_URL := "SMARTXR_CONTROL_WS_URL"
+const ENV_PROXY_TARGETS_WS_URL := "PROXY_TARGETS_WS_URL"
+const ENV_PROXY_TARGETS_WS_ENABLED := "SMARTXR_PROXY_TARGETS_WS_ENABLED"
+
+var _config := {}
+var _config_loaded := false
+
+
+static func load_options() -> SmartXROptions:
+	var options := SmartXROptions.new()
+	options._load_config_file()
+	return options
+
+
+func _load_config_file() -> void:
+	_config_loaded = true
+	_config = {}
+	if not FileAccess.file_exists(CONFIG_RES):
+		return
+	var file := FileAccess.open(CONFIG_RES, FileAccess.READ)
+	if file == null:
+		return
+	var text := file.get_as_text()
+	file.close()
+	var parsed = JSON.parse_string(text)
+	if typeof(parsed) == TYPE_DICTIONARY:
+		_config = parsed
+	else:
+		push_warning("SmartXROptions: %s is not a JSON object; ignoring" % CONFIG_RES)
+
+
+func resolve_string(config_key: String, env_name: String, default_value: String) -> String:
+	var env_value := OS.get_environment(env_name).strip_edges()
+	if not env_value.is_empty():
+		return env_value
+	if _config.has(config_key) and typeof(_config[config_key]) == TYPE_STRING:
+		var config_value := str(_config[config_key]).strip_edges()
+		if not config_value.is_empty():
+			return config_value
+	return default_value
+
+
+func resolve_bool(config_key: String, env_name: String, default_value: bool) -> bool:
+	var env_value := OS.get_environment(env_name).strip_edges().to_lower()
+	if not env_value.is_empty():
+		return ["1", "true", "yes", "on"].has(env_value)
+	if _config.has(config_key) and typeof(_config[config_key]) == TYPE_BOOL:
+		return _config[config_key]
+	return default_value
+
+
+## Control channel (keyboard ws_control server). Overridable so the URL is
+## no longer pinned to one development machine's LAN address.
+func control_ws_url(default_url: String) -> String:
+	return resolve_string("control_ws_url", ENV_CONTROL_WS_URL, default_url)
+
+
+## proxy_targets live stream endpoint.
+func proxy_targets_ws_url(default_url: String) -> String:
+	return resolve_string("proxy_targets_ws_url", ENV_PROXY_TARGETS_WS_URL, default_url)
+
+
+## Whether the proxy_targets live WebSocket consumer should run.
+func proxy_targets_ws_enabled(default_enabled: bool) -> bool:
+	return resolve_bool("proxy_targets_ws_enabled", ENV_PROXY_TARGETS_WS_ENABLED, default_enabled)

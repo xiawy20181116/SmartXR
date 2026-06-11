@@ -4,11 +4,20 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
-import hashlib
 import json
 import sys
 from collections.abc import Awaitable, Callable
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from smartxr.transport import (  # noqa: E402
+    WEBSOCKET_GUID as WS_GUID,
+    encode_server_text_frame,
+    make_websocket_accept_key,
+)
 
 try:
     import msvcrt
@@ -23,7 +32,6 @@ except ImportError:  # pragma: no cover - reported clearly by main().
 
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8766
-WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 KEY_COMMANDS = {
     "a": "yaw_left",
@@ -85,23 +93,6 @@ def build_bbox_message(
         },
         separators=(",", ":"),
     )
-
-
-def make_websocket_accept_key(client_key: str) -> str:
-    digest = hashlib.sha1((client_key + WS_GUID).encode("ascii")).digest()
-    return base64.b64encode(digest).decode("ascii")
-
-
-def encode_server_text_frame(text: str) -> bytes:
-    payload = text.encode("utf-8")
-    size = len(payload)
-    if size < 126:
-        header = bytes((0x81, size))
-    elif size <= 0xFFFF:
-        header = bytes((0x81, 126)) + size.to_bytes(2, "big")
-    else:
-        header = bytes((0x81, 127)) + size.to_bytes(8, "big")
-    return header + payload
 
 
 def command_for_key(key: str) -> str | None:

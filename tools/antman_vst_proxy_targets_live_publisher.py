@@ -12,20 +12,23 @@ from typing import Any
 TOOLS_DIR = Path(__file__).resolve().parent
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
+_ROOT = TOOLS_DIR.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
-from capture_vst_target_sample_session import normalize_frame  # noqa: E402
 from dump_antman_vst_humantrackor_jsonl import (  # noqa: E402
     DEFAULT_ANTMAN_ROOT,
     _create_live_reader_and_tracker,
     build_frame_record,
     startup_error_status,
 )
-from fake_proxy_targets_publisher import (  # noqa: E402
-    _drain_client_frames,
-    _handshake,
+from smartxr.frames import normalize_frame  # noqa: E402
+from smartxr.publisher import DEFAULT_TARGET_DEPTH_M, normalize_source_payload  # noqa: E402
+from smartxr.transport import (  # noqa: E402
+    drain_client_frames as _drain_client_frames,
     encode_websocket_text_frame,
+    handshake as _handshake,
 )
-from vst_proxy_targets_publisher import DEFAULT_TARGET_DEPTH_M, normalize_source_payload  # noqa: E402
 
 
 def _people_count(tracking_result: Any) -> int:
