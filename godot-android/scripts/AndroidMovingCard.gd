@@ -818,9 +818,12 @@ func _write_proxy_targets_status_file(delta: float) -> void:
 		"proxy_target_count": _proxy_targets_proxy_count(),
 		"proxy_target_ids": _proxy_targets_proxy_ids(),
 		"last_proxy_position": _format_vec3(_proxy_targets_last_position),
+		"last_proxy_position_3d": _vec3_to_status_array(_proxy_targets_last_position),
 		"card_attach_target_id": _proxy_targets_card_target_id(),
 		"card_resolved_position": _proxy_targets_card_resolved_position(),
+		"card_attach_position_3d": _proxy_targets_card_attach_position_3d(),
 		"card_node_position": _proxy_targets_card_node_position(),
+		"card_node_position_3d": _proxy_targets_card_node_position_3d(),
 		"card_apply_count": _proxy_targets_card_apply_count,
 		"packets": _proxy_targets_ws_packets_seen,
 		"parsed": _proxy_targets_parsed_messages,
@@ -833,7 +836,9 @@ func _write_proxy_targets_status_file(delta: float) -> void:
 		"source_coordinate_summary": _proxy_targets_source_coordinate_summary(),
 		"world_from_head_applied": _proxy_targets_last_world_from_head_applied,
 		"proxy_local_position": _format_vec3(_proxy_targets_last_local_position),
+		"proxy_local_position_3d": _vec3_to_status_array(_proxy_targets_last_local_position),
 		"proxy_world_position": _format_vec3(_proxy_targets_last_world_position),
+		"proxy_world_position_3d": _vec3_to_status_array(_proxy_targets_last_world_position),
 		"error": _proxy_targets_last_error,
 		"last_command": _last_command,
 	}
@@ -893,10 +898,26 @@ func _proxy_targets_card_resolved_position() -> String:
 	return "n/a"
 
 
+func _proxy_targets_card_attach_position_3d() -> Array:
+	var attachment = _card_attachments.get(CARD_ANCHOR_NAME)
+	if typeof(attachment) != TYPE_DICTIONARY:
+		return []
+	var last_transform = attachment.get("last_transform")
+	if last_transform is Transform3D:
+		return _vec3_to_status_array(last_transform.origin)
+	return []
+
+
 func _proxy_targets_card_node_position() -> String:
 	if _card_anchor == null:
 		return "n/a"
 	return _format_vec3(_card_anchor.global_transform.origin)
+
+
+func _proxy_targets_card_node_position_3d() -> Array:
+	if _card_anchor == null:
+		return []
+	return _vec3_to_status_array(_card_anchor.global_transform.origin)
 
 
 func _update_debug_target_marker(delta: float) -> void:
@@ -1447,6 +1468,10 @@ func _format_vec3(value: Vector3) -> String:
 	return "%.2f %.2f %.2f" % [value.x, value.y, value.z]
 
 
+func _vec3_to_status_array(value: Vector3) -> Array:
+	return [value.x, value.y, value.z]
+
+
 func _update_status_label() -> void:
 	if _status_label == null or _card_anchor == null:
 		return
@@ -1515,7 +1540,7 @@ func _format_xr_status_line() -> String:
 
 
 func _format_proxy_targets_status_line() -> String:
-	return "ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s src=%s err=%s" % [
+	return "ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s attach=%s card=%s local=%s world=%s src=%s err=%s" % [
 		"connected" if _proxy_targets_ws_connected else "waiting",
 		str(_proxy_targets_ws_subscribed),
 		_proxy_targets_ws_packets_seen,
@@ -1526,7 +1551,10 @@ func _format_proxy_targets_status_line() -> String:
 		_proxy_targets_last_packet_bytes,
 		_proxy_targets_last_message_type,
 		_format_vec3(_proxy_targets_last_position),
+		_proxy_targets_card_resolved_position(),
 		_proxy_targets_card_node_position(),
+		_format_vec3(_proxy_targets_last_local_position),
+		_format_vec3(_proxy_targets_last_world_position),
 		_proxy_targets_source_coordinate_summary(),
 		_proxy_targets_last_error,
 	]
