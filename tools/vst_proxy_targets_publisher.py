@@ -236,6 +236,8 @@ def normalize_source_payload(
         target = {
             "target_id": target_id,
             "source": source,
+            "coordinate_space": "head",
+            "transform_space": "head",
             "state": _canonical_state(detection.get("state", "tracked")),
             "confidence": _as_float(detection.get("confidence"), 1.0),
             "timestamp_ms": _as_float(detection.get("timestamp_ms"), timestamp_ms),

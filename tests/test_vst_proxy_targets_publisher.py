@@ -40,6 +40,8 @@ class VSTProxyTargetsPublisherTests(unittest.TestCase):
         self.assertEqual(message["targets"][0]["source_coordinate"]["coordinate_space"], "vst_camera_right")
         self.assertEqual(message["targets"][0]["source_coordinate"]["publisher_convention"], "godot_head")
         self.assertEqual(message["targets"][0]["source_coordinate"]["anchor"], "target_center")
+        self.assertEqual(message["targets"][0]["coordinate_space"], "head")
+        self.assertEqual(message["targets"][0]["transform_space"], "head")
 
     def test_vst_bbox_projection_uses_fov_and_head_coordinate_convention(self):
         publisher = load_module(PUBLISHER, "vst_proxy_targets_publisher")

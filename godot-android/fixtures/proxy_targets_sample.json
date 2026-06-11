@@ -6,6 +6,8 @@
     {
       "target_id": "person-7",
       "source": "vst",
+      "coordinate_space": "world",
+      "transform_space": "world",
       "state": "tracked",
       "confidence": 0.91,
       "timestamp_ms": 1000,

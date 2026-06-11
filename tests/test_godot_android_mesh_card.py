@@ -350,6 +350,8 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertEqual(sample["cards"][0]["target_id"], sample["targets"][0]["target_id"])
         self.assertEqual(sample["cards"][0]["offset_rule"]["mode"], "right_top")
         self.assertEqual(sample["cards"][0]["offset_rule"]["offset_space"], "world")
+        self.assertEqual(sample["targets"][0]["coordinate_space"], "world")
+        self.assertEqual(sample["targets"][0]["transform_space"], "world")
         serialized = json.dumps(sample)
         self.assertNotIn("bbox", serialized)
         self.assertNotIn("detection", serialized)
@@ -431,11 +433,40 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('choices=["moving", "static"]', source)
         self.assertIn('"type": "proxy_targets"', source)
         self.assertIn('"schema_version": 1', source)
+        self.assertIn('"coordinate_space": "world"', source)
+        self.assertIn('"transform_space": "world"', source)
         self.assertIn('"card_id": card_id', source)
         self.assertIn('"target_id": target_id', source)
         self.assertNotIn("import websockets", source)
         self.assertNotIn("bbox", source)
         self.assertNotIn("detection", source)
+
+    def test_proxy_targets_consumer_converts_head_space_to_world(self):
+        consumer = PROXY_TARGETS_CONSUMER.read_text(encoding="utf-8")
+
+        self.assertIn("var head_reference: Node3D = null", consumer)
+        self.assertIn("func set_head_reference(reference: Node3D) -> void:", consumer)
+        self.assertIn("func get_last_applied_target_info() -> Dictionary:", consumer)
+        self.assertIn('target.get("transform_space"', consumer)
+        self.assertIn('target.get("coordinate_space"', consumer)
+        self.assertIn('source_coordinate.get("publisher_convention"', consumer)
+        self.assertIn("func _is_head_coordinate_space(coordinate_space: String) -> bool:", consumer)
+        self.assertIn("func _head_transform_to_world(head_transform: Transform3D) -> Transform3D:", consumer)
+        self.assertIn("return head_reference.global_transform * head_transform", consumer)
+        self.assertIn("world_from_head_applied", consumer)
+        self.assertIn('"world_position": _vec3_to_array(parsed_transform.origin)', consumer)
+
+    def test_proxy_targets_status_reports_head_to_world_diagnostics(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("_proxy_targets_consumer.set_head_reference(_camera)", source)
+        self.assertIn("var _proxy_targets_last_world_from_head_applied := false", source)
+        self.assertIn("var _proxy_targets_last_local_position := Vector3.ZERO", source)
+        self.assertIn("var _proxy_targets_last_world_position := Vector3.ZERO", source)
+        self.assertIn("get_last_applied_target_info", source)
+        self.assertIn('"world_from_head_applied": _proxy_targets_last_world_from_head_applied', source)
+        self.assertIn('"proxy_local_position": _format_vec3(_proxy_targets_last_local_position)', source)
+        self.assertIn('"proxy_world_position": _format_vec3(_proxy_targets_last_world_position)', source)
 
     def test_moving_card_reports_xr_pose_for_tracking_diagnosis(self):
         source = SCRIPT.read_text(encoding="utf-8")
