@@ -26,6 +26,11 @@ from fake_proxy_targets_publisher import (  # noqa: E402
     encode_websocket_text_frame,
 )
 from vst_proxy_targets_publisher import DEFAULT_TARGET_DEPTH_M, normalize_source_payload  # noqa: E402
+from proxy_targets_smoothing import (  # noqa: E402
+    TargetPositionSmoother,
+    add_smoothing_arguments,
+    smoother_from_args,
+)
 
 
 def _people_count(tracking_result: Any) -> int:
@@ -183,6 +188,7 @@ def _publish_loop(
     min_confidence: float,
     log_every: int,
     max_empty_reads: int,
+    smoother: TargetPositionSmoother | None = None,
 ) -> None:
     interval_s = 1.0 / max(hz, 0.1)
     sequence = 0
@@ -198,6 +204,8 @@ def _publish_loop(
             min_confidence=min_confidence,
             max_empty_reads=max_empty_reads,
         )
+        if message is not None and smoother is not None:
+            message = smoother.smooth_message(message)
         if message is None:
             empty_windows += 1
             if log_every > 0 and empty_windows % log_every == 1:
@@ -237,6 +245,9 @@ def serve(args: argparse.Namespace) -> int:
             print(f"proxy_targets live publisher listening on ws://{args.host}:{args.port}/proxy_targets", flush=True)
             print("source: VST SHM + HumanTrackor", flush=True)
             print("waiting for WebSocket client; sent seq appears after a client connects and a target frame passes confidence gate", flush=True)
+            smoother = smoother_from_args(args, default_dt_s=1.0 / max(args.hz, 0.1))
+            if smoother.mode != "none":
+                print(f"smoothing: {smoother.describe()}", flush=True)
             while True:
                 conn, address = server.accept()
                 with conn:
@@ -245,6 +256,7 @@ def serve(args: argparse.Namespace) -> int:
                         print(f"rejected {address}: {first_line}", flush=True)
                         continue
                     print(f"client connected from {address}: {first_line}", flush=True)
+                    smoother.reset()
                     try:
                         _publish_loop(
                             conn,
@@ -255,6 +267,7 @@ def serve(args: argparse.Namespace) -> int:
                             min_confidence=args.min_confidence,
                             log_every=args.log_every,
                             max_empty_reads=args.max_empty_reads,
+                            smoother=smoother,
                         )
                     except (BrokenPipeError, ConnectionResetError, OSError):
                         print(f"client disconnected: {address}", flush=True)
@@ -281,6 +294,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--backend", default="ultralytics")
     parser.add_argument("--imgsz", type=int, default=320)
     parser.add_argument("--device", default=None)
+    add_smoothing_arguments(parser)
     return parser.parse_args()
 
 
