@@ -25,6 +25,7 @@ from capture_vst_target_sample_session import normalize_frame  # noqa: E402
 DEFAULT_HORIZONTAL_FOV_DEG = 70.0
 DEFAULT_VERTICAL_FOV_DEG = 43.0
 DEFAULT_COORDINATE_SPACE = "vst_camera_right"
+DEFAULT_TARGET_DEPTH_M = 5.0
 
 
 def _as_float(value: Any, fallback: float) -> float:
@@ -206,7 +207,7 @@ def normalize_source_payload(
     source_payload: dict[str, Any],
     sequence: int | None = None,
     card_id: str = "CardAnchor",
-    default_depth_m: float = 1.2,
+    default_depth_m: float = DEFAULT_TARGET_DEPTH_M,
 ) -> dict[str, Any]:
     if source_payload.get("type") == "proxy_targets":
         message = json.loads(json.dumps(source_payload))
@@ -284,7 +285,11 @@ def load_source_payload(path: Path) -> dict[str, Any]:
     return payload
 
 
-def load_source_messages(path: Path, card_id: str = "CardAnchor", default_depth_m: float = 1.2) -> list[dict[str, Any]]:
+def load_source_messages(
+    path: Path,
+    card_id: str = "CardAnchor",
+    default_depth_m: float = DEFAULT_TARGET_DEPTH_M,
+) -> list[dict[str, Any]]:
     if path.suffix.lower() != ".jsonl":
         return [normalize_source_payload(load_source_payload(path), card_id=card_id, default_depth_m=default_depth_m)]
 

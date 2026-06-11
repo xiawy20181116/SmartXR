@@ -73,6 +73,32 @@ class VSTProxyTargetsPublisherTests(unittest.TestCase):
         self.assertAlmostEqual(sum(component * component for component in position) ** 0.5, 2.0, places=6)
         self.assertEqual(message["targets"][0]["source_coordinate"]["source_frame"]["horizontal_fov_deg"], 70.0)
 
+    def test_vst_bbox_without_depth_uses_five_meter_default(self):
+        publisher = load_module(PUBLISHER, "vst_proxy_targets_publisher")
+
+        message = publisher.normalize_source_payload(
+            {
+                "source": "vst",
+                "timestamp_ms": 1780911169157,
+                "image": {"w": 880, "h": 660},
+                "detections": [
+                    {
+                        "id": "person-center",
+                        "confidence": 0.9,
+                        "bbox": {"cx": 440.0, "cy": 330.0, "w": 100.0, "h": 200.0},
+                    }
+                ],
+            }
+        )
+
+        target = message["targets"][0]
+        position = target["transform"]["position"]
+        self.assertAlmostEqual(position[0], 0.0)
+        self.assertAlmostEqual(position[1], 0.0)
+        self.assertAlmostEqual(position[2], -5.0)
+        self.assertEqual(target["source_coordinate"]["depth_source"], "default_depth")
+        self.assertEqual(target["source_coordinate"]["source_frame"]["anchor_depth"], 5.0)
+
     def test_vst_bbox_projection_can_apply_right_eye_to_head_matrix(self):
         publisher = load_module(PUBLISHER, "vst_proxy_targets_publisher")
 
