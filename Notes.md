@@ -1,5 +1,21 @@
 # Notes — change log
 
+## YAN-76 follow-up — WS_URL default flipped to loopback
+
+- `godot-android/scripts/AndroidMovingCard.gd` — `WS_URL` default changed
+  from the historical dev-machine LAN IP `ws://10.1.98.195:8766/control` to
+  `ws://127.0.0.1:8766/control`, per the owner's decision on the YAN-76
+  thread. Resolution order is unchanged (env `SMARTXR_CONTROL_WS_URL` ->
+  `user://smartxr_options.json` -> const default, ADR-2); only the
+  last-resort default moved. Deployments that relied on the baked-in LAN
+  address must now set the env var or config file.
+- `HANDOFF.md` risk bullet updated, ADR-2 in `DECISIONS.md` annotated.
+- Verification (re-run after rebasing onto the merged M3-4, PR #13): full
+  Python suite (131 tests) OK; smartxr options probe 10/10 PASS (resolution
+  order unchanged); card compile gate clean; no test pinned the old literal.
+  Re-verified after merging the M3-5 main (PR #15): 134 tests OK, options
+  probe 10/10, card compile gate clean.
+
 ## M3 step 5 — XRBootstrap extraction (YAN-79)
 
 ### Files added

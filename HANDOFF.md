@@ -105,10 +105,11 @@
   retry-loop tests need an accept-then-close TCP listener that fails the
   handshake instead; and `connect_to_url("not a url")` returns OK (parsed as
   a host) — only a non-ws/wss scheme fails synchronously.
-- `WS_URL` still defaults to the historical LAN IP `ws://10.1.98.195:8766/control`
-  (kept deliberately for behavior parity). Override via `SMARTXR_CONTROL_WS_URL`
-  or `user://smartxr_options.json`; consider changing the default to
-  `127.0.0.1` in a follow-up.
+- `WS_URL` now defaults to `ws://127.0.0.1:8766/control` (flipped from the
+  historical dev-machine LAN IP per the owner's decision on YAN-76).
+  On-device deployments that relied on the old baked-in LAN address must set
+  `SMARTXR_CONTROL_WS_URL` or `user://smartxr_options.json` to reach the
+  control server.
 - `resolve_bool` returning a Variant from `_config` may emit an UNSAFE_CAST
   style warning in strict Godot editors; harmless, but can be silenced with an
   explicit `bool()` cast if the project enables treat-warnings-as-errors.

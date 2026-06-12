@@ -24,7 +24,10 @@ const MIN_SPEED_DEG_PER_SECOND := 0.0
 const MAX_SPEED_DEG_PER_SECOND := 45.0
 const MIN_DEPTH_M := 0.65
 const MAX_DEPTH_M := 4.0
-const WS_URL := "ws://10.1.98.195:8766/control"
+# Default flipped from the historical dev-machine LAN IP (10.1.98.195) to
+# loopback per the owner's decision on YAN-76; deployments override via
+# SMARTXR_CONTROL_WS_URL or user://smartxr_options.json (ADR-2).
+const WS_URL := "ws://127.0.0.1:8766/control"
 const DEBUG_NODE3D_TARGET_ENABLED := false
 const DEBUG_TARGET_ID := "debug_marker"
 const DEBUG_TARGET_SIZE_M := Vector3(0.12, 0.12, 0.12)
