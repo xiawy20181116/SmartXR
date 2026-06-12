@@ -43,7 +43,7 @@
   `_vst_uses_eye_to_head_anchor` set per case) against the fixture.
   Per-chain `fov_matches_card` checks fail on `BBOX_*_FOV_DEG` drift.
 - `tools/run_godot_bbox_math_probe.ps1` — headless runner. The card
-  preloads eight sibling scripts, so the runner stages `scripts\` into
+  preloads nine sibling scripts, so the runner stages `scripts\` into
   `.tmp\bbox_math_probe\scripts\` (a cwd WITHOUT a Godot project file) and
   runs Godot from there so `res://scripts/*.gd` resolves in true no-project
   mode (the compile-gate trick; cwd = `godot-android\` hangs headless on
@@ -78,6 +78,67 @@
   Callable-injection pattern (ADR-4). The shared vectors from this slice
   are the drift gate: the probe re-runs against the same fixture after the
   move.
+
+## M4 step 2 — VST TargetSource extraction (YAN-84)
+
+### Files added
+
+- `godot-android/scripts/target_source.gd` — dependency-free target-source
+  subsystem. Owns the TrackableTarget record, VSTTargetAdapter confidence /
+  smoothing / velocity / predict-stale-lost state machine, and a duck-typed
+  `VSTTargetSource` wrapper. The card injects target-updated and target-lost
+  Callables; the script does not know about attachments, bbox math, status
+  snapshots, config, or the scene tree beyond the proxy node it is handed.
+- `godot-android/tests/script_only_target_source_probe.gd` and
+  `tools/run_godot_target_source_probe.ps1` — no-project runtime probe for
+  load/instantiate plus low-confidence rejection, smoothing/velocity,
+  predict/stale/lost timing, and lost callback routing.
+- `tests/test_godot_target_source.py` — static pins for the extracted
+  boundary and card wiring.
+
+### Card changes
+
+- `AndroidMovingCard.gd` now preloads `target_source.gd`, stores
+  `_vst_target_source`, and builds it in `_build_vst_target_proxy()` after
+  registering the same `VSTTrackedTargetProxy` under the same
+  `VST_TRACKED_TARGET_ID`.
+- `update_vst_target()` delegates the sample update to the source, then
+  performs the unchanged `attach_to_target(CARD_ANCHOR_NAME,
+  VST_TRACKED_TARGET_ID, VST_TARGET_OFFSET_RULE)` path. Successful updates
+  still set `_last_command = "vst_target"`.
+- Lost-state fallback now routes through `_on_vst_target_lost()`, which hides
+  the same proxy node and applies the same CardAttachment fallback. The
+  per-frame advance path returns immediately on `TRACKABLE_STATE_LOST`, so it
+  preserves the old branch order and does not run the normal attachment pass
+  after fallback in the same frame.
+- Bbox-to-head math, FOV constants, proxy_targets payload handling, bbox/head
+  axis conventions, and card-facing attachment behavior were left in the
+  card unchanged.
+
+### Next slice recommendation
+
+- **M4-3: remaining TargetSource sources** — move the remote proxy_targets WS
+  path and fixture replay behind the same duck-typed source boundary. Keep
+  payload schema, FOV defaults, bbox/head conventions, and card-facing
+  behavior fixed; use the M4-1 shared vector probe and the M4-2 target-source
+  probe as drift gates.
+
+### Verification run
+
+- `python -m unittest discover tests` -> 151 tests, OK.
+- `powershell -ExecutionPolicy Bypass -File tests\validate_project.ps1` ->
+  102 registered tests, OK.
+- `tools\run_godot_target_source_probe.ps1` -> PASS (12/12 checks).
+- `tools\run_godot_bbox_math_probe.ps1` -> PASS (32/32 checks; card +
+  sibling scripts staged in no-project mode).
+- Existing script-only probes re-run green: smartxr_options 10,
+  status_hud 29, target_registry 32, ws_transport 30, card_attachment 48,
+  xr_bootstrap 31.
+- Websocket/staged harnesses re-run green:
+  `run_godot_script_only_websocket_probe.ps1`,
+  `run_godot_script_only_staged_probe.ps1`, and
+  `run_godot_proxy_targets_consumer_only.ps1` with a local
+  `fake_proxy_targets_publisher.py` on `127.0.0.1:8766`.
 
 ## YAN-76 follow-up — WS_URL default flipped to loopback
 

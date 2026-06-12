@@ -13,7 +13,7 @@ extends SceneTree
 ##
 ## Runs in no-project mode:
 ##   godot --headless --script <abs path to this file>
-## BUT the card preloads eight sibling scripts via res://scripts/*.gd, so the
+## BUT the card preloads nine sibling scripts via res://scripts/*.gd, so the
 ## runner (tools/run_godot_bbox_math_probe.ps1) stages scripts/ into a temp
 ## working directory WITHOUT project.godot and launches Godot with that cwd
 ## (same trick as the compile gate; loading the real project hangs headless

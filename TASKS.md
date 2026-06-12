@@ -87,24 +87,32 @@ side.
   `tools/run_godot_bbox_math_probe.ps1` +
   `godot-android/tests/script_only_bbox_math_probe.gd` (tolerance 1e-4,
   float32; stages `scripts\` into a temp no-project cwd because the card
-  preloads eight siblings). Generator:
+  preloads nine siblings). Generator:
   `tools/generate_bbox_math_test_vectors.py`. Docs: "Shared math test
   vectors" section in `docs/proxy_targets_payload_contract.md`. No
   production code moved (de-risking slice before M4-2/M4-3).
+- [x] **M4 step 2 — VST TargetSource** (YAN-84): TrackableTarget and
+  VSTTargetAdapter extracted from `AndroidMovingCard.gd` into
+  `godot-android/scripts/target_source.gd` behind a duck-typed
+  `VSTTargetSource` boundary. The card keeps proxy node registration,
+  attachment, bbox/head math, status snapshot assembly, and fallback side
+  effects; target updates/lost state route back through Callables. Probe:
+  `tools/run_godot_target_source_probe.ps1` (12 checks). Tests:
+  `tests/test_godot_target_source.py`.
 
 ## Next (not started)
 
-- [ ] **M4 (remaining) — TargetSource strategy interface**: unify on-device
-  ncnn (TrackableTarget / VSTTargetAdapter, still card-inner classes), the
-  remote proxy_targets WS path, and fixture replay behind one duck-typed
-  source interface (M4-2: extract the VST target source; M4-3: the
-  remaining sources). The shared math vectors from M4-1 gate these moves.
+- [ ] **M4 step 3 — remaining TargetSource sources**: bring the remote
+  proxy_targets WS path and fixture replay behind the same duck-typed source
+  boundary without changing proxy_targets schema, FOV defaults, bbox/head
+  conventions, or card-facing behavior. The M4-1 shared math vectors and the
+  M4-2 target-source probe gate the move.
 - [ ] **M5 — Per-subsystem docs** following `docs/smartxr_options.md` style.
 
 ## Verification
 
 ```powershell
-# Full suite (148 tests)
+# Full suite (151 tests)
 python -m unittest (Get-ChildItem tests\test_*.py | ForEach-Object { "tests/$($_.Name)" })
 
 # Schema gate
@@ -117,6 +125,7 @@ powershell -File tools\run_godot_target_registry_probe.ps1
 powershell -File tools\run_godot_ws_transport_probe.ps1
 powershell -File tools\run_godot_card_attachment_probe.ps1
 powershell -File tools\run_godot_xr_bootstrap_probe.ps1
+powershell -File tools\run_godot_target_source_probe.ps1
 powershell -File tools\run_godot_bbox_math_probe.ps1
 powershell -File tools\run_godot_script_only_websocket_probe.ps1
 # consumer-only needs a publisher on :8766 first (fake_proxy_targets_publisher.py)

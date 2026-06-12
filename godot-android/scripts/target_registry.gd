@@ -11,8 +11,8 @@ class_name TargetRegistry
 ## probe can exercise it headless
 ## (godot-android/tests/script_only_target_registry_probe.gd).
 ##
-## TrackableTarget and VSTTargetAdapter stay in AndroidMovingCard.gd: they
-## belong to the target-source subsystem (M4), not the registry.
+## TrackableTarget and VSTTargetAdapter belong to target_source.gd (M4), not
+## the registry.
 ##
 ## Keep this script loadable in no-project mode: never reference its own
 ## class_name inside this file (global class registration does not happen in

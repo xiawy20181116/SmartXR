@@ -47,6 +47,7 @@ const ProxyTargetsCardAdapterScript := preload("res://scripts/proxy_targets_card
 const SmartXROptionsScript := preload("res://scripts/smartxr_options.gd")
 const StatusHudScript := preload("res://scripts/status_hud.gd")
 const TargetRegistryScript := preload("res://scripts/target_registry.gd")
+const TargetSourceScript := preload("res://scripts/target_source.gd")
 const WSTransportScript := preload("res://scripts/ws_transport.gd")
 const XRBootstrapScript := preload("res://scripts/xr_bootstrap.gd")
 
@@ -72,12 +73,6 @@ const VST_RAW_DEBUG_PIXEL_SIZE_M := 0.00045
 const VST_RAW_DEBUG_POSITION := Vector3(0.48, -0.28, -1.2)
 const VST_RAW_DEBUG_FRAME_Z_OFFSET_M := 0.025
 const VST_TRACKED_TARGET_ID := "vst_right_target"
-const TRACKABLE_SOURCE_VST := "vst"
-const TRACKABLE_SOURCE_EXTERNAL := "external"
-const TRACKABLE_STATE_TRACKED := "tracked"
-const TRACKABLE_STATE_PREDICTED := "predicted"
-const TRACKABLE_STATE_STALE := "stale"
-const TRACKABLE_STATE_LOST := "lost"
 const VST_TARGET_CONFIDENCE_THRESHOLD := 0.45
 const VST_TARGET_PREDICT_MS := 180.0
 const VST_TARGET_STALE_MS := 650.0
@@ -93,100 +88,6 @@ const VST_TARGET_OFFSET_RULE := {
 const GXR_CAL_CV_DEWARP_L := 0x00400060
 const GXR_CAL_CV_DEWARP_R := 0x00400061
 const GXR_CAL_CV_SLAM := 0x00400070
-
-
-class TrackableTarget:
-	var id: String = ""
-	var transform: Transform3D = Transform3D.IDENTITY
-	var velocity: Vector3 = Vector3.ZERO
-	var confidence: float = 0.0
-	var timestamp_ms: float = 0.0
-	var state: String = TRACKABLE_STATE_LOST
-	var source: String = TRACKABLE_SOURCE_EXTERNAL
-
-
-class VSTTargetAdapter:
-	var target := TrackableTarget.new()
-	var _proxy: Node3D = null
-	var _last_stable_transform := Transform3D.IDENTITY
-	var _has_sample := false
-	var _confidence_threshold := 0.45
-	var _predict_ms := 180.0
-	var _stale_ms := 650.0
-	var _lost_ms := 1400.0
-	var _smoothing_alpha := 0.38
-
-	func _init(
-		target_id: String,
-		proxy: Node3D,
-		confidence_threshold: float,
-		predict_ms: float,
-		stale_ms: float,
-		lost_ms: float,
-		smoothing_alpha: float
-	) -> void:
-		target.id = target_id
-		target.source = TRACKABLE_SOURCE_VST
-		_proxy = proxy
-		_confidence_threshold = confidence_threshold
-		_predict_ms = predict_ms
-		_stale_ms = stale_ms
-		_lost_ms = lost_ms
-		_smoothing_alpha = clampf(smoothing_alpha, 0.0, 1.0)
-
-	func update_target(target_id: String, transform: Transform3D, confidence: float, timestamp_ms: float) -> bool:
-		if target_id.is_empty() or confidence < _confidence_threshold:
-			return false
-		var previous_origin := target.transform.origin
-		var next_transform := transform
-		if _has_sample:
-			next_transform.origin = previous_origin.lerp(transform.origin, _smoothing_alpha)
-			var dt_seconds := maxf((timestamp_ms - target.timestamp_ms) / 1000.0, 0.001)
-			target.velocity = (next_transform.origin - previous_origin) / dt_seconds
-		else:
-			target.velocity = Vector3.ZERO
-		target.id = target_id
-		target.transform = next_transform
-		target.confidence = clampf(confidence, 0.0, 1.0)
-		target.timestamp_ms = timestamp_ms
-		target.source = TRACKABLE_SOURCE_VST
-		_last_stable_transform = next_transform
-		_has_sample = true
-		_set_state(TRACKABLE_STATE_TRACKED)
-		_apply_to_proxy()
-		return true
-
-	func advance(now_ms: float) -> void:
-		if not _has_sample:
-			return
-		var age_ms := now_ms - target.timestamp_ms
-		if age_ms <= _predict_ms:
-			_hold_last_pose()
-		elif age_ms <= _stale_ms:
-			_predict_pose(age_ms)
-			_set_state(TRACKABLE_STATE_PREDICTED)
-		elif age_ms <= _lost_ms:
-			_hold_last_pose()
-			_set_state(TRACKABLE_STATE_STALE)
-		else:
-			_hold_last_pose()
-			_set_state(TRACKABLE_STATE_LOST)
-		_apply_to_proxy()
-
-	func _hold_last_pose() -> void:
-		target.transform = _last_stable_transform
-
-	func _predict_pose(age_ms: float) -> void:
-		var predicted := _last_stable_transform
-		predicted.origin += target.velocity * (age_ms / 1000.0)
-		target.transform = predicted
-
-	func _set_state(next_state: String) -> void:
-		target.state = next_state
-
-	func _apply_to_proxy() -> void:
-		if _proxy != null and is_instance_valid(_proxy):
-			_proxy.global_transform = target.transform
 
 
 # XR bootstrap subsystem (scripts/xr_bootstrap.gd): the OpenXR startup path
@@ -253,7 +154,7 @@ var _target_registry = TargetRegistryScript.new()
 var _card_attachment = CardAttachmentScript.new()
 var _debug_target_marker: MeshInstance3D = null
 var _debug_target_elapsed_seconds := 0.0
-var _vst_target_adapter: VSTTargetAdapter = null
+var _vst_target_source = null
 var _vst_target_proxy: Node3D = null
 var _proxy_targets_consumer: Node = null
 var _proxy_targets_card_adapter: Node = null
@@ -862,7 +763,7 @@ func _build_vst_target_proxy() -> void:
 	_vst_target_proxy.visible = false
 	add_child(_vst_target_proxy)
 	register_node3d_target(VST_TRACKED_TARGET_ID, _vst_target_proxy)
-	_vst_target_adapter = VSTTargetAdapter.new(
+	_vst_target_source = TargetSourceScript.VSTTargetSource.new(
 		VST_TRACKED_TARGET_ID,
 		_vst_target_proxy,
 		VST_TARGET_CONFIDENCE_THRESHOLD,
@@ -871,18 +772,18 @@ func _build_vst_target_proxy() -> void:
 		VST_TARGET_LOST_MS,
 		VST_TARGET_SMOOTHING_ALPHA
 	)
+	_vst_target_source.set_on_target_updated(_on_vst_target_updated)
+	_vst_target_source.set_on_target_lost(_on_vst_target_lost)
 
 
 func update_vst_target(target_id: String, transform: Transform3D, confidence: float, timestamp_ms: float) -> bool:
-	if _vst_target_adapter == null:
+	if _vst_target_source == null:
 		_build_vst_target_proxy()
-	if _vst_target_adapter == null:
+	if _vst_target_source == null:
 		return false
-	var ok := _vst_target_adapter.update_target(target_id, transform, confidence, timestamp_ms)
+	var ok := bool(_vst_target_source.update_target(target_id, transform, confidence, timestamp_ms))
 	if not ok:
 		return false
-	if _vst_target_proxy != null:
-		_vst_target_proxy.visible = true
 	var attached := attach_to_target(CARD_ANCHOR_NAME, VST_TRACKED_TARGET_ID, VST_TARGET_OFFSET_RULE)
 	if attached:
 		_last_command = "vst_target"
@@ -890,16 +791,21 @@ func update_vst_target(target_id: String, transform: Transform3D, confidence: fl
 
 
 func _advance_vst_target_state(_delta: float) -> void:
-	if _vst_target_adapter == null:
+	if _vst_target_source == null:
 		return
-	_vst_target_adapter.advance(float(Time.get_ticks_msec()))
-	if _vst_target_adapter.target.state == TRACKABLE_STATE_LOST:
-		_apply_vst_target_fallback()
-	elif _anchor_mode == "target" and _card_attachment.has_attachment(CARD_ANCHOR_NAME):
+	_vst_target_source.advance(float(Time.get_ticks_msec()))
+	if _vst_target_source.target_state() == TargetSourceScript.TRACKABLE_STATE_LOST:
+		return
+	if _anchor_mode == "target" and _card_attachment.has_attachment(CARD_ANCHOR_NAME):
 		_update_target_attachments()
 
 
-func _apply_vst_target_fallback() -> void:
+func _on_vst_target_updated(_target_id: String, _transform: Transform3D) -> void:
+	if _vst_target_proxy != null:
+		_vst_target_proxy.visible = true
+
+
+func _on_vst_target_lost(_target_id: String) -> void:
 	if _vst_target_proxy != null:
 		_vst_target_proxy.visible = false
 	var attachment = _card_attachment.get_attachment(CARD_ANCHOR_NAME)
@@ -1274,8 +1180,8 @@ func _build_xr_status_snapshot() -> Dictionary:
 
 func _build_vst_status_snapshot() -> Dictionary:
 	var target_state := "lost"
-	if _vst_target_adapter != null:
-		target_state = _vst_target_adapter.target.state
+	if _vst_target_source != null:
+		target_state = _vst_target_source.target_state()
 	return {
 		"class_registered": _vst_class_registered,
 		"init_ok": _vst_init_ok,

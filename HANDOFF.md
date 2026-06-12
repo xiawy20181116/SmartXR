@@ -136,15 +136,15 @@
 - Scripts that script-only probes load must not self-reference their own
   `class_name` (it is unregistered in no-project mode). `smartxr_options.gd`,
   `status_hud.gd`, `target_registry.gd`, `ws_transport.gd`,
-  `card_attachment.gd` and `xr_bootstrap.gd` follow the rule; keep it for
+  `card_attachment.gd`, `xr_bootstrap.gd`, and `target_source.gd` follow the rule; keep it for
   future probe-visible scripts. Inner-class references (`Node3DTargetAdapter` inside
   `target_registry.gd`) are script-scoped and safe. The card's untyped
   helpers (`_proxy_targets_card_resolved_position()` etc.) intentionally
   return Vector3-or-null; StatusHud renders null as "n/a".
-- M4-2/M4-3 (TargetSource interface extraction), M5 (docs) not started —
-  see TASKS.md.
+- M4-2 (VST TargetSource extraction) is complete. M4-3 (remaining
+  TargetSource sources) and M5 (docs) are not started — see TASKS.md.
 - GDScript bbox math in `AndroidMovingCard.gd` still duplicates
-  `smartxr/geometry.py` by design until M4-2/M4-3; both sides are now
+  `smartxr/geometry.py` by design until M4-3; both sides are now
   locked to `godot-android/fixtures/bbox_math_test_vectors.json`, so any
   move that changes the numbers fails the probe or the Python suite. The
   full-chain vectors are authored with the card's FOV consts (70/43); the
@@ -155,11 +155,11 @@
 
 ## How to continue
 
-M3 is complete and M4-1 (shared bbox math vectors) is in. Continue with
-M4-2: extract the VST target source — the TrackableTarget /
-VSTTargetAdapter inner classes still in the card — behind a duck-typed
-TargetSource interface using the established Callable-injection pattern
-(ADR-4), with the bbox math vectors as the drift gate; then M4-3 (remaining
-sources: remote proxy_targets WS, fixture replay), then M5 (per-subsystem
-docs following `docs/smartxr_options.md` style). Keep the ADR-4 seam and
-the no-project-mode rules for any new probe-visible script.
+M3 is complete, M4-1 (shared bbox math vectors) is in, and M4-2 extracted
+the VST target source into `target_source.gd`. Continue with M4-3: bring the
+remaining sources (remote proxy_targets WS and fixture replay) behind the
+same duck-typed TargetSource boundary without changing the proxy_targets
+payload schema, FOV defaults, bbox/head conventions, or card-facing
+behavior; then M5 (per-subsystem docs following `docs/smartxr_options.md`
+style). Keep the ADR-4 seam and the no-project-mode rules for any new
+probe-visible script.

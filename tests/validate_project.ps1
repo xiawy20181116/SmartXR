@@ -9,6 +9,7 @@ try {
         tests/test_godot_card_attachment.py `
         tests/test_godot_smartxr_options.py `
         tests/test_godot_status_hud.py `
+        tests/test_godot_target_source.py `
         tests/test_godot_target_registry.py `
         tests/test_godot_ws_transport.py `
         tests/test_godot_xr_bootstrap.py `
