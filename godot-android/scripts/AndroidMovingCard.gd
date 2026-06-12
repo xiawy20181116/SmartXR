@@ -51,6 +51,7 @@ const ProxyTargetsConsumerScript := preload("res://scripts/proxy_targets_consume
 const ProxyTargetsCardAdapterScript := preload("res://scripts/proxy_targets_card_adapter.gd")
 const SmartXROptionsScript := preload("res://scripts/smartxr_options.gd")
 const StatusHudScript := preload("res://scripts/status_hud.gd")
+const TargetRegistryScript := preload("res://scripts/target_registry.gd")
 
 # Centralized runtime configuration (env var -> user://smartxr_options.json
 # -> script const default). The consts below stay as the defaults; deployment
@@ -191,64 +192,6 @@ class VSTTargetAdapter:
 			_proxy.global_transform = target.transform
 
 
-class Node3DTargetAdapter:
-	var _root: Node = null
-	var _node: Node3D = null
-	var _path := NodePath()
-	var _uses_path := false
-
-	func _init(root: Node, node_or_path) -> void:
-		_root = root
-		if node_or_path is Node3D:
-			_node = node_or_path
-			return
-		if node_or_path is NodePath:
-			_path = node_or_path
-			_uses_path = true
-			return
-		if typeof(node_or_path) == TYPE_STRING:
-			_path = NodePath(str(node_or_path))
-			_uses_path = true
-
-	func get_node3d() -> Node3D:
-		if _uses_path:
-			if _root == null or not is_instance_valid(_root):
-				return null
-			var resolved := _root.get_node_or_null(_path)
-			return resolved as Node3D
-		if _node == null or not is_instance_valid(_node):
-			return null
-		return _node
-
-	func is_available() -> bool:
-		return get_node3d() != null
-
-	func get_global_transform() -> Transform3D:
-		var target := get_node3d()
-		if target == null:
-			return Transform3D.IDENTITY
-		return target.global_transform
-
-
-class TargetRegistry:
-	var _targets := {}
-
-	func register(target_id: String, adapter: Node3DTargetAdapter) -> bool:
-		if target_id.is_empty() or adapter == null:
-			return false
-		_targets[target_id] = adapter
-		return true
-
-	func unregister(target_id: String) -> void:
-		_targets.erase(target_id)
-
-	func resolve(target_id: String) -> Node3DTargetAdapter:
-		var adapter = _targets.get(target_id)
-		if adapter is Node3DTargetAdapter:
-			return adapter
-		return null
-
-
 var _xr_active := false
 var _xr_interface_found := false
 var _xr_initialize_ok := false
@@ -285,7 +228,11 @@ var _bbox_angular_size_deg := Vector2.ZERO
 var _paused := false
 var _face_camera_enabled := true
 var _last_command := "none"
-var _target_registry := TargetRegistry.new()
+# Target registry subsystem (scripts/target_registry.gd): id -> adapter
+# bookkeeping plus the Node3D/NodePath adapter, extracted in M3 step 2.
+# Untyped `=` on purpose (no class_name reference) so script-only probes can
+# load both scripts; see _options above for the same pattern.
+var _target_registry = TargetRegistryScript.new()
 var _card_attachments := {}
 var _debug_target_marker: MeshInstance3D = null
 var _debug_target_elapsed_seconds := 0.0
@@ -982,7 +929,7 @@ func _apply_vst_target_fallback() -> void:
 
 
 func register_node3d_target(target_id: String, node_or_path) -> bool:
-	return _target_registry.register(target_id, Node3DTargetAdapter.new(self, node_or_path))
+	return bool(_target_registry.register(target_id, TargetRegistryScript.Node3DTargetAdapter.new(self, node_or_path)))
 
 
 func unregister_target(target_id: String) -> void:
@@ -990,7 +937,7 @@ func unregister_target(target_id: String) -> void:
 
 
 func attach_to_target(card_id: String, target_id: String, offset_rule = {}) -> bool:
-	var adapter := _target_registry.resolve(target_id)
+	var adapter = _target_registry.resolve(target_id)
 	if adapter == null:
 		return false
 	var normalized_offset := _normalize_target_offset_rule(offset_rule)
@@ -1023,7 +970,7 @@ func _update_target_attachments() -> void:
 		return
 	var target_id := str(attachment.get("target_id", ""))
 	var offset_rule = attachment.get("offset_rule", TARGET_DEFAULT_OFFSET_RULE)
-	var adapter := _target_registry.resolve(target_id)
+	var adapter = _target_registry.resolve(target_id)
 	if adapter != null and adapter.is_available():
 		var next_transform := _target_offset_transform(adapter.get_global_transform(), offset_rule)
 		_card_anchor.global_transform = next_transform

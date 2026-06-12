@@ -10,6 +10,10 @@ SCRIPT = ROOT / "godot-android" / "scripts" / "AndroidMovingCard.gd"
 # StatusHud subsystem in M3 step 1 (YAN-74); display/format assertions are
 # pinned there, snapshot-assembly assertions stay on the card script.
 STATUS_HUD = ROOT / "godot-android" / "scripts" / "status_hud.gd"
+# TargetRegistry + Node3DTargetAdapter moved to scripts/target_registry.gd in
+# M3 step 2 (YAN-75); registry/adapter assertions are pinned there, the
+# attach/fallback state machine stays on the card script.
+TARGET_REGISTRY = ROOT / "godot-android" / "scripts" / "target_registry.gd"
 VALIDATOR = ROOT / "tests" / "validate_project.ps1"
 ANDROID_ACTIVITY = (
     ROOT
@@ -271,10 +275,11 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_card_can_attach_to_registered_node3d_targets(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        registry = TARGET_REGISTRY.read_text(encoding="utf-8")
 
-        self.assertIn("class TargetRegistry", source)
-        self.assertIn("class Node3DTargetAdapter", source)
-        self.assertIn("var _target_registry := TargetRegistry.new()", source)
+        self.assertIn("class Node3DTargetAdapter", registry)
+        self.assertIn("func register(target_id: String, adapter: Node3DTargetAdapter) -> bool:", registry)
+        self.assertIn("var _target_registry = TargetRegistryScript.new()", source)
         self.assertIn("func register_node3d_target(target_id: String, node_or_path", source)
         self.assertIn("func attach_to_target(card_id: String, target_id: String, offset_rule", source)
         self.assertIn('var _card_attachments := {}', source)

@@ -7,6 +7,7 @@ try {
         tests/test_godot_android_mesh_card.py `
         tests/test_godot_smartxr_options.py `
         tests/test_godot_status_hud.py `
+        tests/test_godot_target_registry.py `
         tests/test_run_windows_pcmr.py `
         tests/test_vst_ncnn_port.py `
         tests/test_ws_control.py
