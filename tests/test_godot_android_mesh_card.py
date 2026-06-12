@@ -18,6 +18,11 @@ TARGET_REGISTRY = ROOT / "godot-android" / "scripts" / "target_registry.gd"
 # in M3 step 3 (YAN-76); peer/retry/subscribe assertions are pinned there,
 # URL resolution, packet handling, and the status snapshot stay on the card.
 WS_TRANSPORT = ROOT / "godot-android" / "scripts" / "ws_transport.gd"
+# The attachment store, fallback state machine, and offset-rule math moved to
+# scripts/card_attachment.gd in M3 step 4 (YAN-77); store/fallback/offset
+# assertions are pinned there, the public API, anchor-mode switching, and the
+# status snapshot stay on the card.
+CARD_ATTACHMENT = ROOT / "godot-android" / "scripts" / "card_attachment.gd"
 VALIDATOR = ROOT / "tests" / "validate_project.ps1"
 ANDROID_ACTIVITY = (
     ROOT
@@ -280,18 +285,21 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
     def test_card_can_attach_to_registered_node3d_targets(self):
         source = SCRIPT.read_text(encoding="utf-8")
         registry = TARGET_REGISTRY.read_text(encoding="utf-8")
+        attachment = CARD_ATTACHMENT.read_text(encoding="utf-8")
 
         self.assertIn("class Node3DTargetAdapter", registry)
         self.assertIn("func register(target_id: String, adapter: Node3DTargetAdapter) -> bool:", registry)
         self.assertIn("var _target_registry = TargetRegistryScript.new()", source)
         self.assertIn("func register_node3d_target(target_id: String, node_or_path", source)
         self.assertIn("func attach_to_target(card_id: String, target_id: String, offset_rule", source)
-        self.assertIn('var _card_attachments := {}', source)
+        # The store and the attach/fallback bodies moved to card_attachment.gd
+        # in M3 step 4 (YAN-77); target lookup is wired back into the registry.
+        self.assertIn("var _attachments := {}", attachment)
         self.assertIn('"hold_last_pose"', source)
         self.assertIn("_update_target_attachments()", source)
-        self.assertIn("_target_registry.resolve(target_id)", source)
-        self.assertIn("adapter.get_global_transform()", source)
-        self.assertIn("_target_offset_transform(adapter.get_global_transform(), offset_rule)", source)
+        self.assertIn("_card_attachment.set_resolver(_target_registry.resolve)", source)
+        self.assertIn("adapter.get_global_transform()", attachment)
+        self.assertIn("offset_transform(adapter.get_global_transform(), offset_rule)", attachment)
         self.assertIn('_anchor_mode = "target"', source)
         self.assertIn("_orient_card_for_3dof_reading()", source)
         self.assertRegex(source, r"if _anchor_mode == \"target\":\s+_update_target_attachments\(\)")
@@ -315,15 +323,18 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_world_target_offset_ignores_target_rotation_for_card_position(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        # The offset-rule math moved to card_attachment.gd in M3 step 4
+        # (YAN-77); the offset-space contract is pinned there.
+        attachment = CARD_ATTACHMENT.read_text(encoding="utf-8")
 
         self.assertIn('"offset_space"', source)
         self.assertIn('"world"', source)
         self.assertIn('"target"', source)
-        self.assertIn("func _target_world_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:", source)
-        self.assertIn("func _target_local_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:", source)
-        self.assertIn("result.origin = target_transform.origin + _target_offset_vector(rule)", source)
-        self.assertIn("result.origin = target_transform * _target_offset_vector(rule)", source)
-        self.assertIn('if str(rule.get("offset_space", "world")) == "target":', source)
+        self.assertIn("static func world_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:", attachment)
+        self.assertIn("static func local_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:", attachment)
+        self.assertIn("result.origin = target_transform.origin + offset_vector(rule)", attachment)
+        self.assertIn("result.origin = target_transform * offset_vector(rule)", attachment)
+        self.assertIn('if str(rule.get("offset_space", "world")) == "target":', attachment)
 
     def test_debug_marker_uses_world_offset_while_rotating_for_pcmr_validation(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -434,7 +445,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_status_hud.write_status_files(snapshot, delta)", source)
         self.assertIn("FileAccess.open(proxy_targets_status_path, FileAccess.WRITE)", hud)
         self.assertIn('"anchor_mode": _anchor_mode', source)
-        self.assertIn('"attachments": _card_attachments.size()', source)
+        self.assertIn('"attachments": _card_attachment.size()', source)
         self.assertIn('"card_target_id": _proxy_targets_card_target_id()', source)
         self.assertIn("func _proxy_targets_card_target_id() -> String:", source)
         self.assertIn('"proxy_target_count": _proxy_targets_proxy_count()', source)
