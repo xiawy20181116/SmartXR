@@ -33,6 +33,10 @@ historical `PROXY_TARGETS_WS_URL` env name is preserved; defaults are
 behavior-identical to before (the LAN IP default was deliberately kept —
 flipping it to `127.0.0.1` is a one-line owner decision).
 
+*Update (YAN-76 follow-up):* the owner made that call — `WS_URL` now
+defaults to `ws://127.0.0.1:8766/control`; devices that need a remote
+control server set `SMARTXR_CONTROL_WS_URL` or the config file.
+
 ## ADR-3: Update static-source tests instead of faking strings in wrappers
 
 **Context.** Several tests assert implementation strings inside specific tool
