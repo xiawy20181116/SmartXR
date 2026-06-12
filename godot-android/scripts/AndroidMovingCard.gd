@@ -1049,11 +1049,14 @@ func _anchor_position_from_yaw_pitch_depth() -> Vector3:
 	var yaw := deg_to_rad(_anchor_yaw_deg)
 	var pitch := deg_to_rad(_anchor_pitch_deg)
 	var horizontal_depth := _anchor_depth_m * cos(pitch)
-	return Vector3(
+	var local_anchor_position := Vector3(
 		horizontal_depth * sin(yaw),
 		_anchor_depth_m * sin(pitch),
 		-horizontal_depth * cos(yaw)
 	)
+	if _sim_enabled and _camera != null:
+		return _camera.global_transform * local_anchor_position
+	return local_anchor_position
 
 
 func _apply_3dof_anchor_transform() -> void:

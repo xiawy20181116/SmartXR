@@ -58,6 +58,18 @@ class GodotSimBootstrapTests(unittest.TestCase):
         # card-anchor logic.
         self.assertEqual(card.count("func _make_card_ui() -> Control:"), 1)
 
+    def test_sim_mode_anchors_card_in_head_space_to_avoid_mouse_look_distortion(self):
+        card = CARD.read_text(encoding="utf-8")
+
+        self.assertIn("func _anchor_position_from_yaw_pitch_depth() -> Vector3:", card)
+        self.assertIn("var local_anchor_position := Vector3(", card)
+        self.assertIn("if _sim_enabled and _camera != null:", card)
+        self.assertIn("return _camera.global_transform * local_anchor_position", card)
+        self.assertLess(
+            card.index("var local_anchor_position := Vector3("),
+            card.index("return _camera.global_transform * local_anchor_position"),
+        )
+
     def test_status_hud_displays_sim_mode_from_snapshot_without_status_file_shape_change(self):
         source = STATUS_HUD.read_text(encoding="utf-8")
 
