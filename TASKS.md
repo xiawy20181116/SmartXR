@@ -34,15 +34,26 @@ side.
   (target-source subsystem, M4). Runtime probe:
   `tools/run_godot_target_registry_probe.ps1` (32 checks). Tests:
   `tests/test_godot_target_registry.py`.
+- [x] **M3 step 3 — WSTransport** (YAN-76): the two near-duplicate
+  WebSocketPeer connect/poll/retry loops (control + proxy_targets) extracted
+  from `AndroidMovingCard.gd` into `godot-android/scripts/ws_transport.gd`
+  (RefCounted, dependency-free; the card instantiates two and keeps URL /
+  enable-gate resolution, packet handling, error formatting, and the status
+  snapshot per ADR-4). Also fixed a latent bug: the old subscribe path
+  called the nonexistent `WebSocketPeer.set_write_mode()`, so the subscribe
+  payload was never actually sent; WSTransport uses `send_text()`. Runtime
+  probe: `tools/run_godot_ws_transport_probe.ps1` (30 checks, live fake
+  publisher + accept-then-close retry listener). Tests:
+  `tests/test_godot_ws_transport.py`.
 
 ## Next (not started)
 
 - [ ] **M3 — Split `AndroidMovingCard.gd`** remaining subsystem nodes:
-  XRBootstrap, WSTransport, CardAttachment, with the scene tree unchanged.
+  XRBootstrap, CardAttachment, with the scene tree unchanged.
   Move one subsystem at a time; keep
   `tests/test_godot_android_mesh_card.py` green at each step (update pinned
-  assertions alongside each move). StatusHud (step 1) and TargetRegistry
-  (step 2) are done — see above.
+  assertions alongside each move). StatusHud (step 1), TargetRegistry
+  (step 2), and WSTransport (step 3) are done — see above.
 - [ ] **M4 — TargetSource strategy interface**: unify on-device ncnn, remote
   proxy_targets WS, and fixture replay behind one source interface; promote
   the payload contract doc into shared test vectors used by both the Python
@@ -62,6 +73,7 @@ python tools\validate_proxy_targets_payload_schema.py --input godot-android\fixt
 powershell -File tools\run_godot_smartxr_options_probe.ps1
 powershell -File tools\run_godot_status_hud_probe.ps1
 powershell -File tools\run_godot_target_registry_probe.ps1
+powershell -File tools\run_godot_ws_transport_probe.ps1
 powershell -File tools\run_godot_script_only_websocket_probe.ps1
 # consumer-only needs a publisher on :8766 first (fake_proxy_targets_publisher.py)
 powershell -File tools\run_godot_proxy_targets_consumer_only.ps1

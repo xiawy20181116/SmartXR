@@ -1,5 +1,94 @@
 # Notes — change log
 
+## M3 step 3 — WSTransport extraction (YAN-76)
+
+### Files added
+
+- `godot-android/scripts/ws_transport.gd` — reusable WSTransport
+  (RefCounted, dependency-free, no class_name self-references): owns one
+  WebSocketPeer, `connect_to(url)`, per-frame `poll(delta)`, the 2.0 s
+  retry-on-close loop (`RETRY_ON_CLOSE_SECONDS`), an optional
+  subscribe-once-on-open text payload, a per-packet Callable back into the
+  card, an optional connect-error Callable, and an optional url-provider
+  Callable so every retry re-resolves the URL through the card (ADR-4 —
+  identical to the old loops, which called
+  `_control_ws_url()`/`_proxy_targets_ws_url()` on each reconnect).
+  Read-only getters (`ws_connected()`, `ws_subscribed()`, `packets_seen()`,
+  `last_packet_bytes()`, `retry_seconds()`, `current_url()`) feed the card's
+  status snapshot; named `ws_*` to avoid shadowing `Object.is_connected()`.
+- `godot-android/tests/script_only_ws_transport_probe.gd` — script-only
+  runtime probe (30 checks: default state flags, invalid-URL connect error +
+  callback, dropped-connection retry accumulation and the url-provider-driven
+  reconnect, subscribe-once semantics offline and live, live packet delivery
+  via the Callable with packets/bytes counters). Multi-frame `_process`
+  state machine; quit() only from `_process` (no-project-mode rule).
+- `tools/run_godot_ws_transport_probe.ps1` — headless no-project runner:
+  starts `fake_proxy_targets_publisher.py` (port 8773) for the live path and
+  an accept-then-close TCP listener (port 8799) for the retry path. Gotcha
+  discovered here: a genuinely CLOSED port does NOT exercise the retry loop
+  on Windows loopback — WebSocketPeer sits in STATE_CONNECTING for seconds
+  instead of reaching STATE_CLOSED; the handshake-failing listener closes in
+  one frame. Also: Godot 4.6 accepts `"not a url"` in `connect_to_url`
+  (treated as a host) — only a bad scheme fails synchronously.
+- `tests/test_godot_ws_transport.py` — 3 static tests pinning the transport
+  contract, the card-side delegation/wiring, and the probe/runner pair.
+
+### Bug fixed (the one deliberate behavior change)
+
+The old card subscribe path called `WebSocketPeer.set_write_mode()`, which
+does not exist in Godot 4: the call errored at runtime on every open-state
+poll, so the subscribe payload was NEVER actually sent, `ws_subscribed`
+never flipped true in the status snapshot, and the script error spammed the
+log each frame while the proxy_targets WS was open (the fake publisher
+broadcasts without requiring a subscribe, which hid it). WSTransport uses
+`send_text(payload)` (the Godot 4 TEXT-frame API), so the documented
+subscribe-once-on-open behavior now actually happens; everything else is
+byte-for-byte behavior-identical (wire format, subscribe payload string,
+2.0 s retry interval, reconnect-time URL re-resolution, status snapshot
+keys/values).
+
+### Files modified
+
+- `godot-android/scripts/AndroidMovingCard.gd` — removed both WebSocketPeer
+  loops (`_ws*` and `_proxy_targets_ws_*` connection vars,
+  `_send_proxy_targets_subscribe`, the poll bodies). Added
+  `const WSTransportScript := preload(...)`; `_control_ws` /
+  `_proxy_targets_ws` are `= WSTransportScript.new()` (untyped `=`, same
+  pattern as `_options`); `_setup_ws_transports()` (called from `_ready`
+  before connecting) wires packet callbacks (`_handle_packet` /
+  `_on_proxy_targets_ws_packet`), the subscribe payload, error formatters
+  (`_on_control_ws_connect_error` / `_on_proxy_targets_ws_connect_error`,
+  preserving the exact `_last_command` strings), and the url providers.
+  URL/enable resolution, packet handling, and the status snapshot stay in
+  the card; snapshot now reads `ws_connected/ws_subscribed/packets/
+  packet_bytes` from the transports (same keys, same values).
+- `tests/test_godot_android_mesh_card.py` — peer/retry/subscribe pins in
+  `test_proxy_targets_live_websocket_consumer_is_wired` repointed at
+  `ws_transport.gd` (per ADR-3); URL-resolution/packet-handling/snapshot
+  pins stay on the card.
+- `tests/test_godot_smartxr_options.py` — `connect_to_url(_control_ws_url())`
+  pin updated to the card's `connect_to(_control_ws_url())` delegation.
+- `tests/validate_project.ps1` — registers `tests/test_godot_ws_transport.py`.
+- `TASKS.md` / `HANDOFF.md` — bookkeeping.
+
+### Verification run
+
+- `python -m unittest tests/test_*.py` → 128 tests, OK.
+- Schema gate on both fixtures → ok.
+- `tools\run_godot_ws_transport_probe.ps1` → PASS (30/30 checks).
+- `tools\run_godot_target_registry_probe.ps1` → PASS (32/32 checks).
+- `tools\run_godot_status_hud_probe.ps1` → PASS (29/29 checks).
+- `tools\run_godot_smartxr_options_probe.ps1` → PASS (10/10 checks).
+- `tools\run_godot_script_only_websocket_probe.ps1` → ws_connected=true,
+  packets=1.
+- `tools\run_godot_proxy_targets_consumer_only.ps1` against a live
+  `fake_proxy_targets_publisher.py` on :8766 → exit 0, parsed=1, live=1,
+  registered_targets=1.
+- Compile gate: `AndroidMovingCard.gd` (with all six preloads) and
+  `ws_transport.gd` load + `can_instantiate()` in script-only mode (Godot
+  4.6.2 headless, staged into `.tmp\card_compile_gate\scripts\`, clean
+  stderr).
+
 ## M3 step 2 — TargetRegistry extraction (YAN-75)
 
 ### Files added

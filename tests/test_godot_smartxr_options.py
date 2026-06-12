@@ -45,8 +45,11 @@ class GodotSmartXROptionsTests(unittest.TestCase):
         self.assertIn('const SmartXROptionsScript := preload("res://scripts/smartxr_options.gd")', source)
         self.assertIn("var _options = SmartXROptionsScript.load_options()", source)
         # The control channel URL must no longer be hardwired at the call site.
+        # (The peer call site lives in ws_transport.gd since M3 step 3; the
+        # card resolves the URL through _options and passes it in.)
         self.assertNotIn("connect_to_url(WS_URL)", source)
-        self.assertIn("connect_to_url(_control_ws_url())", source)
+        self.assertNotIn("connect_to(WS_URL)", source)
+        self.assertIn("connect_to(_control_ws_url())", source)
         self.assertIn("return _options.control_ws_url(WS_URL)", source)
         self.assertIn("return _options.proxy_targets_ws_url(PROXY_TARGETS_WS_URL)", source)
         self.assertIn("return _options.proxy_targets_ws_enabled(PROXY_TARGETS_WS_ENABLED)", source)
