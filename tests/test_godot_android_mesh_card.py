@@ -14,6 +14,10 @@ STATUS_HUD = ROOT / "godot-android" / "scripts" / "status_hud.gd"
 # M3 step 2 (YAN-75); registry/adapter assertions are pinned there, the
 # attach/fallback state machine stays on the card script.
 TARGET_REGISTRY = ROOT / "godot-android" / "scripts" / "target_registry.gd"
+# The two WebSocketPeer connect/poll/retry loops moved to scripts/ws_transport.gd
+# in M3 step 3 (YAN-76); peer/retry/subscribe assertions are pinned there,
+# URL resolution, packet handling, and the status snapshot stay on the card.
+WS_TRANSPORT = ROOT / "godot-android" / "scripts" / "ws_transport.gd"
 VALIDATOR = ROOT / "tests" / "validate_project.ps1"
 ANDROID_ACTIVITY = (
     ROOT
@@ -380,18 +384,22 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
     def test_proxy_targets_live_websocket_consumer_is_wired(self):
         source = SCRIPT.read_text(encoding="utf-8")
         hud = STATUS_HUD.read_text(encoding="utf-8")
+        # The peer/retry/subscribe loop itself moved to ws_transport.gd in M3
+        # step 3 (YAN-76); see tests/test_godot_ws_transport.py for the full
+        # transport contract.
+        transport = WS_TRANSPORT.read_text(encoding="utf-8")
 
         self.assertIn("const PROXY_TARGETS_WS_ENABLED := true", source)
         self.assertIn('const PROXY_TARGETS_WS_URL := "ws://127.0.0.1:8766/proxy_targets"', source)
         self.assertIn('const PROXY_TARGETS_STATUS_RES := "user://proxy_targets_live_status.json"', hud)
-        self.assertIn("var _proxy_targets_ws := WebSocketPeer.new()", source)
+        self.assertIn("var _proxy_targets_ws = WSTransportScript.new()", source)
         self.assertIn("var _proxy_targets_live_messages := 0", source)
-        self.assertIn("var _proxy_targets_ws_subscribed := false", source)
-        self.assertIn("var _proxy_targets_ws_packets_seen := 0", source)
+        self.assertIn("var _subscribed := false", transport)
+        self.assertIn("var _packets_seen := 0", transport)
         self.assertIn("var _proxy_targets_parsed_messages := 0", source)
         self.assertIn("var _proxy_targets_last_sequence := -1", source)
         self.assertIn("var _proxy_targets_last_position := Vector3.ZERO", source)
-        self.assertIn("var _proxy_targets_last_packet_bytes := 0", source)
+        self.assertIn("var _last_packet_bytes := 0", transport)
         self.assertIn('var _proxy_targets_last_packet_preview := "-"', source)
         self.assertIn('var _proxy_targets_last_message_type := "-"', source)
         self.assertIn('var _proxy_targets_last_error := "-"', source)
@@ -399,14 +407,14 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("var _proxy_targets_status_write_elapsed := 0.0", hud)
         self.assertIn("func _connect_proxy_targets_ws() -> void:", source)
         self.assertIn("func _poll_proxy_targets_ws(delta: float) -> void:", source)
-        self.assertIn("func _send_proxy_targets_subscribe() -> void:", source)
+        self.assertIn("func _send_subscribe_once() -> void:", transport)
         self.assertIn("func _apply_proxy_targets_live_payload(payload: String) -> void:", source)
         self.assertIn("func _record_proxy_targets_diagnostics(message: Dictionary) -> void:", source)
         self.assertIn("func _write_proxy_targets_status_file(snapshot: Dictionary, delta: float) -> void:", hud)
         self.assertIn("func _format_proxy_targets_status_line(proxy: Dictionary) -> String:", hud)
         self.assertIn("_connect_proxy_targets_ws()", source)
         self.assertIn("_poll_proxy_targets_ws(delta)", source)
-        self.assertIn("_send_proxy_targets_subscribe()", source)
+        self.assertIn("_send_subscribe_once()", transport)
         self.assertIn("_proxy_targets_ws_url()", source)
         # URL/enable resolution is centralized in SmartXROptions (env var ->
         # user://smartxr_options.json -> const default); see
@@ -414,10 +422,11 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_options.proxy_targets_ws_url(PROXY_TARGETS_WS_URL)", source)
         self.assertIn("_options.proxy_targets_ws_enabled(PROXY_TARGETS_WS_ENABLED)", source)
         self.assertIn("_options.control_ws_url(WS_URL)", source)
-        self.assertIn("connect_to_url(_proxy_targets_ws_url())", source)
-        self.assertIn("connect_to_url(_control_ws_url())", source)
-        self.assertIn("_proxy_targets_ws_packets_seen += 1", source)
-        self.assertIn("_proxy_targets_last_packet_bytes = packet.size()", source)
+        self.assertIn("connect_to(_proxy_targets_ws_url())", source)
+        self.assertIn("connect_to(_control_ws_url())", source)
+        self.assertIn("connect_to_url(url)", transport)
+        self.assertIn("_packets_seen += 1", transport)
+        self.assertIn("_last_packet_bytes = packet.size()", transport)
         self.assertIn("_proxy_targets_last_packet_preview = StatusHudScript.sanitize_status_text(payload)", source)
         self.assertIn("_record_proxy_targets_diagnostics(parsed)", source)
         # Per-frame seam: the card assembles the snapshot, StatusHud writes the files.

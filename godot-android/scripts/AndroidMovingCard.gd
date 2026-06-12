@@ -52,6 +52,7 @@ const ProxyTargetsCardAdapterScript := preload("res://scripts/proxy_targets_card
 const SmartXROptionsScript := preload("res://scripts/smartxr_options.gd")
 const StatusHudScript := preload("res://scripts/status_hud.gd")
 const TargetRegistryScript := preload("res://scripts/target_registry.gd")
+const WSTransportScript := preload("res://scripts/ws_transport.gd")
 
 # Centralized runtime configuration (env var -> user://smartxr_options.json
 # -> script const default). The consts below stay as the defaults; deployment
@@ -198,9 +199,13 @@ var _xr_initialize_ok := false
 var _xr_init_error := "not attempted"
 var _xr_origin: XROrigin3D = null
 var _camera: Camera3D = null
-var _ws := WebSocketPeer.new()
-var _ws_connected := false
-var _ws_retry_seconds := 0.0
+# WS transport subsystem (scripts/ws_transport.gd): each instance owns one
+# WebSocketPeer plus the shared connect/poll/2.0 s retry-on-close loop,
+# extracted in M3 step 3. The card resolves URLs and enable gates through
+# _options and handles every packet itself (ADR-4); the transports only move
+# bytes. Untyped `=` on purpose (no class_name reference) so script-only
+# probes can load both scripts; wiring happens in _setup_ws_transports().
+var _control_ws = WSTransportScript.new()
 var _card_viewport: SubViewport = null
 var _card_anchor: Node3D = null
 var _card_mesh: MeshInstance3D = null
@@ -240,16 +245,13 @@ var _vst_target_adapter: VSTTargetAdapter = null
 var _vst_target_proxy: Node3D = null
 var _proxy_targets_consumer: Node = null
 var _proxy_targets_card_adapter: Node = null
-var _proxy_targets_ws := WebSocketPeer.new()
-var _proxy_targets_ws_connected := false
-var _proxy_targets_ws_subscribed := false
-var _proxy_targets_ws_packets_seen := 0
-var _proxy_targets_ws_retry_seconds := 0.0
+# Second WSTransport instance (see _control_ws above): the proxy_targets
+# stream adds the subscribe-once-on-open payload on top of the same loop.
+var _proxy_targets_ws = WSTransportScript.new()
 var _proxy_targets_parsed_messages := 0
 var _proxy_targets_live_messages := 0
 var _proxy_targets_last_sequence := -1
 var _proxy_targets_last_position := Vector3.ZERO
-var _proxy_targets_last_packet_bytes := 0
 var _proxy_targets_last_packet_preview := "-"
 var _proxy_targets_last_message_type := "-"
 var _proxy_targets_last_error := "-"
@@ -296,6 +298,7 @@ func _ready() -> void:
 	_build_vst_target_proxy()
 	_build_debug_target_marker()
 	_build_proxy_targets_validation()
+	_setup_ws_transports()
 	_connect_ws()
 	_connect_proxy_targets_ws()
 	_setup_vst_capture()
@@ -641,13 +644,7 @@ func _apply_proxy_targets_sample() -> void:
 func _connect_proxy_targets_ws() -> void:
 	if not _proxy_targets_ws_enabled():
 		return
-	_proxy_targets_ws.close()
-	var result := _proxy_targets_ws.connect_to_url(_proxy_targets_ws_url())
-	_proxy_targets_ws_connected = false
-	_proxy_targets_ws_subscribed = false
-	_proxy_targets_ws_retry_seconds = 0.0
-	if result != OK:
-		_last_command = "proxy_ws_connect_err_" + str(result)
+	_proxy_targets_ws.connect_to(_proxy_targets_ws_url())
 
 
 func _proxy_targets_ws_enabled() -> bool:
@@ -665,32 +662,12 @@ func _control_ws_url() -> String:
 func _poll_proxy_targets_ws(delta: float) -> void:
 	if not _proxy_targets_ws_enabled():
 		return
-	_proxy_targets_ws.poll()
-	var state := _proxy_targets_ws.get_ready_state()
-	_proxy_targets_ws_connected = state == WebSocketPeer.STATE_OPEN
-	if state == WebSocketPeer.STATE_OPEN:
-		_send_proxy_targets_subscribe()
-		while _proxy_targets_ws.get_available_packet_count() > 0:
-			var packet := _proxy_targets_ws.get_packet()
-			_proxy_targets_ws_packets_seen += 1
-			_proxy_targets_last_packet_bytes = packet.size()
-			var payload := packet.get_string_from_utf8()
-			_proxy_targets_last_packet_preview = StatusHudScript.sanitize_status_text(payload)
-			_apply_proxy_targets_live_payload(payload)
-	elif state == WebSocketPeer.STATE_CLOSED:
-		_proxy_targets_ws_subscribed = false
-		_proxy_targets_ws_retry_seconds += delta
-		if _proxy_targets_ws_retry_seconds >= 2.0:
-			_connect_proxy_targets_ws()
+	_proxy_targets_ws.poll(delta)
 
 
-func _send_proxy_targets_subscribe() -> void:
-	if _proxy_targets_ws_subscribed:
-		return
-	_proxy_targets_ws.set_write_mode(WebSocketPeer.WRITE_MODE_TEXT)
-	var subscribe_payload := JSON.stringify({"type": "subscribe", "stream": "proxy_targets"})
-	_proxy_targets_ws.put_packet(subscribe_payload.to_utf8_buffer())
-	_proxy_targets_ws_subscribed = true
+func _on_proxy_targets_ws_packet(payload: String) -> void:
+	_proxy_targets_last_packet_preview = StatusHudScript.sanitize_status_text(payload)
+	_apply_proxy_targets_live_payload(payload)
 
 
 func _apply_proxy_targets_live_payload(payload: String) -> void:
@@ -822,13 +799,31 @@ func _update_debug_target_marker(delta: float) -> void:
 	_debug_target_marker.rotation_degrees = Vector3(0.0, _debug_target_elapsed_seconds * 35.0, 0.0)
 
 
+## Wires the two WSTransport instances (control + proxy_targets). The card
+## keeps URL/enable resolution (via _options), packet handling, and error
+## formatting; the transports own the peers and the 2.0 s retry loop. The
+## url providers make every retry re-resolve through the card, matching the
+## old loops byte-for-byte.
+func _setup_ws_transports() -> void:
+	_control_ws.set_on_packet(_handle_packet)
+	_control_ws.set_on_connect_error(_on_control_ws_connect_error)
+	_control_ws.set_url_provider(_control_ws_url)
+	_proxy_targets_ws.set_on_packet(_on_proxy_targets_ws_packet)
+	_proxy_targets_ws.set_subscribe_payload(JSON.stringify({"type": "subscribe", "stream": "proxy_targets"}))
+	_proxy_targets_ws.set_on_connect_error(_on_proxy_targets_ws_connect_error)
+	_proxy_targets_ws.set_url_provider(_proxy_targets_ws_url)
+
+
+func _on_control_ws_connect_error(result: int) -> void:
+	_last_command = "ws connect err " + str(result)
+
+
+func _on_proxy_targets_ws_connect_error(result: int) -> void:
+	_last_command = "proxy_ws_connect_err_" + str(result)
+
+
 func _connect_ws() -> void:
-	_ws.close()
-	var result := _ws.connect_to_url(_control_ws_url())
-	_ws_connected = false
-	_ws_retry_seconds = 0.0
-	if result != OK:
-		_last_command = "ws connect err " + str(result)
+	_control_ws.connect_to(_control_ws_url())
 
 
 func _process(delta: float) -> void:
@@ -1052,16 +1047,7 @@ func _target_offset_vector(offset_rule) -> Vector3:
 
 
 func _poll_ws(delta: float) -> void:
-	_ws.poll()
-	var state := _ws.get_ready_state()
-	_ws_connected = state == WebSocketPeer.STATE_OPEN
-	if state == WebSocketPeer.STATE_OPEN:
-		while _ws.get_available_packet_count() > 0:
-			_handle_packet(_ws.get_packet().get_string_from_utf8())
-	elif state == WebSocketPeer.STATE_CLOSED:
-		_ws_retry_seconds += delta
-		if _ws_retry_seconds >= 2.0:
-			_connect_ws()
+	_control_ws.poll(delta)
 
 
 func _handle_packet(payload: String) -> void:
@@ -1342,7 +1328,7 @@ func _update_status_hud(delta: float) -> void:
 ## only formats and writes.
 func _build_status_snapshot() -> Dictionary:
 	return {
-		"ws_connected": _ws_connected,
+		"ws_connected": _control_ws.ws_connected(),
 		"last_command": _last_command,
 		"anchor_mode": _anchor_mode,
 		"camera_position": _camera.global_position if _camera != null else null,
@@ -1399,8 +1385,8 @@ func _build_vst_status_snapshot() -> Dictionary:
 
 func _build_proxy_targets_status_snapshot() -> Dictionary:
 	return {
-		"ws_connected": _proxy_targets_ws_connected,
-		"ws_subscribed": _proxy_targets_ws_subscribed,
+		"ws_connected": _proxy_targets_ws.ws_connected(),
+		"ws_subscribed": _proxy_targets_ws.ws_subscribed(),
 		"ws_url": _proxy_targets_ws_url(),
 		"attachments": _card_attachments.size(),
 		"card_target_id": _proxy_targets_card_target_id(),
@@ -1410,11 +1396,11 @@ func _build_proxy_targets_status_snapshot() -> Dictionary:
 		"card_resolved_position": _proxy_targets_card_resolved_position(),
 		"card_node_position": _proxy_targets_card_node_position(),
 		"card_apply_count": _proxy_targets_card_apply_count,
-		"packets": _proxy_targets_ws_packets_seen,
+		"packets": _proxy_targets_ws.packets_seen(),
 		"parsed": _proxy_targets_parsed_messages,
 		"live": _proxy_targets_live_messages,
 		"sequence": _proxy_targets_last_sequence,
-		"packet_bytes": _proxy_targets_last_packet_bytes,
+		"packet_bytes": _proxy_targets_ws.last_packet_bytes(),
 		"packet_preview": _proxy_targets_last_packet_preview,
 		"message_type": _proxy_targets_last_message_type,
 		"source_coordinate": _proxy_targets_last_source_coordinate,
