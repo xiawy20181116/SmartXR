@@ -99,14 +99,18 @@ side.
   effects; target updates/lost state route back through Callables. Probe:
   `tools/run_godot_target_source_probe.ps1` (12 checks). Tests:
   `tests/test_godot_target_source.py`.
+- [x] **M4 step 3 — remaining TargetSource sources** (YAN-86): remote
+  proxy_targets WS payloads and fixture replay now route through
+  `TargetSourceScript.ProxyTargetsTargetSource`, a dependency-free
+  duck-typed boundary in `godot-android/scripts/target_source.gd`. The card
+  still owns registry wiring, card attachment, live counters, diagnostics,
+  status snapshot assembly, and fallback side effects; the source only parses
+  JSON, delegates to the injected proxy_targets card adapter, and reports
+  coarse errors. Probe: `tools/run_godot_target_source_probe.ps1` (15
+  checks). Tests: `tests/test_godot_target_source.py`.
 
 ## Next (not started)
 
-- [ ] **M4 step 3 — remaining TargetSource sources**: bring the remote
-  proxy_targets WS path and fixture replay behind the same duck-typed source
-  boundary without changing proxy_targets schema, FOV defaults, bbox/head
-  conventions, or card-facing behavior. The M4-1 shared math vectors and the
-  M4-2 target-source probe gate the move.
 - [ ] **M5 — Per-subsystem docs** following `docs/smartxr_options.md` style.
 
 ## Verification

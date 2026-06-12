@@ -13,6 +13,18 @@ var _exit_code := 1
 var _ran := false
 var _updated_count := 0
 var _lost_ids := []
+var _parsed_messages := []
+
+
+class FakeProxyTargetsAdapter:
+	var apply_count := 0
+	var applied_messages := []
+	var should_apply := true
+
+	func apply_proxy_targets_message(message: Dictionary) -> bool:
+		apply_count += 1
+		applied_messages.append(message.duplicate(true))
+		return should_apply
 
 
 func _process(_delta: float) -> bool:
@@ -34,6 +46,10 @@ func _on_updated(_target_id: String, _transform: Transform3D) -> void:
 
 func _on_lost(target_id: String) -> void:
 	_lost_ids.append(target_id)
+
+
+func _on_proxy_message_parsed(message: Dictionary) -> void:
+	_parsed_messages.append(message.duplicate(true))
 
 
 func _run_checks() -> String:
@@ -90,6 +106,34 @@ func _run_checks() -> String:
 	source.advance(2600.0)
 	_checks["advance_loses"] = str(source.target_state()) == "lost"
 	_checks["lost_callback_fired"] = _lost_ids == ["vst_right_target"]
+
+	var adapter := FakeProxyTargetsAdapter.new()
+	var proxy_source = source_script.ProxyTargetsTargetSource.new(adapter)
+	proxy_source.set_on_message_parsed(_on_proxy_message_parsed)
+	_checks["proxy_source_rejects_invalid_json"] = not proxy_source.apply_proxy_targets_json("{not-json") \
+		and str(proxy_source.last_error()) == "json_invalid" \
+		and _parsed_messages.is_empty() \
+		and adapter.apply_count == 0
+
+	var payload := '{"type":"proxy_targets","schema_version":1,"sequence":7,"targets":[],"cards":[]}'
+	_checks["proxy_source_applies_json_via_adapter"] = proxy_source.apply_proxy_targets_json(payload) \
+		and str(proxy_source.last_error()) == "-" \
+		and _parsed_messages.size() == 1 \
+		and int(_parsed_messages[0].get("sequence", -1)) == 7 \
+		and adapter.apply_count == 1 \
+		and int(adapter.applied_messages[0].get("sequence", -1)) == 7
+
+	adapter.should_apply = false
+	_checks["proxy_source_reports_apply_failed"] = not proxy_source.apply_proxy_targets_message({
+		"type": "proxy_targets",
+		"schema_version": 1,
+		"sequence": 8,
+		"targets": [],
+		"cards": [],
+	}) \
+		and str(proxy_source.last_error()) == "apply_failed" \
+		and _parsed_messages.size() == 2 \
+		and adapter.apply_count == 2
 
 	return "-"
 

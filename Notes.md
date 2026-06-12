@@ -129,6 +129,69 @@
 - `powershell -ExecutionPolicy Bypass -File tests\validate_project.ps1` ->
   102 registered tests, OK.
 - `tools\run_godot_target_source_probe.ps1` -> PASS (12/12 checks).
+
+## M4 step 3 — remaining TargetSource sources (YAN-86)
+
+### Files changed
+
+- `godot-android/scripts/target_source.gd` — added
+  `ProxyTargetsTargetSource`, a dependency-free duck-typed boundary for
+  proxy_targets JSON frames. It parses JSON, delegates accepted dictionaries
+  to the injected proxy_targets card adapter, invokes an optional parsed
+  callback, and exposes `last_error()` values (`json_invalid`,
+  `adapter_null`, `apply_failed`, or `-`).
+- `godot-android/scripts/AndroidMovingCard.gd` — fixture replay and live
+  proxy_targets WebSocket payloads now call
+  `_proxy_targets_target_source.apply_proxy_targets_json(...)`. The card
+  still owns registry wiring, card attachment, live counters, diagnostics,
+  status snapshot assembly, and fallback side effects. The live parsed
+  callback is installed after fixture replay so the startup sample does not
+  change live parsed-message counters.
+- `godot-android/tests/script_only_target_source_probe.gd` — target-source
+  probe now includes proxy_targets source checks for invalid JSON, adapter
+  delegation, parsed-message callback routing, and failed-apply diagnostics.
+- `tests/test_godot_target_source.py` — static pins for the new source class
+  and AndroidMovingCard wiring.
+
+### Behavioral notes
+
+- The proxy_targets payload schema, FOV constants, bbox/head conventions,
+  target IDs, card attachment path, and status snapshot keys are unchanged.
+- `ProxyTargetsConsumer` and `ProxyTargetsCardAdapter` remain the owners of
+  proxy node creation, transform parsing, card binding, and card registration.
+  `ProxyTargetsTargetSource` is only the target-source boundary around those
+  injected objects.
+
+### Next slice recommendation
+
+- **M5: per-subsystem docs** following `docs/smartxr_options.md` style.
+
+### Verification run
+
+- `python -m unittest discover tests` -> 151 tests, OK.
+- `powershell -ExecutionPolicy Bypass -File tests\validate_project.ps1` ->
+  102 registered tests, OK.
+- `tools\run_godot_bbox_math_probe.ps1` -> PASS.
+- `tools\run_godot_target_source_probe.ps1` -> PASS (15/15 checks).
+- `tools\run_godot_smartxr_options_probe.ps1` -> PASS.
+- `tools\run_godot_status_hud_probe.ps1` -> PASS.
+- `tools\run_godot_target_registry_probe.ps1` -> PASS.
+- `tools\run_godot_ws_transport_probe.ps1` -> PASS.
+- `tools\run_godot_card_attachment_probe.ps1` -> PASS.
+- `tools\run_godot_xr_bootstrap_probe.ps1` -> PASS.
+- `tools\run_godot_script_only_websocket_probe.ps1` -> exit 0 with one
+  packet received.
+- `tools\run_godot_script_only_staged_probe.ps1` -> all stages exit 0
+  (`apply` stage parsed=1, live=1, attachments=1).
+- `tools\run_godot_proxy_targets_consumer_only.ps1` with a local
+  `fake_proxy_targets_publisher.py` on `127.0.0.1:8766` -> exit 0
+  (parsed=1, live=1, attachments=1).
+- `tools\run_godot_script_only_tcp_probe.ps1` -> exit 0.
+- `tools\run_proxy_targets_live_harness.ps1 -ScriptOnly` with a local
+  `fake_proxy_targets_publisher.py` on `127.0.0.1:8766` -> exit 0. The
+  default stripped-project mode printed a Godot 4.6.2 signal 11 crash while
+  trying to open `user://logs/godot2026-06-12T15.58.01.log`; this issue's
+  verification contract is script-only/no-project for probe-visible scripts.
 - `tools\run_godot_bbox_math_probe.ps1` -> PASS (32/32 checks; card +
   sibling scripts staged in no-project mode).
 - Existing script-only probes re-run green: smartxr_options 10,

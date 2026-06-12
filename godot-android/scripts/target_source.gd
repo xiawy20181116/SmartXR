@@ -6,9 +6,10 @@ class_name TargetSource
 ##
 ## Owns the standard TrackableTarget record, the VST target adapter state
 ## machine (confidence gate, smoothing, velocity, predict/stale/lost timing),
-## and a small duck-typed VSTTargetSource boundary. The card still owns scene
-## registration, attachment, fallback side effects, bbox-to-head math, and
-## status snapshot assembly; those side effects are injected as Callables.
+## and small duck-typed target-source boundaries for VST plus proxy_targets
+## JSON frames. The card still owns scene registration, attachment, fallback
+## side effects, bbox-to-head math, and status snapshot assembly; those side
+## effects are injected as Callables or delegated through injected adapters.
 ##
 ## Keep this script dependency-free and loadable in no-project mode: no
 ## preloads, no env reads, no tree access of its own, and never reference its
@@ -177,3 +178,37 @@ class VSTTargetSource:
 
 	func target() -> TrackableTarget:
 		return _adapter.target
+
+
+class ProxyTargetsTargetSource:
+	var _card_adapter = null
+	var _on_message_parsed := Callable()
+	var _last_error := "-"
+
+	func _init(card_adapter) -> void:
+		_card_adapter = card_adapter
+
+	func set_on_message_parsed(on_message_parsed: Callable) -> void:
+		_on_message_parsed = on_message_parsed
+
+	func apply_proxy_targets_json(payload: String) -> bool:
+		var parsed = JSON.parse_string(payload)
+		if typeof(parsed) != TYPE_DICTIONARY:
+			_last_error = "json_invalid"
+			return false
+		return apply_proxy_targets_message(parsed)
+
+	func apply_proxy_targets_message(message: Dictionary) -> bool:
+		if _on_message_parsed.is_valid():
+			_on_message_parsed.call(message)
+		if _card_adapter == null or not _card_adapter.has_method("apply_proxy_targets_message"):
+			_last_error = "adapter_null"
+			return false
+		if not bool(_card_adapter.apply_proxy_targets_message(message)):
+			_last_error = "apply_failed"
+			return false
+		_last_error = "-"
+		return true
+
+	func last_error() -> String:
+		return _last_error

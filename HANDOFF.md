@@ -141,8 +141,9 @@
   `target_registry.gd`) are script-scoped and safe. The card's untyped
   helpers (`_proxy_targets_card_resolved_position()` etc.) intentionally
   return Vector3-or-null; StatusHud renders null as "n/a".
-- M4-2 (VST TargetSource extraction) is complete. M4-3 (remaining
-  TargetSource sources) and M5 (docs) are not started — see TASKS.md.
+- M4-2 (VST TargetSource extraction) and M4-3 (remaining TargetSource
+  sources) are complete. M5 (per-subsystem docs) is not started — see
+  TASKS.md.
 - GDScript bbox math in `AndroidMovingCard.gd` still duplicates
   `smartxr/geometry.py` by design until M4-3; both sides are now
   locked to `godot-android/fixtures/bbox_math_test_vectors.json`, so any
@@ -155,11 +156,9 @@
 
 ## How to continue
 
-M3 is complete, M4-1 (shared bbox math vectors) is in, and M4-2 extracted
-the VST target source into `target_source.gd`. Continue with M4-3: bring the
-remaining sources (remote proxy_targets WS and fixture replay) behind the
-same duck-typed TargetSource boundary without changing the proxy_targets
-payload schema, FOV defaults, bbox/head conventions, or card-facing
-behavior; then M5 (per-subsystem docs following `docs/smartxr_options.md`
-style). Keep the ADR-4 seam and the no-project-mode rules for any new
-probe-visible script.
+M3 is complete, M4-1 (shared bbox math vectors) is in, M4-2 extracted the
+VST target source into `target_source.gd`, and M4-3 routes the remote
+proxy_targets WS path plus fixture replay through
+`ProxyTargetsTargetSource`. Continue with M5: per-subsystem docs following
+`docs/smartxr_options.md` style. Keep the ADR-4 boundary and the
+no-project-mode rules for any new probe-visible script.

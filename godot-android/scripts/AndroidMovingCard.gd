@@ -158,6 +158,7 @@ var _vst_target_source = null
 var _vst_target_proxy: Node3D = null
 var _proxy_targets_consumer: Node = null
 var _proxy_targets_card_adapter: Node = null
+var _proxy_targets_target_source = null
 # Second WSTransport instance (see _control_ws above): the proxy_targets
 # stream adds the subscribe-once-on-open payload on top of the same loop.
 var _proxy_targets_ws = WSTransportScript.new()
@@ -518,11 +519,13 @@ func _build_proxy_targets_validation() -> void:
 	_proxy_targets_card_adapter.name = "ProxyTargetsCardAdapter"
 	add_child(_proxy_targets_card_adapter)
 	_proxy_targets_card_adapter.bind(_proxy_targets_consumer, self)
+	_proxy_targets_target_source = TargetSourceScript.ProxyTargetsTargetSource.new(_proxy_targets_card_adapter)
 	_apply_proxy_targets_sample()
+	_proxy_targets_target_source.set_on_message_parsed(_on_proxy_targets_message_parsed)
 
 
 func _apply_proxy_targets_sample() -> void:
-	if _proxy_targets_card_adapter == null:
+	if _proxy_targets_target_source == null:
 		return
 	if not FileAccess.file_exists(PROXY_TARGETS_SAMPLE_RES):
 		_last_command = "proxy_sample_missing"
@@ -531,7 +534,7 @@ func _apply_proxy_targets_sample() -> void:
 	if sample.is_empty():
 		_last_command = "proxy_sample_empty"
 		return
-	var applied: bool = bool(_proxy_targets_card_adapter.apply_proxy_targets_json(sample))
+	var applied: bool = bool(_proxy_targets_target_source.apply_proxy_targets_json(sample))
 	_last_command = "proxy_sample" if applied else "proxy_sample_failed"
 
 
@@ -565,25 +568,28 @@ func _on_proxy_targets_ws_packet(payload: String) -> void:
 
 
 func _apply_proxy_targets_live_payload(payload: String) -> void:
-	if _proxy_targets_card_adapter == null:
+	if _proxy_targets_target_source == null:
 		_proxy_targets_last_error = "adapter_null"
 		return
-	var parsed = JSON.parse_string(payload)
-	if typeof(parsed) != TYPE_DICTIONARY:
+	var applied: bool = bool(_proxy_targets_target_source.apply_proxy_targets_json(payload))
+	var source_error := str(_proxy_targets_target_source.last_error())
+	if source_error == "json_invalid":
 		_proxy_targets_last_message_type = "invalid"
 		_proxy_targets_last_error = "json_invalid"
 		_last_command = "proxy_live_invalid"
 		return
-	_proxy_targets_parsed_messages += 1
-	_record_proxy_targets_diagnostics(parsed)
-	var applied: bool = bool(_proxy_targets_card_adapter.apply_proxy_targets_message(parsed))
 	if applied:
 		_proxy_targets_live_messages += 1
 		_proxy_targets_last_error = "-"
 		_last_command = "proxy_live"
 	else:
-		_proxy_targets_last_error = "apply_failed"
+		_proxy_targets_last_error = source_error
 		_last_command = "proxy_live_failed"
+
+
+func _on_proxy_targets_message_parsed(message: Dictionary) -> void:
+	_proxy_targets_parsed_messages += 1
+	_record_proxy_targets_diagnostics(message)
 
 
 func _record_proxy_targets_diagnostics(message: Dictionary) -> void:

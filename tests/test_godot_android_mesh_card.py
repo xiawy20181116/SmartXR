@@ -373,7 +373,8 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("func _build_proxy_targets_validation() -> void:", source)
         self.assertIn("func _apply_proxy_targets_sample() -> void:", source)
         self.assertIn("_proxy_targets_card_adapter.bind(_proxy_targets_consumer, self)", source)
-        self.assertIn("_proxy_targets_card_adapter.apply_proxy_targets_json", source)
+        self.assertIn("TargetSourceScript.ProxyTargetsTargetSource.new(_proxy_targets_card_adapter)", source)
+        self.assertIn("_proxy_targets_target_source.apply_proxy_targets_json(sample)", source)
         self.assertIn("_build_proxy_targets_validation()", source)
 
     def test_proxy_targets_card_adapter_uses_offset_rule_contract(self):
@@ -455,7 +456,9 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_packets_seen += 1", transport)
         self.assertIn("_last_packet_bytes = packet.size()", transport)
         self.assertIn("_proxy_targets_last_packet_preview = StatusHudScript.sanitize_status_text(payload)", source)
-        self.assertIn("_record_proxy_targets_diagnostics(parsed)", source)
+        self.assertIn("_proxy_targets_target_source.apply_proxy_targets_json(payload)", source)
+        self.assertIn("func _on_proxy_targets_message_parsed(message: Dictionary) -> void:", source)
+        self.assertIn("_record_proxy_targets_diagnostics(message)", source)
         # Per-frame seam: the card assembles the snapshot, StatusHud writes the files.
         self.assertIn("_update_status_hud(delta)", source)
         self.assertIn("_status_hud.write_status_files(snapshot, delta)", source)
@@ -482,7 +485,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('"source_coordinate": _proxy_targets_last_source_coordinate', source)
         self.assertIn('"source_coordinate_summary": _source_coordinate_summary(proxy.get("source_coordinate", {}))', hud)
         self.assertIn("func _source_coordinate_summary(source_coordinate: Dictionary) -> String:", hud)
-        self.assertLess(source.index("_record_proxy_targets_diagnostics(parsed)"), source.index("_proxy_targets_card_adapter.apply_proxy_targets_message(parsed)"))
+        self.assertLess(source.index("_proxy_targets_target_source.apply_proxy_targets_json(payload)"), source.index('_last_command = "proxy_live"'))
         self.assertIn("ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s src=%s err=%s", hud)
         self.assertIn('_last_command = "proxy_live"', source)
 
