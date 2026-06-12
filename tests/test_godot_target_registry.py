@@ -58,10 +58,10 @@ class GodotTargetRegistryTests(unittest.TestCase):
         # The inner classes moved out of the card.
         self.assertNotIn("class TargetRegistry:", card)
         self.assertNotIn("class Node3DTargetAdapter:", card)
-        # TrackableTarget / VSTTargetAdapter stay in the card for now: they
-        # belong to the target-source subsystem (M4), not the registry.
-        self.assertIn("class TrackableTarget:", card)
-        self.assertIn("class VSTTargetAdapter:", card)
+        # TrackableTarget / VSTTargetAdapter moved to the target-source
+        # subsystem in M4; they do not belong to the registry or the card.
+        self.assertNotIn("class TrackableTarget:", card)
+        self.assertNotIn("class VSTTargetAdapter:", card)
 
     def test_runtime_probe_and_runner_exist(self):
         probe = PROBE.read_text(encoding="utf-8")

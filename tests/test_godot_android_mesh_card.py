@@ -23,6 +23,10 @@ WS_TRANSPORT = ROOT / "godot-android" / "scripts" / "ws_transport.gd"
 # assertions are pinned there, the public API, anchor-mode switching, and the
 # status snapshot stay on the card.
 CARD_ATTACHMENT = ROOT / "godot-android" / "scripts" / "card_attachment.gd"
+# TrackableTarget / VSTTargetAdapter moved to scripts/target_source.gd in M4
+# step 2 (YAN-84); state-machine assertions are pinned there, bbox math and
+# target-source wiring stay on the card.
+TARGET_SOURCE = ROOT / "godot-android" / "scripts" / "target_source.gd"
 # The XR startup path (_try_init_xr) and the camera/origin construction moved
 # to scripts/xr_bootstrap.gd in M3 step 5 (YAN-79); init/blend/camera
 # assertions are pinned there, the resolved _xr_* state and the status
@@ -186,14 +190,16 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_vst_tracker_updates_standard_trackable_target_proxy(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        target_source = TARGET_SOURCE.read_text(encoding="utf-8")
 
-        self.assertIn("class TrackableTarget", source)
-        self.assertIn('const TRACKABLE_STATE_TRACKED := "tracked"', source)
-        self.assertIn('const TRACKABLE_SOURCE_VST := "vst"', source)
-        self.assertIn("class VSTTargetAdapter", source)
-        self.assertIn("func update_target(target_id: String, transform: Transform3D, confidence: float, timestamp_ms: float) -> bool:", source)
+        self.assertIn("class TrackableTarget", target_source)
+        self.assertIn('const TRACKABLE_STATE_TRACKED := "tracked"', target_source)
+        self.assertIn('const TRACKABLE_SOURCE_VST := "vst"', target_source)
+        self.assertIn("class VSTTargetAdapter", target_source)
+        self.assertIn("func update_target(target_id: String, transform: Transform3D, confidence: float, timestamp_ms: float) -> bool:", target_source)
         self.assertIn("func update_vst_target(target_id: String, transform: Transform3D, confidence: float, timestamp_ms: float) -> bool:", source)
-        self.assertIn("var _vst_target_adapter: VSTTargetAdapter = null", source)
+        self.assertIn("var _vst_target_source = null", source)
+        self.assertIn("TargetSourceScript.VSTTargetSource.new(", source)
         self.assertIn("var _vst_target_proxy: Node3D = null", source)
         self.assertIn('register_node3d_target(VST_TRACKED_TARGET_ID, _vst_target_proxy)', source)
         self.assertIn('attach_to_target(CARD_ANCHOR_NAME, VST_TRACKED_TARGET_ID, VST_TARGET_OFFSET_RULE)', source)
@@ -203,6 +209,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_vst_target_adapter_tracks_confidence_timestamp_and_fallback_states(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        target_source = TARGET_SOURCE.read_text(encoding="utf-8")
         hud = STATUS_HUD.read_text(encoding="utf-8")
 
         # The lost-state display default is rendered by StatusHud.
@@ -213,6 +220,9 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
             "VST_TARGET_STALE_MS",
             "VST_TARGET_LOST_MS",
             "VST_TARGET_SMOOTHING_ALPHA",
+        ]:
+            self.assertIn(marker, source)
+        for marker in [
             "velocity: Vector3",
             "confidence: float",
             "timestamp_ms: float",
@@ -223,9 +233,10 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
             "_set_state(TRACKABLE_STATE_PREDICTED)",
             "_set_state(TRACKABLE_STATE_STALE)",
             "_set_state(TRACKABLE_STATE_LOST)",
-            "_apply_vst_target_fallback()",
+            "set_on_target_lost(on_target_lost: Callable)",
         ]:
-            self.assertIn(marker, source)
+            self.assertIn(marker, target_source)
+        self.assertIn("func _on_vst_target_lost(_target_id: String) -> void:", source)
 
     def test_vst_tracker_does_not_use_bbox_direct_anchor_inside_proxy_entrypoint(self):
         source = SCRIPT.read_text(encoding="utf-8")

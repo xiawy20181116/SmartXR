@@ -9,7 +9,7 @@ param(
 # tests\test_bbox_math_vectors.py runs through smartxr.geometry.
 #
 # Unlike the other script-only probes this one loads the CARD, which preloads
-# eight sibling scripts via res://scripts/*.gd. So the runner stages scripts\
+# nine sibling scripts via res://scripts/*.gd. So the runner stages scripts\
 # into a temp working directory WITHOUT a Godot project file and launches
 # Godot with that cwd, so res:// resolves there in true no-project mode (the
 # compile-gate trick; cwd = godot-android\ would boot the real project and
