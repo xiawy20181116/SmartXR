@@ -62,9 +62,10 @@ func update_status_label(snapshot: Dictionary) -> void:
 	var bbox_size: Vector2 = snapshot.get("bbox_size_px", Vector2.ZERO)
 	var angular_size: Vector2 = snapshot.get("bbox_angular_size_deg", Vector2.ZERO)
 	var xr_line := _format_xr_status_line(snapshot)
+	var sim_line := _format_sim_status_line(snapshot.get("sim", {}))
 	var vst_line := _format_vst_status_line(snapshot.get("vst", {}))
 	var proxy_targets_line := _format_proxy_targets_status_line(snapshot.get("proxy_targets", {}))
-	_status_label.text = "3DoF Anchor\nWS: %s  Cmd: %s  Face: 3DoF  Mode: %s\nCamera Pos xyz: %s\nCamera Rot xyz: %s\nXROrigin Pos xyz: %s\nBBox cx/cy/w/h: %.0f %.0f %.0f %.0f  Depth: %.2f\nYaw/Pitch/Depth: %.1f %.1f %.2f  Angular W/H: %.1f %.1f  Rot: %.1f %.1f %.1f\nSpeed: %.1f deg/s  Paused: %s\nTL %.2f %.2f %.2f  TR %.2f %.2f %.2f\nBL %.2f %.2f %.2f  BR %.2f %.2f %.2f\n%s\n%s\n%s" % [
+	_status_label.text = "3DoF Anchor\nWS: %s  Cmd: %s  Face: 3DoF  Mode: %s\nCamera Pos xyz: %s\nCamera Rot xyz: %s\nXROrigin Pos xyz: %s\nBBox cx/cy/w/h: %.0f %.0f %.0f %.0f  Depth: %.2f\nYaw/Pitch/Depth: %.1f %.1f %.2f  Angular W/H: %.1f %.1f  Rot: %.1f %.1f %.1f\nSpeed: %.1f deg/s  Paused: %s\nTL %.2f %.2f %.2f  TR %.2f %.2f %.2f\nBL %.2f %.2f %.2f  BR %.2f %.2f %.2f\n%s\n%s\n%s\n%s" % [
 		"connected" if bool(snapshot.get("ws_connected", false)) else "waiting",
 		str(snapshot.get("last_command", "none")),
 		str(snapshot.get("anchor_mode", "manual")),
@@ -99,6 +100,7 @@ func update_status_label(snapshot: Dictionary) -> void:
 		br.y,
 		br.z,
 		proxy_targets_line,
+		sim_line,
 		xr_line,
 		vst_line,
 	]
@@ -189,6 +191,17 @@ func _format_xr_status_line(snapshot: Dictionary) -> String:
 		str(bool(xr.get("active", false))),
 		str(bool(snapshot.get("viewport_use_xr", false))),
 		err_str,
+	]
+
+
+func _format_sim_status_line(sim: Dictionary) -> String:
+	if not bool(sim.get("enabled", false)):
+		return "SIM: disabled"
+	return "SIM: mode=%s pos=%s rot=%s speed=%.1f" % [
+		str(sim.get("mode", "-")),
+		_format_vec3_or_na(sim.get("camera_position")),
+		_format_vec3_or_na(sim.get("camera_rotation_degrees")),
+		float(sim.get("move_speed_mps", 0.0)),
 	]
 
 

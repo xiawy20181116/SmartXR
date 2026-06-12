@@ -8,6 +8,7 @@ try {
         tests/test_godot_android_mesh_card.py `
         tests/test_godot_card_attachment.py `
         tests/test_godot_smartxr_options.py `
+        tests/test_godot_sim_bootstrap.py `
         tests/test_godot_status_hud.py `
         tests/test_godot_target_source.py `
         tests/test_godot_target_registry.py `

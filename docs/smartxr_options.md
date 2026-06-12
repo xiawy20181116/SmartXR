@@ -22,6 +22,7 @@ For every setting, highest priority first:
 | `control_ws_url` | `SMARTXR_CONTROL_WS_URL` | `WS_URL` in `AndroidMovingCard.gd` | Keyboard control channel (`ws_control.py` server) |
 | `proxy_targets_ws_url` | `PROXY_TARGETS_WS_URL` | `PROXY_TARGETS_WS_URL` const | proxy_targets live stream endpoint |
 | `proxy_targets_ws_enabled` | `SMARTXR_PROXY_TARGETS_WS_ENABLED` | `PROXY_TARGETS_WS_ENABLED` const | Whether the live consumer runs |
+| simulator mode | `SMARTXR_SIM_MODE` | unset / false | Forces the desktop simulator path: no OpenXR interface lookup success, fallback camera movement, and HUD `SIM` line |
 
 `PROXY_TARGETS_WS_URL` keeps its historical environment-variable name (it
 predates this class and is referenced by existing harnesses); new settings use
@@ -29,6 +30,29 @@ the `SMARTXR_` prefix.
 
 Boolean environment values accept `1/true/yes/on` (case-insensitive); any
 other non-empty value is false.
+
+## Desktop simulator
+
+Use the desktop simulator when running the SmartXR card on a Windows Godot
+editor/player without a headset:
+
+```powershell
+powershell -File tools\run_desktop_sim.ps1 [-GodotExe <path to Godot 4 exe>]
+```
+
+The wrapper runs `tools\set_gxr_extension.ps1 -Mode disable` before project
+startup, launches `godot-android` with `SMARTXR_SIM_MODE=1`, and re-enables the
+extension after Godot exits. In simulator mode `AndroidMovingCard.gd` reuses the
+normal card scene and card logic, but `SimBootstrap` injects a non-XR interface
+provider so OpenXR/GXR startup does not run. The fallback camera becomes the
+simulated head pose.
+
+Controls:
+
+- Left click captures the mouse; Esc releases it.
+- Mouse motion changes yaw/pitch.
+- WASD moves forward/back/left/right in head space.
+- Q/E moves down/up.
 
 ## Example config file
 

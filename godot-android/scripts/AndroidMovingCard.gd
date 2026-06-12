@@ -41,9 +41,11 @@ const PASSTHROUGH_OVERLAY_ENV := "SMARTXR_USE_PASSTHROUGH_OVERLAY"
 const PASSTHROUGH_OVERLAY_VIEWPORT_SIZE := Vector2i(512, 256)
 const PASSTHROUGH_OVERLAY_QUAD_SIZE_M := Vector2(0.42, 0.20)
 const PASSTHROUGH_OVERLAY_DEPTH_M := 1.5
+const SIM_MODE_ENV := "SMARTXR_SIM_MODE"
 const CardAttachmentScript := preload("res://scripts/card_attachment.gd")
 const ProxyTargetsConsumerScript := preload("res://scripts/proxy_targets_consumer.gd")
 const ProxyTargetsCardAdapterScript := preload("res://scripts/proxy_targets_card_adapter.gd")
+const SimBootstrapScript := preload("res://scripts/sim_bootstrap.gd")
 const SmartXROptionsScript := preload("res://scripts/smartxr_options.gd")
 const StatusHudScript := preload("res://scripts/status_hud.gd")
 const TargetRegistryScript := preload("res://scripts/target_registry.gd")
@@ -105,6 +107,8 @@ var _xr_initialize_ok := false
 var _xr_init_error := "not attempted"
 var _xr_origin: XROrigin3D = null
 var _camera: Camera3D = null
+var _sim_bootstrap = SimBootstrapScript.new()
+var _sim_enabled := false
 # WS transport subsystem (scripts/ws_transport.gd): each instance owns one
 # WebSocketPeer plus the shared connect/poll/2.0 s retry-on-close loop,
 # extracted in M3 step 3. The card resolves URLs and enable gates through
@@ -198,6 +202,7 @@ var _vst_uses_eye_to_head_anchor := false
 
 
 func _ready() -> void:
+	_sim_enabled = _sim_mode_enabled()
 	_passthrough_overlay_enabled = _use_passthrough_overlay()
 	_setup_card_attachment()
 	_setup_xr_bootstrap()
@@ -226,6 +231,8 @@ func _ready() -> void:
 ## default OpenXR lookup; probes inject fakes instead.
 func _setup_xr_bootstrap() -> void:
 	_xr_bootstrap.set_fallback_look_at_provider(_anchor_position_from_yaw_pitch_depth)
+	if _sim_enabled:
+		_sim_bootstrap.apply_to_xr_bootstrap(_xr_bootstrap)
 
 
 ## Delegates the XR startup path to xr_bootstrap.gd, then copies the results
@@ -244,6 +251,11 @@ func _try_init_xr() -> void:
 
 func _use_passthrough_overlay() -> bool:
 	var value := OS.get_environment(PASSTHROUGH_OVERLAY_ENV).strip_edges().to_lower()
+	return ["1", "true", "yes", "on"].has(value)
+
+
+func _sim_mode_enabled() -> bool:
+	var value := OS.get_environment(SIM_MODE_ENV).strip_edges().to_lower()
 	return ["1", "true", "yes", "on"].has(value)
 
 
@@ -304,6 +316,8 @@ func _setup_camera() -> void:
 	_xr_bootstrap.setup_camera(self)
 	_xr_origin = _xr_bootstrap.xr_origin()
 	_camera = _xr_bootstrap.camera()
+	if _sim_enabled:
+		_sim_bootstrap.bind_camera(_camera)
 
 
 func _setup_light() -> void:
@@ -711,7 +725,14 @@ func _connect_ws() -> void:
 	_control_ws.connect_to(_control_ws_url())
 
 
+func _unhandled_input(event: InputEvent) -> void:
+	if _sim_enabled:
+		_sim_bootstrap.handle_input(event)
+
+
 func _process(delta: float) -> void:
+	if _sim_enabled:
+		_sim_bootstrap.update(delta)
 	_poll_ws(delta)
 	_poll_proxy_targets_ws(delta)
 	_poll_vst_bbox()
@@ -1163,6 +1184,7 @@ func _build_status_snapshot() -> Dictionary:
 		"viewport_use_xr": get_viewport().use_xr,
 		"viewport_transparent_bg": get_viewport().transparent_bg,
 		"xr": _build_xr_status_snapshot(),
+		"sim": _build_sim_status_snapshot(),
 		"vst": _build_vst_status_snapshot(),
 		"proxy_targets": _build_proxy_targets_status_snapshot(),
 		"passthrough_overlay": _build_passthrough_overlay_status_snapshot(),
@@ -1176,6 +1198,12 @@ func _build_xr_status_snapshot() -> Dictionary:
 		"active": _xr_active,
 		"init_error": _xr_init_error,
 	}
+
+
+func _build_sim_status_snapshot() -> Dictionary:
+	if not _sim_enabled:
+		return {"enabled": false}
+	return _sim_bootstrap.status_snapshot()
 
 
 func _build_vst_status_snapshot() -> Dictionary:
