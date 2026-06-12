@@ -74,3 +74,32 @@ the card keeps all state resolution; later M3 extractions should reuse the
 same pattern (resolve in card, format/act in subsystem node). The JSON shape
 of both status files is unchanged, so `validate_proxy_targets_live_status.py`
 and on-device pulls keep working.
+
+## ADR-5: Shared JSON test vectors lock the duplicated bbox math (M4-1)
+
+**Context.** The bbox→head math exists twice on purpose until M4-2/M4-3:
+`smartxr/geometry.py` on the publisher side and four methods inside
+`AndroidMovingCard.gd` on the device side. M4 moves the GDScript side into a
+TargetSource subsystem; without a cross-language gate, a refactor could
+silently change the numbers on one side only.
+
+**Decision.** Promote the conventions in
+`docs/proxy_targets_payload_contract.md` into one checked-in fixture,
+`godot-android/fixtures/bbox_math_test_vectors.json`, consumed by both
+implementations: `tests/test_bbox_math_vectors.py` (Python, abs 1e-9) and a
+script-only Godot probe (`tools/run_godot_bbox_math_probe.ps1`, abs 1e-4 —
+Godot Vector3 is float32). Expected values are generated from
+`smartxr.geometry` (`tools/generate_bbox_math_test_vectors.py`); the
+cross-language lock comes from the GDScript probe reproducing the same
+numbers at runtime, and the trivial cases are hand-verifiable. GDScript-only
+behavior (the <16-element matrix fallback, the yaw/pitch/depth/angular
+decomposition, the final anchor position) lives in the same fixture so M4-2+
+cannot drift it.
+
+**Consequences.** Any M4 move that changes the math fails the probe or the
+Python suite instead of shipping a silent divergence. The full-chain vectors
+are pinned to the card's 70/43 FOV consts (the probe fails on drift), so a
+FOV default change requires regenerating the fixture deliberately. The probe
+loads the card itself, which sets the precedent for staging `scripts\` into
+a no-project temp cwd (the compile-gate trick) whenever a probe needs a
+script that preloads siblings.

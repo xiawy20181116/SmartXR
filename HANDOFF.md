@@ -1,9 +1,29 @@
 # HANDOFF
 
-## State (after M3 step 5, YAN-79)
+## State (after M4 step 1, YAN-80)
 
-- All 134 Python tests pass (`python -m unittest tests/test_*.py`).
+- All 148 Python tests pass (`python -m unittest tests/test_*.py`).
 - Schema gate passes on both fixtures.
+- **M4 step 1 done** (YAN-80): the duplicated bbox→head math —
+  `smartxr/geometry.py` vs `_anchor_from_bbox` /
+  `_convert_vst_camera_point_to_head_convention` /
+  `_transform_right_vst_point_to_head` /
+  `_target_position_from_bbox_anchor` in `AndroidMovingCard.gd` — is locked
+  to one checked-in fixture,
+  `godot-android/fixtures/bbox_math_test_vectors.json` (schema_version 1:
+  projection, head-conversion incl. the GDScript-only <16-element matrix
+  fallback, full chain incl. the GDScript-only yaw/pitch/depth/angular
+  decomposition and final position). Consumers:
+  `tests/test_bbox_math_vectors.py` (Python, 1e-9) and
+  `tools/run_godot_bbox_math_probe.ps1` →
+  `godot-android/tests/script_only_bbox_math_probe.gd` (GDScript, 1e-4,
+  float32; 32 checks). The probe loads the CARD itself, so the runner
+  stages `scripts\` into `.tmp\bbox_math_probe\scripts\` (no project file)
+  and runs Godot with that cwd — the compile-gate trick — and instantiates
+  the card WITHOUT adding it to the tree (no `_ready`: no WS connects, no
+  XR init; it is freed explicitly). Vector authoring:
+  `tools/generate_bbox_math_test_vectors.py`. NO production code moved —
+  this is the de-risking gate for M4-2/M4-3.
 - **M3 step 1 done** (YAN-74): status HUD + diagnostics-file subsystem
   extracted into `godot-android/scripts/status_hud.gd` via the
   snapshot-Dictionary seam (ADR-4 in DECISIONS.md).
@@ -121,19 +141,25 @@
   `target_registry.gd`) are script-scoped and safe. The card's untyped
   helpers (`_proxy_targets_card_resolved_position()` etc.) intentionally
   return Vector3-or-null; StatusHud renders null as "n/a".
-- M4 (TargetSource interface), M5 (docs) not started — see TASKS.md.
+- M4-2/M4-3 (TargetSource interface extraction), M5 (docs) not started —
+  see TASKS.md.
 - GDScript bbox math in `AndroidMovingCard.gd` still duplicates
-  `smartxr/geometry.py`; shared test vectors are planned for M4.
+  `smartxr/geometry.py` by design until M4-2/M4-3; both sides are now
+  locked to `godot-android/fixtures/bbox_math_test_vectors.json`, so any
+  move that changes the numbers fails the probe or the Python suite. The
+  full-chain vectors are authored with the card's FOV consts (70/43); the
+  probe fails on FOV drift (`chain:*:fov_matches_card`), so changing
+  `BBOX_*_FOV_DEG` requires regenerating the fixture
+  (`tools/generate_bbox_math_test_vectors.py` — keep its
+  CARD_HFOV/VFOV in sync).
 
 ## How to continue
 
-M3 is complete — all five card subsystems (StatusHud, TargetRegistry,
-WSTransport, CardAttachment, XRBootstrap) are extracted. Continue with M4
-(TargetSource strategy interface: unify the on-device ncnn path — the
-TrackableTarget / VSTTargetAdapter inner classes still in the card — the
-remote proxy_targets WS path, and fixture replay behind one source
-interface, and promote `docs/proxy_targets_payload_contract.md` into shared
-test vectors used by both `smartxr/geometry.py` and the GDScript bbox
-math), then M5 (per-subsystem docs following `docs/smartxr_options.md`
-style). Keep the ADR-4 seam and the no-project-mode rules for any new
-probe-visible script.
+M3 is complete and M4-1 (shared bbox math vectors) is in. Continue with
+M4-2: extract the VST target source — the TrackableTarget /
+VSTTargetAdapter inner classes still in the card — behind a duck-typed
+TargetSource interface using the established Callable-injection pattern
+(ADR-4), with the bbox math vectors as the drift gate; then M4-3 (remaining
+sources: remote proxy_targets WS, fixture replay), then M5 (per-subsystem
+docs following `docs/smartxr_options.md` style). Keep the ADR-4 seam and
+the no-project-mode rules for any new probe-visible script.

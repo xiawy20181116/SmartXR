@@ -1,0 +1,760 @@
+{
+  "schema_version": 1,
+  "description": "Shared bbox->head math test vectors consumed by both tests/test_bbox_math_vectors.py (smartxr.geometry) and godot-android/tests/script_only_bbox_math_probe.gd (AndroidMovingCard.gd). Regenerate with tools/generate_bbox_math_test_vectors.py.",
+  "conventions": {
+    "camera_axes": "+X right, +Y down, +Z forward",
+    "head_axes": "+X right, +Y up, -Z forward",
+    "default_conversion": "[x, -y, -z]",
+    "right_eye_to_head": "row-major 4x4; <16 elements falls back to the default flip (GDScript only)"
+  },
+  "tolerances": {
+    "python_abs": 1e-09,
+    "gdscript_abs": 0.0001
+  },
+  "projection_cases": [
+    {
+      "name": "centered_default_fov",
+      "input": {
+        "cx": 320.0,
+        "cy": 240.0,
+        "image_w": 640.0,
+        "image_h": 480.0,
+        "horizontal_fov_deg": 70.0,
+        "vertical_fov_deg": 43.0,
+        "depth_m": 1.35
+      },
+      "expected": {
+        "camera_point": [
+          0.0,
+          0.0,
+          1.35
+        ]
+      }
+    },
+    {
+      "name": "off_center_right_down",
+      "input": {
+        "cx": 480.0,
+        "cy": 360.0,
+        "image_w": 640.0,
+        "image_h": 480.0,
+        "horizontal_fov_deg": 70.0,
+        "vertical_fov_deg": 43.0,
+        "depth_m": 2.0
+      },
+      "expected": {
+        "camera_point": [
+          0.6497444811412004,
+          0.36552185406187493,
+          1.8558625712669896
+        ]
+      }
+    },
+    {
+      "name": "corner_top_left",
+      "input": {
+        "cx": 0.0,
+        "cy": 0.0,
+        "image_w": 640.0,
+        "image_h": 480.0,
+        "horizontal_fov_deg": 70.0,
+        "vertical_fov_deg": 43.0,
+        "depth_m": 1.0
+      },
+      "expected": {
+        "camera_point": [
+          -0.5458629743356088,
+          -0.3070820179841147,
+          0.7795731187517219
+        ]
+      }
+    },
+    {
+      "name": "corner_bottom_right",
+      "input": {
+        "cx": 872.0,
+        "cy": 652.0,
+        "image_w": 872.0,
+        "image_h": 652.0,
+        "horizontal_fov_deg": 70.0,
+        "vertical_fov_deg": 43.0,
+        "depth_m": 3.5
+      },
+      "expected": {
+        "camera_point": [
+          1.910520410174631,
+          1.0747870629444014,
+          2.7285059156310263
+        ]
+      }
+    },
+    {
+      "name": "off_center_near_depth",
+      "input": {
+        "cx": 300.0,
+        "cy": 200.0,
+        "image_w": 872.0,
+        "image_h": 652.0,
+        "horizontal_fov_deg": 70.0,
+        "vertical_fov_deg": 43.0,
+        "depth_m": 0.65
+      },
+      "expected": {
+        "camera_point": [
+          -0.13718966559982418,
+          -0.09562967329455856,
+          0.6281193845426079
+        ]
+      }
+    },
+    {
+      "name": "off_center_far_depth",
+      "input": {
+        "cx": 560.0,
+        "cy": 420.0,
+        "image_w": 872.0,
+        "image_h": 652.0,
+        "horizontal_fov_deg": 70.0,
+        "vertical_fov_deg": 43.0,
+        "depth_m": 4.0
+      },
+      "expected": {
+        "camera_point": [
+          0.7764239466865521,
+          0.4428378441181743,
+          3.8988537416564433
+        ]
+      }
+    },
+    {
+      "name": "centered_wide_fov",
+      "input": {
+        "cx": 640.0,
+        "cy": 360.0,
+        "image_w": 1280.0,
+        "image_h": 720.0,
+        "horizontal_fov_deg": 90.0,
+        "vertical_fov_deg": 60.0,
+        "depth_m": 1.0
+      },
+      "expected": {
+        "camera_point": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "name": "off_center_wide_fov",
+      "input": {
+        "cx": 320.0,
+        "cy": 540.0,
+        "image_w": 1280.0,
+        "image_h": 720.0,
+        "horizontal_fov_deg": 90.0,
+        "vertical_fov_deg": 60.0,
+        "depth_m": 1.0
+      },
+      "expected": {
+        "camera_point": [
+          -0.43301270189221924,
+          0.25,
+          0.8660254037844387
+        ]
+      }
+    },
+    {
+      "name": "off_center_narrow_fov",
+      "input": {
+        "cx": 600.0,
+        "cy": 150.0,
+        "image_w": 800.0,
+        "image_h": 600.0,
+        "horizontal_fov_deg": 50.0,
+        "vertical_fov_deg": 30.0,
+        "depth_m": 0.75
+      },
+      "expected": {
+        "camera_point": [
+          0.16886656052570692,
+          -0.09703391683617676,
+          0.7242710153800495
+        ]
+      }
+    }
+  ],
+  "head_conversion_cases": [
+    {
+      "name": "default_flip_off_center",
+      "input": {
+        "point": [
+          0.2,
+          -0.3,
+          1.5
+        ],
+        "right_eye_to_head": null
+      },
+      "expected": {
+        "head_point": [
+          0.2,
+          0.3,
+          -1.5
+        ]
+      }
+    },
+    {
+      "name": "default_flip_forward",
+      "input": {
+        "point": [
+          0.0,
+          0.0,
+          1.35
+        ],
+        "right_eye_to_head": null
+      },
+      "expected": {
+        "head_point": [
+          0.0,
+          -0.0,
+          -1.35
+        ]
+      }
+    },
+    {
+      "name": "matrix_identity",
+      "input": {
+        "point": [
+          0.2,
+          -0.3,
+          1.5
+        ],
+        "right_eye_to_head": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "expected": {
+        "head_point": [
+          0.2,
+          -0.3,
+          1.5
+        ]
+      }
+    },
+    {
+      "name": "matrix_pure_translation",
+      "input": {
+        "point": [
+          -0.45,
+          0.18,
+          2.2
+        ],
+        "right_eye_to_head": [
+          1.0,
+          0.0,
+          0.0,
+          0.1,
+          0.0,
+          1.0,
+          0.0,
+          -0.05,
+          0.0,
+          0.0,
+          1.0,
+          0.02,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "expected": {
+        "head_point": [
+          -0.35,
+          0.13,
+          2.22
+        ]
+      }
+    },
+    {
+      "name": "matrix_pure_rotation_x180",
+      "input": {
+        "point": [
+          0.2,
+          -0.3,
+          1.5
+        ],
+        "right_eye_to_head": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          -1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          -1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "expected": {
+        "head_point": [
+          0.2,
+          0.3,
+          -1.5
+        ]
+      }
+    },
+    {
+      "name": "matrix_pure_rotation_y90",
+      "input": {
+        "point": [
+          0.2,
+          -0.3,
+          1.5
+        ],
+        "right_eye_to_head": [
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          -1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "expected": {
+        "head_point": [
+          1.5,
+          -0.3,
+          -0.2
+        ]
+      }
+    },
+    {
+      "name": "matrix_combined_flip_translation",
+      "input": {
+        "point": [
+          0.3,
+          -0.25,
+          1.8
+        ],
+        "right_eye_to_head": [
+          1.0,
+          0.0,
+          0.0,
+          0.032,
+          0.0,
+          -1.0,
+          0.0,
+          -0.041,
+          0.0,
+          0.0,
+          -1.0,
+          0.012,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "expected": {
+        "head_point": [
+          0.33199999999999996,
+          0.209,
+          -1.788
+        ]
+      }
+    },
+    {
+      "name": "matrix_short_fallback",
+      "input": {
+        "point": [
+          0.2,
+          -0.3,
+          1.5
+        ],
+        "right_eye_to_head": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      },
+      "expected": {
+        "head_point": [
+          0.2,
+          0.3,
+          -1.5
+        ]
+      },
+      "gdscript_only": true
+    }
+  ],
+  "full_chain_cases": [
+    {
+      "name": "chain_centered_no_matrix",
+      "input": {
+        "cx": 320.0,
+        "cy": 240.0,
+        "w": 100.0,
+        "h": 80.0,
+        "image_w": 640.0,
+        "image_h": 480.0,
+        "horizontal_fov_deg": 70.0,
+        "vertical_fov_deg": 43.0,
+        "depth_m": 1.35,
+        "uses_eye_to_head_anchor": false,
+        "right_eye_to_head": null
+      },
+      "expected": {
+        "camera_point": [
+          0.0,
+          0.0,
+          1.35
+        ],
+        "head_point": [
+          0.0,
+          -0.0,
+          -1.35
+        ],
+        "yaw_deg": 0.0,
+        "pitch_deg": -0.0,
+        "depth_m": 1.35,
+        "angular_size_deg": [
+          12.487500711219514,
+          7.512355166745114
+        ],
+        "position": [
+          0.0,
+          -0.0,
+          -1.35
+        ]
+      }
+    },
+    {
+      "name": "chain_off_center_no_matrix",
+      "input": {
+        "cx": 560.0,
+        "cy": 420.0,
+        "w": 180.0,
+        "h": 240.0,
+        "image_w": 872.0,
+        "image_h": 652.0,
+        "horizontal_fov_deg": 70.0,
+        "vertical_fov_deg": 43.0,
+        "depth_m": 2.0,
+        "uses_eye_to_head_anchor": false,
+        "right_eye_to_head": null
+      },
+      "expected": {
+        "camera_point": [
+          0.38821197334327606,
+          0.22141892205908714,
+          1.9494268708282216
+        ],
+        "head_point": [
+          0.38821197334327606,
+          -0.22141892205908714,
+          -1.9494268708282216
+        ],
+        "yaw_deg": 11.262633260122056,
+        "pitch_deg": -6.356214492780257,
+        "depth_m": 2.0,
+        "angular_size_deg": [
+          16.448948360969265,
+          16.50051869083365
+        ],
+        "position": [
+          0.38821197334327606,
+          -0.22141892205908714,
+          -1.9494268708282214
+        ]
+      }
+    },
+    {
+      "name": "chain_corner_no_matrix",
+      "input": {
+        "cx": 40.0,
+        "cy": 440.0,
+        "w": 60.0,
+        "h": 60.0,
+        "image_w": 640.0,
+        "image_h": 480.0,
+        "horizontal_fov_deg": 70.0,
+        "vertical_fov_deg": 43.0,
+        "depth_m": 0.9,
+        "uses_eye_to_head_anchor": false,
+        "right_eye_to_head": null
+      },
+      "expected": {
+        "camera_point": [
+          -0.4527801342381577,
+          0.24258772040068188,
+          0.739013767091031
+        ],
+        "head_point": [
+          -0.4527801342381577,
+          -0.24258772040068188,
+          -0.739013767091031
+        ],
+        "yaw_deg": -31.495034932858438,
+        "pitch_deg": -15.637009746351522,
+        "depth_m": 0.9,
+        "angular_size_deg": [
+          7.511523467022486,
+          5.637798675176471
+        ],
+        "position": [
+          -0.4527801342381576,
+          -0.24258772040068183,
+          -0.739013767091031
+        ]
+      }
+    },
+    {
+      "name": "chain_matrix_identity",
+      "input": {
+        "cx": 480.0,
+        "cy": 300.0,
+        "w": 120.0,
+        "h": 90.0,
+        "image_w": 640.0,
+        "image_h": 480.0,
+        "horizontal_fov_deg": 70.0,
+        "vertical_fov_deg": 43.0,
+        "depth_m": 1.5,
+        "uses_eye_to_head_anchor": true,
+        "right_eye_to_head": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "expected": {
+        "camera_point": [
+          0.49352931115899124,
+          0.13882053182804288,
+          1.4096658040010444
+        ],
+        "head_point": [
+          0.49352931115899124,
+          0.13882053182804288,
+          1.4096658040010444
+        ],
+        "yaw_deg": 160.70465726466878,
+        "pitch_deg": 5.310152398210416,
+        "depth_m": 1.5,
+        "angular_size_deg": [
+          14.959044225180984,
+          8.448188468710756
+        ],
+        "position": [
+          0.49352931115899124,
+          0.13882053182804288,
+          1.4096658040010444
+        ]
+      }
+    },
+    {
+      "name": "chain_matrix_flip_translation",
+      "input": {
+        "cx": 436.0,
+        "cy": 326.0,
+        "w": 180.0,
+        "h": 240.0,
+        "image_w": 872.0,
+        "image_h": 652.0,
+        "horizontal_fov_deg": 70.0,
+        "vertical_fov_deg": 43.0,
+        "depth_m": 1.35,
+        "uses_eye_to_head_anchor": true,
+        "right_eye_to_head": [
+          1.0,
+          0.0,
+          0.0,
+          0.032,
+          0.0,
+          -1.0,
+          0.0,
+          -0.041,
+          0.0,
+          0.0,
+          -1.0,
+          0.012,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "expected": {
+        "camera_point": [
+          0.0,
+          0.0,
+          1.35
+        ],
+        "head_point": [
+          0.032,
+          -0.041,
+          -1.338
+        ],
+        "yaw_deg": 1.370041472624717,
+        "pitch_deg": -1.7546496223969024,
+        "depth_m": 1.3390104555230329,
+        "angular_size_deg": [
+          16.448948360969265,
+          16.50051869083365
+        ],
+        "position": [
+          0.032,
+          -0.041,
+          -1.338
+        ]
+      }
+    },
+    {
+      "name": "chain_matrix_rotated_combined",
+      "input": {
+        "cx": 380.0,
+        "cy": 200.0,
+        "w": 90.0,
+        "h": 120.0,
+        "image_w": 640.0,
+        "image_h": 480.0,
+        "horizontal_fov_deg": 70.0,
+        "vertical_fov_deg": 43.0,
+        "depth_m": 2.5,
+        "uses_eye_to_head_anchor": true,
+        "right_eye_to_head": [
+          0.984807753012208,
+          0.0,
+          -0.17364817766693033,
+          0.03,
+          0.0,
+          -1.0,
+          0.0,
+          -0.04,
+          -0.17364817766693033,
+          0.0,
+          -0.984807753012208,
+          0.01,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "expected": {
+        "camera_point": [
+          0.32474232901466793,
+          -0.16238919437011012,
+          2.4734939193978134
+        ],
+        "head_point": [
+          -0.07970894822877708,
+          0.12238919437011012,
+          -2.4823069024962323
+        ],
+        "yaw_deg": -1.8391833849340957,
+        "pitch_deg": 2.8212090194252246,
+        "depth_m": 2.486600126579813,
+        "angular_size_deg": [
+          11.247194698037555,
+          11.248435591500561
+        ],
+        "position": [
+          -0.07970894822877708,
+          0.12238919437011012,
+          -2.4823069024962323
+        ]
+      }
+    },
+    {
+      "name": "chain_short_matrix_fallback",
+      "input": {
+        "cx": 480.0,
+        "cy": 360.0,
+        "w": 100.0,
+        "h": 80.0,
+        "image_w": 640.0,
+        "image_h": 480.0,
+        "horizontal_fov_deg": 70.0,
+        "vertical_fov_deg": 43.0,
+        "depth_m": 2.0,
+        "uses_eye_to_head_anchor": true,
+        "right_eye_to_head": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      },
+      "expected": {
+        "camera_point": [
+          0.6497444811412004,
+          0.36552185406187493,
+          1.8558625712669896
+        ],
+        "head_point": [
+          0.6497444811412004,
+          -0.36552185406187493,
+          -1.8558625712669896
+        ],
+        "yaw_deg": 19.29534273533122,
+        "pitch_deg": -10.530617475410256,
+        "depth_m": 2.0,
+        "angular_size_deg": [
+          12.487500711219514,
+          7.512355166745114
+        ],
+        "position": [
+          0.6497444811412003,
+          -0.36552185406187493,
+          -1.8558625712669894
+        ]
+      }
+    }
+  ]
+}

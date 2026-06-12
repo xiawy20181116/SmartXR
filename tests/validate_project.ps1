@@ -4,6 +4,7 @@ $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Push-Location $RepoRoot
 try {
     python -m unittest `
+        tests/test_bbox_math_vectors.py `
         tests/test_godot_android_mesh_card.py `
         tests/test_godot_card_attachment.py `
         tests/test_godot_smartxr_options.py `

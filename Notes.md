@@ -1,5 +1,84 @@
 # Notes — change log
 
+## M4 step 1 — shared bbox math test vectors (YAN-80)
+
+### Files added
+
+- `godot-android/fixtures/bbox_math_test_vectors.json` — schema_version 1
+  fixture locking the duplicated bbox→head math to one set of numbers.
+  Sections: `projection_cases` (9: centered pixel → `[0,0,depth]`,
+  off-center, all-corner pixels, depths 0.65–4.0, and non-default FOV pairs
+  90/60 and 50/30 — pure pinhole math, no MIN/MAX depth clamping),
+  `head_conversion_cases` (8: the default `[x,-y,-z]` flip, row-major 4x4
+  `right_eye_to_head` with identity / pure-translation / pure-rotation
+  (x180 = the flip, y90) / combined matrices, and the GDScript-only
+  `<16-element matrix → default flip` fallback, flagged `gdscript_only`),
+  `full_chain_cases` (7: pins `yaw_deg` / `pitch_deg` / `depth_m` /
+  `angular_size_deg` from `_anchor_from_bbox` and the final position from
+  `_target_position_from_bbox_anchor`, eye-to-head off and on — when on,
+  `depth_m` becomes `point_head.length()` — including a short-matrix
+  fallback chain; all authored at the card's 70/43 FOV consts). Declares
+  `tolerances`: `python_abs` 1e-9, `gdscript_abs` 1e-4 (Godot Vector3 is
+  float32; vector magnitudes stay around a meter).
+- `tools/generate_bbox_math_test_vectors.py` — deterministic generator:
+  projection/head expectations come from `smartxr.geometry`; the
+  GDScript-only decomposition formulas are replicated in float64. The
+  cross-language lock comes from the probe reproducing the numbers, and the
+  trivial cases are hand-verifiable (centered pixel → `[0,0,d]` camera →
+  `[0,0,-d]` head, yaw=pitch=0).
+- `tests/test_bbox_math_vectors.py` — 14 tests: fixture shape
+  (schema_version, unique case names, tolerances, full-chain FOV ==
+  card consts), every projection / head-conversion / full-chain case
+  through `smartxr.geometry`, fixture self-consistency for the
+  GDScript-only fields (position must recompose from yaw/pitch/depth
+  exactly as `_target_position_from_bbox_anchor` does), and static pins on
+  the probe/runner wiring.
+- `godot-android/tests/script_only_bbox_math_probe.gd` — script-only probe
+  (32 checks): loads `AndroidMovingCard.gd`, instantiates it WITHOUT adding
+  to the tree (no `_ready` → no WS connects, no XR init; Node3D, freed
+  explicitly), drives `_convert_vst_camera_point_to_head_convention` /
+  `_transform_right_vst_point_to_head` (matrix injected directly into
+  `_vst_right_eye_to_head_matrix`) and `_anchor_from_bbox` /
+  `_target_position_from_bbox_anchor` (with
+  `_vst_uses_eye_to_head_anchor` set per case) against the fixture.
+  Per-chain `fov_matches_card` checks fail on `BBOX_*_FOV_DEG` drift.
+- `tools/run_godot_bbox_math_probe.ps1` — headless runner. The card
+  preloads eight sibling scripts, so the runner stages `scripts\` into
+  `.tmp\bbox_math_probe\scripts\` (a cwd WITHOUT a Godot project file) and
+  runs Godot from there so `res://scripts/*.gd` resolves in true no-project
+  mode (the compile-gate trick; cwd = `godot-android\` hangs headless on
+  the GXR/OpenXR boot). Env-injected fixture/card/status paths
+  (`SMARTXR_BBOX_MATH_*`).
+
+### Files modified
+
+- `docs/proxy_targets_payload_contract.md` — new "Shared math test vectors"
+  section pointing at the fixture, both consumers, and the generator.
+- `tests/validate_project.ps1` — registers `tests/test_bbox_math_vectors.py`.
+- `TASKS.md` / `HANDOFF.md` / `DECISIONS.md` (ADR-5) — bookkeeping.
+- NO production code moved — this is the de-risking slice before M4-2/M4-3.
+
+### Verification run
+
+- `python -m unittest tests/test_*.py` → 148 tests, OK.
+- Schema gate on both fixtures → ok.
+- `tools\run_godot_bbox_math_probe.ps1` → PASS (32/32 checks, clean stderr).
+- All prior probes re-run green (smartxr_options 10, status_hud 29,
+  target_registry 32, ws_transport 30, card_attachment 48, xr_bootstrap 31),
+  `run_godot_script_only_websocket_probe.ps1`,
+  `run_godot_proxy_targets_consumer_only.ps1` (live publisher on :8766),
+  and the script-only compile gate on `AndroidMovingCard.gd` +
+  `xr_bootstrap.gd`.
+
+### Next slice recommendation
+
+- **M4-2: extract the VST target source** — move the TrackableTarget /
+  VSTTargetAdapter inner classes out of `AndroidMovingCard.gd` behind a
+  duck-typed TargetSource interface using the established
+  Callable-injection pattern (ADR-4). The shared vectors from this slice
+  are the drift gate: the probe re-runs against the same fixture after the
+  move.
+
 ## YAN-76 follow-up — WS_URL default flipped to loopback
 
 - `godot-android/scripts/AndroidMovingCard.gd` — `WS_URL` default changed

@@ -74,18 +74,37 @@ side.
   complete. Runtime probe: `tools/run_godot_xr_bootstrap_probe.ps1`
   (31 checks). Tests: `tests/test_godot_xr_bootstrap.py`.
 
+- [x] **M4 step 1 — shared bbox math test vectors** (YAN-80): the duplicated
+  bbox→head math (`smartxr/geometry.py` vs the four card methods
+  `_anchor_from_bbox` / `_convert_vst_camera_point_to_head_convention` /
+  `_transform_right_vst_point_to_head` / `_target_position_from_bbox_anchor`)
+  locked to one checked-in fixture,
+  `godot-android/fixtures/bbox_math_test_vectors.json` (projection,
+  default-flip + row-major `right_eye_to_head` matrix conversion incl. the
+  GDScript-only short-matrix fallback, and the full
+  bbox→yaw/pitch/depth/angular→position chain). Python consumer:
+  `tests/test_bbox_math_vectors.py` (tolerance 1e-9). GDScript consumer:
+  `tools/run_godot_bbox_math_probe.ps1` +
+  `godot-android/tests/script_only_bbox_math_probe.gd` (tolerance 1e-4,
+  float32; stages `scripts\` into a temp no-project cwd because the card
+  preloads eight siblings). Generator:
+  `tools/generate_bbox_math_test_vectors.py`. Docs: "Shared math test
+  vectors" section in `docs/proxy_targets_payload_contract.md`. No
+  production code moved (de-risking slice before M4-2/M4-3).
+
 ## Next (not started)
 
-- [ ] **M4 — TargetSource strategy interface**: unify on-device ncnn, remote
-  proxy_targets WS, and fixture replay behind one source interface; promote
-  the payload contract doc into shared test vectors used by both the Python
-  and GDScript bbox math.
+- [ ] **M4 (remaining) — TargetSource strategy interface**: unify on-device
+  ncnn (TrackableTarget / VSTTargetAdapter, still card-inner classes), the
+  remote proxy_targets WS path, and fixture replay behind one duck-typed
+  source interface (M4-2: extract the VST target source; M4-3: the
+  remaining sources). The shared math vectors from M4-1 gate these moves.
 - [ ] **M5 — Per-subsystem docs** following `docs/smartxr_options.md` style.
 
 ## Verification
 
 ```powershell
-# Full suite (134 tests)
+# Full suite (148 tests)
 python -m unittest (Get-ChildItem tests\test_*.py | ForEach-Object { "tests/$($_.Name)" })
 
 # Schema gate
@@ -98,6 +117,7 @@ powershell -File tools\run_godot_target_registry_probe.ps1
 powershell -File tools\run_godot_ws_transport_probe.ps1
 powershell -File tools\run_godot_card_attachment_probe.ps1
 powershell -File tools\run_godot_xr_bootstrap_probe.ps1
+powershell -File tools\run_godot_bbox_math_probe.ps1
 powershell -File tools\run_godot_script_only_websocket_probe.ps1
 # consumer-only needs a publisher on :8766 first (fake_proxy_targets_publisher.py)
 powershell -File tools\run_godot_proxy_targets_consumer_only.ps1
