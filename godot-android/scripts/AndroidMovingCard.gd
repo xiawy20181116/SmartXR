@@ -1046,26 +1046,45 @@ func _transform_right_vst_point_to_head(point: Vector3) -> Vector3:
 
 
 func _anchor_position_from_yaw_pitch_depth() -> Vector3:
-	var yaw := deg_to_rad(_anchor_yaw_deg)
-	var pitch := deg_to_rad(_anchor_pitch_deg)
-	var horizontal_depth := _anchor_depth_m * cos(pitch)
-	var local_anchor_position := Vector3(
-		horizontal_depth * sin(yaw),
-		_anchor_depth_m * sin(pitch),
-		-horizontal_depth * cos(yaw)
-	)
+	var local_anchor_position := _local_anchor_position_from_yaw_pitch_depth()
 	if _sim_enabled and _camera != null:
 		return _camera.global_transform * local_anchor_position
 	return local_anchor_position
 
 
+func _local_anchor_position_from_yaw_pitch_depth() -> Vector3:
+	var yaw := deg_to_rad(_anchor_yaw_deg)
+	var pitch := deg_to_rad(_anchor_pitch_deg)
+	var horizontal_depth := _anchor_depth_m * cos(pitch)
+	return Vector3(
+		horizontal_depth * sin(yaw),
+		_anchor_depth_m * sin(pitch),
+		-horizontal_depth * cos(yaw)
+	)
+
+
 func _apply_3dof_anchor_transform() -> void:
 	if _card_anchor == null:
+		return
+	if _apply_sim_3dof_anchor_transform(_card_anchor):
+		_update_vst_bbox_frame()
 		return
 	_card_anchor.position = _anchor_position_from_yaw_pitch_depth()
 	if _face_camera_enabled:
 		_orient_card_for_3dof_reading()
 	_update_vst_bbox_frame()
+
+
+func _apply_sim_3dof_anchor_transform(node: Node3D) -> bool:
+	if not _sim_enabled or _camera == null or node == null:
+		return false
+	var head_basis := _camera.global_transform.basis.orthonormalized()
+	var local_anchor_position := _local_anchor_position_from_yaw_pitch_depth()
+	node.global_transform = Transform3D(
+		head_basis,
+		_camera.global_transform * local_anchor_position
+	)
+	return true
 
 
 func _orient_card_for_3dof_reading() -> void:
@@ -1092,8 +1111,11 @@ func _update_vst_bbox_frame() -> void:
 		_set_vst_bbox_frame_visible(false)
 		return
 	_set_vst_bbox_frame_visible(true)
-	_vst_bbox_frame_anchor.position = _anchor_position_from_yaw_pitch_depth()
-	if _face_camera_enabled:
+	if _apply_sim_3dof_anchor_transform(_vst_bbox_frame_anchor):
+		pass
+	else:
+		_vst_bbox_frame_anchor.position = _anchor_position_from_yaw_pitch_depth()
+	if _face_camera_enabled and not _sim_enabled:
 		_orient_node_for_3dof_reading(_vst_bbox_frame_anchor)
 
 	var width_m := maxf(2.0 * _anchor_depth_m * tan(deg_to_rad(_bbox_angular_size_deg.x) * 0.5), VST_BBOX_FRAME_LINE_M * 3.0)

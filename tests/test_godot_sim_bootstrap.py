@@ -62,13 +62,26 @@ class GodotSimBootstrapTests(unittest.TestCase):
         card = CARD.read_text(encoding="utf-8")
 
         self.assertIn("func _anchor_position_from_yaw_pitch_depth() -> Vector3:", card)
-        self.assertIn("var local_anchor_position := Vector3(", card)
+        self.assertIn("func _local_anchor_position_from_yaw_pitch_depth() -> Vector3:", card)
+        self.assertIn("var local_anchor_position := _local_anchor_position_from_yaw_pitch_depth()", card)
         self.assertIn("if _sim_enabled and _camera != null:", card)
         self.assertIn("return _camera.global_transform * local_anchor_position", card)
         self.assertLess(
-            card.index("var local_anchor_position := Vector3("),
+            card.index("var local_anchor_position := _local_anchor_position_from_yaw_pitch_depth()"),
             card.index("return _camera.global_transform * local_anchor_position"),
         )
+
+    def test_sim_mode_applies_card_transform_from_head_basis_to_preserve_shape(self):
+        card = CARD.read_text(encoding="utf-8")
+
+        self.assertIn("func _apply_sim_3dof_anchor_transform(node: Node3D) -> bool:", card)
+        self.assertIn("var head_basis := _camera.global_transform.basis.orthonormalized()", card)
+        self.assertIn("var local_anchor_position := _local_anchor_position_from_yaw_pitch_depth()", card)
+        self.assertIn("node.global_transform = Transform3D(", card)
+        self.assertIn("head_basis,", card)
+        self.assertIn("_camera.global_transform * local_anchor_position", card)
+        self.assertIn("if _apply_sim_3dof_anchor_transform(_card_anchor):", card)
+        self.assertIn("if _apply_sim_3dof_anchor_transform(_vst_bbox_frame_anchor):", card)
 
     def test_status_hud_displays_sim_mode_from_snapshot_without_status_file_shape_change(self):
         source = STATUS_HUD.read_text(encoding="utf-8")
