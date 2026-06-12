@@ -45,15 +45,29 @@ side.
   probe: `tools/run_godot_ws_transport_probe.ps1` (30 checks, live fake
   publisher + accept-then-close retry listener). Tests:
   `tests/test_godot_ws_transport.py`.
+- [x] **M3 step 4 — CardAttachment** (YAN-78): the attach/fallback state
+  machine around `_card_attachments` (`attach_to_target` / `detach_card` /
+  `_update_target_attachments` / `_apply_target_fallback`), the offset-rule
+  math (normalization, world vs target offset spaces, all offset modes), and
+  the `TARGET_FALLBACK_*` / `TARGET_DEFAULT_OFFSET_RULE` constants extracted
+  from `AndroidMovingCard.gd` into `godot-android/scripts/card_attachment.gd`
+  (RefCounted, dependency-free; registry lookups, the card anchor, and the
+  mode-transition hooks injected as Callables per ADR-4 — the registry,
+  `_anchor_mode` / `_last_command` transitions, and `_face_camera_enabled`
+  orientation stay in the card). Card public API unchanged
+  (`attach_to_target` / `detach_card`); snapshot keys read through the
+  subsystem getters, identical values. Runtime probe:
+  `tools/run_godot_card_attachment_probe.ps1` (64 checks). Tests:
+  `tests/test_godot_card_attachment.py`.
 
 ## Next (not started)
 
-- [ ] **M3 — Split `AndroidMovingCard.gd`** remaining subsystem nodes:
-  XRBootstrap, CardAttachment, with the scene tree unchanged.
-  Move one subsystem at a time; keep
-  `tests/test_godot_android_mesh_card.py` green at each step (update pinned
-  assertions alongside each move). StatusHud (step 1), TargetRegistry
-  (step 2), and WSTransport (step 3) are done — see above.
+- [ ] **M3 — Split `AndroidMovingCard.gd`** remaining subsystem:
+  XRBootstrap (`_try_init_xr` + camera/origin setup), with the scene tree
+  unchanged. Keep `tests/test_godot_android_mesh_card.py` green (update
+  pinned assertions alongside the move). StatusHud (step 1), TargetRegistry
+  (step 2), WSTransport (step 3), and CardAttachment (step 4) are done —
+  see above.
 - [ ] **M4 — TargetSource strategy interface**: unify on-device ncnn, remote
   proxy_targets WS, and fixture replay behind one source interface; promote
   the payload contract doc into shared test vectors used by both the Python
@@ -63,7 +77,7 @@ side.
 ## Verification
 
 ```powershell
-# Full suite (125 tests)
+# Full suite (131 tests)
 python -m unittest (Get-ChildItem tests\test_*.py | ForEach-Object { "tests/$($_.Name)" })
 
 # Schema gate
@@ -74,6 +88,7 @@ powershell -File tools\run_godot_smartxr_options_probe.ps1
 powershell -File tools\run_godot_status_hud_probe.ps1
 powershell -File tools\run_godot_target_registry_probe.ps1
 powershell -File tools\run_godot_ws_transport_probe.ps1
+powershell -File tools\run_godot_card_attachment_probe.ps1
 powershell -File tools\run_godot_script_only_websocket_probe.ps1
 # consumer-only needs a publisher on :8766 first (fake_proxy_targets_publisher.py)
 powershell -File tools\run_godot_proxy_targets_consumer_only.ps1

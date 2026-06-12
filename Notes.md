@@ -1,5 +1,98 @@
 # Notes — change log
 
+## M3 step 4 — CardAttachment extraction (YAN-78)
+
+### Files added
+
+- `godot-android/scripts/card_attachment.gd` — the card attachment subsystem
+  (RefCounted, dependency-free, no class_name self-references): owns the
+  card_id -> attachment bookkeeping (`_attachments`, formerly the card's
+  `_card_attachments`), `attach` / `detach` / `update_attachments` /
+  `apply_fallback`, the offset-rule math moved byte-for-byte
+  (`_normalize_target_offset_rule`, `_target_offset_transform`,
+  `_target_world_offset_transform`, `_target_local_offset_transform`,
+  `_target_offset_vector`), the `TARGET_FALLBACK_*` /
+  `TARGET_DEFAULT_OFFSET_RULE` constants, and the apply counter. Wiring
+  follows the WSTransport Callable pattern: `set_primary_card_id`
+  (CardAnchor), `set_resolve_target` (registry lookups — the registry stays
+  card-owned, ADR-4), `set_card_anchor_provider` (Node3D-or-null, matching
+  the old `if _card_anchor == null` guard), `set_on_attachments_updated`
+  (the old function tail: `_face_camera_enabled` orientation + VST bbox
+  frame refresh, card-side), and `set_on_all_detached` (the old
+  detach-to-manual transition: the card checks `_anchor_mode == "target"`
+  and applies the 3DoF transform). Snapshot-feeding getters
+  (`attachment_count`, `card_target_id`, `card_resolved_position`,
+  `apply_count`, plus `has_attachment` / `get_attachment` for the VST
+  paths) keep the status snapshot values identical.
+- `godot-android/tests/script_only_card_attachment_probe.gd` — script-only
+  runtime probe (64 checks: constant parity; rule normalization incl.
+  string-vs-dictionary input, unsupported types, default-rule merge and
+  non-mutation; every offset mode — right_top/top_right alias, right, top,
+  front, custom x_m/y_m/z_m with the -distance z default; world vs target
+  offset spaces against a rotated target transform; attach/detach
+  bookkeeping incl. unknown-target rejection and the all-detached hook;
+  all three fallbacks (hold_last_pose restore, fade_out hide, detach +
+  mode transition) against registered-then-freed and unregistered targets;
+  last_transform tracking; primary-key-first vs only-entry attachment
+  lookup and the ambiguous two-entry early return; snapshot getters; an
+  unwired instance stays inert). Probe-side stand-ins inject the resolve /
+  anchor / hook Callables, mirroring the card wiring.
+- `tools/run_godot_card_attachment_probe.ps1` — headless no-project runner,
+  following run_godot_target_registry_probe.ps1 (env-injected script path +
+  status JSON).
+- `tests/test_godot_card_attachment.py` — 3 static tests pinning the
+  subsystem contract, the card-side delegation/wiring, and the probe/runner
+  pair.
+
+### Files modified
+
+- `godot-android/scripts/AndroidMovingCard.gd` — removed the attach/fallback
+  state machine, the offset math (~110 lines), `var _card_attachments`,
+  `var _proxy_targets_card_apply_count`, and the `TARGET_FALLBACK_*` /
+  `TARGET_DEFAULT_OFFSET_RULE` consts (`VST_TARGET_OFFSET_RULE` now
+  references `CardAttachmentScript.TARGET_FALLBACK_HOLD_LAST_POSE`). Added
+  `const CardAttachmentScript := preload(...)` (seventh preload);
+  `_card_attachment = CardAttachmentScript.new()` (untyped `=`, same
+  pattern as `_options`); `_setup_card_attachment()` (called from `_ready`
+  right after `_build_card_anchor()`) wires the five Callables.
+  `attach_to_target` keeps its exact signature and the
+  `_anchor_mode = "target"` / `_last_command = "attach_target:<id>"`
+  transitions around the subsystem calls; `detach_card` delegates; the VST
+  paths (`_advance_vst_target_state`, `_apply_vst_target_fallback`) read
+  the CardAnchor attachment through `has_attachment` / `get_attachment` and
+  call `apply_fallback` directly, byte-for-byte equivalent to before. The
+  status snapshot reads `attachments` / `card_apply_count` from the
+  subsystem getters (same keys, same values).
+- `tests/test_godot_android_mesh_card.py` — attach/offset/fallback pins in
+  `test_card_can_attach_to_registered_node3d_targets`,
+  `test_world_target_offset_ignores_target_rotation_for_card_position`, and
+  the apply-count/attachments pins in
+  `test_proxy_targets_live_websocket_consumer_is_wired` repointed at
+  `card_attachment.gd` (per ADR-3); public-API, `_anchor_mode`, and
+  snapshot-assembly pins stay on the card.
+- `tests/validate_project.ps1` — registers `tests/test_godot_card_attachment.py`.
+- `TASKS.md` / `HANDOFF.md` — bookkeeping.
+
+### Verification run
+
+- `python -m unittest tests/test_*.py` → 131 tests, OK.
+- Schema gate on both fixtures → ok.
+- `tools\run_godot_card_attachment_probe.ps1` → PASS (64/64 checks, clean
+  stderr).
+- `tools\run_godot_ws_transport_probe.ps1` → PASS (30/30 checks).
+- `tools\run_godot_target_registry_probe.ps1` → PASS (32/32 checks).
+- `tools\run_godot_status_hud_probe.ps1` → PASS (29/29 checks).
+- `tools\run_godot_smartxr_options_probe.ps1` → PASS (10/10 checks).
+- `tools\run_godot_script_only_websocket_probe.ps1` → ws_connected=true,
+  packets=1.
+- `tools\run_godot_proxy_targets_consumer_only.ps1` against a live
+  `fake_proxy_targets_publisher.py` on :8766 → exit 0, parsed=1, live=1,
+  registered_targets=1, attachments=1.
+- Compile gate: `AndroidMovingCard.gd` (with all seven preloads) and
+  `card_attachment.gd` load + `can_instantiate()` in script-only mode
+  (Godot 4.6.2 headless, staged into `.tmp\card_compile_gate\scripts\`
+  without `project.godot`, clean stderr).
+
 ## M3 step 3 — WSTransport extraction (YAN-76)
 
 ### Files added

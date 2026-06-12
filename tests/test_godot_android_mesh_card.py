@@ -18,6 +18,12 @@ TARGET_REGISTRY = ROOT / "godot-android" / "scripts" / "target_registry.gd"
 # in M3 step 3 (YAN-76); peer/retry/subscribe assertions are pinned there,
 # URL resolution, packet handling, and the status snapshot stay on the card.
 WS_TRANSPORT = ROOT / "godot-android" / "scripts" / "ws_transport.gd"
+# The attach/fallback state machine around _card_attachments plus the
+# offset-rule math moved to scripts/card_attachment.gd in M3 step 4 (YAN-78);
+# attach/offset/fallback assertions are pinned there, the public
+# attach_to_target/detach_card API, _anchor_mode transitions, and the status
+# snapshot stay on the card.
+CARD_ATTACHMENT = ROOT / "godot-android" / "scripts" / "card_attachment.gd"
 VALIDATOR = ROOT / "tests" / "validate_project.ps1"
 ANDROID_ACTIVITY = (
     ROOT
@@ -280,21 +286,26 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
     def test_card_can_attach_to_registered_node3d_targets(self):
         source = SCRIPT.read_text(encoding="utf-8")
         registry = TARGET_REGISTRY.read_text(encoding="utf-8")
+        attachment = CARD_ATTACHMENT.read_text(encoding="utf-8")
 
         self.assertIn("class Node3DTargetAdapter", registry)
         self.assertIn("func register(target_id: String, adapter: Node3DTargetAdapter) -> bool:", registry)
         self.assertIn("var _target_registry = TargetRegistryScript.new()", source)
         self.assertIn("func register_node3d_target(target_id: String, node_or_path", source)
         self.assertIn("func attach_to_target(card_id: String, target_id: String, offset_rule", source)
-        self.assertIn('var _card_attachments := {}', source)
-        self.assertIn('"hold_last_pose"', source)
-        self.assertIn("_update_target_attachments()", source)
+        # The bookkeeping dict and the attach/update state machine moved to
+        # card_attachment.gd in M3 step 4 (YAN-78).
+        self.assertIn("var _attachments := {}", attachment)
+        self.assertIn('"hold_last_pose"', attachment)
+        self.assertIn("func update_attachments() -> void:", attachment)
+        # The registry stays card-owned; the subsystem resolves through the
+        # injected Callable.
         self.assertIn("_target_registry.resolve(target_id)", source)
-        self.assertIn("adapter.get_global_transform()", source)
-        self.assertIn("_target_offset_transform(adapter.get_global_transform(), offset_rule)", source)
+        self.assertIn("adapter.get_global_transform()", attachment)
+        self.assertIn("_target_offset_transform(adapter.get_global_transform(), offset_rule)", attachment)
         self.assertIn('_anchor_mode = "target"', source)
         self.assertIn("_orient_card_for_3dof_reading()", source)
-        self.assertRegex(source, r"if _anchor_mode == \"target\":\s+_update_target_attachments\(\)")
+        self.assertRegex(source, r"if _anchor_mode == \"target\":\s+_card_attachment\.update_attachments\(\)")
 
     def test_debug_marker_target_can_drive_real_device_validation(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -314,16 +325,17 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('"debug_target_reset"', source)
 
     def test_world_target_offset_ignores_target_rotation_for_card_position(self):
-        source = SCRIPT.read_text(encoding="utf-8")
+        # The offset math moved to card_attachment.gd in M3 step 4 (YAN-78).
+        attachment = CARD_ATTACHMENT.read_text(encoding="utf-8")
 
-        self.assertIn('"offset_space"', source)
-        self.assertIn('"world"', source)
-        self.assertIn('"target"', source)
-        self.assertIn("func _target_world_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:", source)
-        self.assertIn("func _target_local_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:", source)
-        self.assertIn("result.origin = target_transform.origin + _target_offset_vector(rule)", source)
-        self.assertIn("result.origin = target_transform * _target_offset_vector(rule)", source)
-        self.assertIn('if str(rule.get("offset_space", "world")) == "target":', source)
+        self.assertIn('"offset_space"', attachment)
+        self.assertIn('"world"', attachment)
+        self.assertIn('"target"', attachment)
+        self.assertIn("func _target_world_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:", attachment)
+        self.assertIn("func _target_local_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:", attachment)
+        self.assertIn("result.origin = target_transform.origin + _target_offset_vector(rule)", attachment)
+        self.assertIn("result.origin = target_transform * _target_offset_vector(rule)", attachment)
+        self.assertIn('if str(rule.get("offset_space", "world")) == "target":', attachment)
 
     def test_debug_marker_uses_world_offset_while_rotating_for_pcmr_validation(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -386,8 +398,11 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         hud = STATUS_HUD.read_text(encoding="utf-8")
         # The peer/retry/subscribe loop itself moved to ws_transport.gd in M3
         # step 3 (YAN-76); see tests/test_godot_ws_transport.py for the full
-        # transport contract.
+        # transport contract. The attachment bookkeeping + apply counter
+        # moved to card_attachment.gd in M3 step 4 (YAN-78); the card reads
+        # the snapshot values through its getters.
         transport = WS_TRANSPORT.read_text(encoding="utf-8")
+        attachment = CARD_ATTACHMENT.read_text(encoding="utf-8")
 
         self.assertIn("const PROXY_TARGETS_WS_ENABLED := true", source)
         self.assertIn('const PROXY_TARGETS_WS_URL := "ws://127.0.0.1:8766/proxy_targets"', source)
@@ -434,7 +449,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_status_hud.write_status_files(snapshot, delta)", source)
         self.assertIn("FileAccess.open(proxy_targets_status_path, FileAccess.WRITE)", hud)
         self.assertIn('"anchor_mode": _anchor_mode', source)
-        self.assertIn('"attachments": _card_attachments.size()', source)
+        self.assertIn('"attachments": _card_attachment.attachment_count()', source)
         self.assertIn('"card_target_id": _proxy_targets_card_target_id()', source)
         self.assertIn("func _proxy_targets_card_target_id() -> String:", source)
         self.assertIn('"proxy_target_count": _proxy_targets_proxy_count()', source)
@@ -443,14 +458,14 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('"card_attach_target_id": str(proxy.get("card_target_id", ""))', hud)
         self.assertIn('"card_resolved_position": _proxy_targets_card_resolved_position()', source)
         self.assertIn('"card_node_position": _proxy_targets_card_node_position()', source)
-        self.assertIn('"card_apply_count": _proxy_targets_card_apply_count', source)
-        self.assertIn("var _proxy_targets_card_apply_count := 0", source)
+        self.assertIn('"card_apply_count": _card_attachment.apply_count()', source)
+        self.assertIn("var _apply_count := 0", attachment)
         self.assertIn("func _proxy_targets_proxy_count() -> int:", source)
         self.assertIn("func _proxy_targets_proxy_ids() -> Array:", source)
         # Untyped returns (Vector3 or null); StatusHud formats null as "n/a".
         self.assertIn("func _proxy_targets_card_resolved_position():", source)
         self.assertIn("func _proxy_targets_card_node_position():", source)
-        self.assertIn("_proxy_targets_card_apply_count += 1", source)
+        self.assertIn("_apply_count += 1", attachment)
         self.assertIn('"packet_preview": _proxy_targets_last_packet_preview', source)
         self.assertIn('"source_coordinate": _proxy_targets_last_source_coordinate', source)
         self.assertIn('"source_coordinate_summary": _source_coordinate_summary(proxy.get("source_coordinate", {}))', hud)

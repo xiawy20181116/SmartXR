@@ -25,15 +25,6 @@ const MAX_SPEED_DEG_PER_SECOND := 45.0
 const MIN_DEPTH_M := 0.65
 const MAX_DEPTH_M := 4.0
 const WS_URL := "ws://10.1.98.195:8766/control"
-const TARGET_FALLBACK_HOLD_LAST_POSE := "hold_last_pose"
-const TARGET_FALLBACK_DETACH := "detach"
-const TARGET_FALLBACK_FADE_OUT := "fade_out"
-const TARGET_DEFAULT_OFFSET_RULE := {
-	"mode": "front",
-	"offset_space": "world",
-	"distance_m": 0.35,
-	"fallback": TARGET_FALLBACK_HOLD_LAST_POSE,
-}
 const DEBUG_NODE3D_TARGET_ENABLED := false
 const DEBUG_TARGET_ID := "debug_marker"
 const DEBUG_TARGET_SIZE_M := Vector3(0.12, 0.12, 0.12)
@@ -47,6 +38,7 @@ const PASSTHROUGH_OVERLAY_ENV := "SMARTXR_USE_PASSTHROUGH_OVERLAY"
 const PASSTHROUGH_OVERLAY_VIEWPORT_SIZE := Vector2i(512, 256)
 const PASSTHROUGH_OVERLAY_QUAD_SIZE_M := Vector2(0.42, 0.20)
 const PASSTHROUGH_OVERLAY_DEPTH_M := 1.5
+const CardAttachmentScript := preload("res://scripts/card_attachment.gd")
 const ProxyTargetsConsumerScript := preload("res://scripts/proxy_targets_consumer.gd")
 const ProxyTargetsCardAdapterScript := preload("res://scripts/proxy_targets_card_adapter.gd")
 const SmartXROptionsScript := preload("res://scripts/smartxr_options.gd")
@@ -92,7 +84,7 @@ const VST_TARGET_OFFSET_RULE := {
 	"offset_space": "world",
 	"right_m": 0.35,
 	"up_m": 0.25,
-	"fallback": TARGET_FALLBACK_HOLD_LAST_POSE,
+	"fallback": CardAttachmentScript.TARGET_FALLBACK_HOLD_LAST_POSE,
 }
 const GXR_CAL_CV_DEWARP_L := 0x00400060
 const GXR_CAL_CV_DEWARP_R := 0x00400061
@@ -238,7 +230,14 @@ var _last_command := "none"
 # Untyped `=` on purpose (no class_name reference) so script-only probes can
 # load both scripts; see _options above for the same pattern.
 var _target_registry = TargetRegistryScript.new()
-var _card_attachments := {}
+# Card attachment subsystem (scripts/card_attachment.gd): the card_id ->
+# attachment bookkeeping, the attach/fallback state machine, and the
+# offset-rule math, extracted in M3 step 4. The registry, _anchor_mode /
+# _last_command transitions, and _face_camera_enabled orientation stay in
+# this script (ADR-4); wiring happens in _setup_card_attachment(). Untyped
+# `=` on purpose (no class_name reference) so script-only probes can load
+# both scripts.
+var _card_attachment = CardAttachmentScript.new()
 var _debug_target_marker: MeshInstance3D = null
 var _debug_target_elapsed_seconds := 0.0
 var _vst_target_adapter: VSTTargetAdapter = null
@@ -259,7 +258,6 @@ var _proxy_targets_last_source_coordinate := {}
 var _proxy_targets_last_world_from_head_applied := false
 var _proxy_targets_last_local_position := Vector3.ZERO
 var _proxy_targets_last_world_position := Vector3.ZERO
-var _proxy_targets_card_apply_count := 0
 var _passthrough_overlay_enabled := false
 var _passthrough_overlay_blend_ok := false
 var _passthrough_overlay_requested_blend_mode := "alpha_blend"
@@ -292,6 +290,7 @@ func _ready() -> void:
 	_build_vst_raw_debug_panel()
 	_setup_light()
 	_build_card_anchor()
+	_setup_card_attachment()
 	_build_xr_render_probe()
 	_build_vst_bbox_frame()
 	_build_status_hud()
@@ -731,10 +730,7 @@ func _record_proxy_targets_head_to_world_diagnostics() -> void:
 
 
 func _proxy_targets_card_target_id() -> String:
-	var attachment = _card_attachments.get(CARD_ANCHOR_NAME)
-	if typeof(attachment) != TYPE_DICTIONARY:
-		return ""
-	return str(attachment.get("target_id", ""))
+	return _card_attachment.card_target_id(CARD_ANCHOR_NAME)
 
 
 func _proxy_targets_proxy_count() -> int:
@@ -772,13 +768,7 @@ func _vector3_from_status_array(value, fallback: Vector3) -> Vector3:
 # Untyped returns: Vector3 when resolvable, null otherwise. StatusHud formats
 # null as "n/a" in the label and status files.
 func _proxy_targets_card_resolved_position():
-	var attachment = _card_attachments.get(CARD_ANCHOR_NAME)
-	if typeof(attachment) != TYPE_DICTIONARY:
-		return null
-	var last_transform = attachment.get("last_transform")
-	if last_transform is Transform3D:
-		return last_transform.origin
-	return null
+	return _card_attachment.card_resolved_position(CARD_ANCHOR_NAME)
 
 
 func _proxy_targets_card_node_position():
@@ -839,7 +829,7 @@ func _process(delta: float) -> void:
 	if _anchor_mode == "bbox":
 		_apply_bbox_anchor()
 	if _anchor_mode == "target":
-		_update_target_attachments()
+		_card_attachment.update_attachments()
 	else:
 		_apply_3dof_anchor_transform()
 	_update_passthrough_overlay_layer()
@@ -911,16 +901,16 @@ func _advance_vst_target_state(_delta: float) -> void:
 	_vst_target_adapter.advance(float(Time.get_ticks_msec()))
 	if _vst_target_adapter.target.state == TRACKABLE_STATE_LOST:
 		_apply_vst_target_fallback()
-	elif _anchor_mode == "target" and _card_attachments.has(CARD_ANCHOR_NAME):
-		_update_target_attachments()
+	elif _anchor_mode == "target" and _card_attachment.has_attachment(CARD_ANCHOR_NAME):
+		_card_attachment.update_attachments()
 
 
 func _apply_vst_target_fallback() -> void:
 	if _vst_target_proxy != null:
 		_vst_target_proxy.visible = false
-	var attachment = _card_attachments.get(CARD_ANCHOR_NAME)
+	var attachment = _card_attachment.get_attachment(CARD_ANCHOR_NAME)
 	if typeof(attachment) == TYPE_DICTIONARY and str(attachment.get("target_id", "")) == VST_TRACKED_TARGET_ID:
-		_apply_target_fallback(attachment)
+		_card_attachment.apply_fallback(attachment)
 
 
 func register_node3d_target(target_id: String, node_or_path) -> bool:
@@ -931,119 +921,53 @@ func unregister_target(target_id: String) -> void:
 	_target_registry.unregister(target_id)
 
 
-func attach_to_target(card_id: String, target_id: String, offset_rule = {}) -> bool:
-	var adapter = _target_registry.resolve(target_id)
-	if adapter == null:
-		return false
-	var normalized_offset := _normalize_target_offset_rule(offset_rule)
-	_card_attachments[card_id] = {
-		"target_id": target_id,
-		"offset_rule": normalized_offset,
-		"fallback": str(normalized_offset.get("fallback", TARGET_FALLBACK_HOLD_LAST_POSE)),
-		"last_transform": _target_offset_transform(adapter.get_global_transform(), normalized_offset),
-	}
-	_anchor_mode = "target"
-	_last_command = "attach_target:" + target_id
-	_update_target_attachments()
-	return true
+## Wires the CardAttachment subsystem (scripts/card_attachment.gd). The card
+## keeps state resolution per ADR-4: the target registry stays card-owned
+## (lookups go through _resolve_attachment_target), the card anchor arrives
+## via a provider Callable, and the two hooks keep the _anchor_mode
+## transition (all-detached -> manual) and the _face_camera_enabled
+## orientation + VST bbox frame refresh (post-update tail) in this script.
+func _setup_card_attachment() -> void:
+	_card_attachment.set_primary_card_id(CARD_ANCHOR_NAME)
+	_card_attachment.set_resolve_target(_resolve_attachment_target)
+	_card_attachment.set_card_anchor_provider(_get_card_anchor)
+	_card_attachment.set_on_attachments_updated(_on_card_attachments_updated)
+	_card_attachment.set_on_all_detached(_on_card_attachments_all_detached)
 
 
-func detach_card(card_id: String) -> void:
-	_card_attachments.erase(card_id)
-	if _card_attachments.is_empty() and _anchor_mode == "target":
-		_anchor_mode = "manual"
-		_apply_3dof_anchor_transform()
+# Untyped return: Node3DTargetAdapter or null. The registry stays card-owned
+# (ADR-4); the subsystem only sees this Callable.
+func _resolve_attachment_target(target_id: String):
+	return _target_registry.resolve(target_id)
 
 
-func _update_target_attachments() -> void:
-	if _card_anchor == null:
-		return
-	var attachment = _card_attachments.get(CARD_ANCHOR_NAME)
-	if typeof(attachment) != TYPE_DICTIONARY and _card_attachments.size() == 1:
-		attachment = _card_attachments.values()[0]
-	if typeof(attachment) != TYPE_DICTIONARY:
-		return
-	var target_id := str(attachment.get("target_id", ""))
-	var offset_rule = attachment.get("offset_rule", TARGET_DEFAULT_OFFSET_RULE)
-	var adapter = _target_registry.resolve(target_id)
-	if adapter != null and adapter.is_available():
-		var next_transform := _target_offset_transform(adapter.get_global_transform(), offset_rule)
-		_card_anchor.global_transform = next_transform
-		attachment["last_transform"] = next_transform
-		_card_anchor.visible = true
-		_proxy_targets_card_apply_count += 1
-	else:
-		_apply_target_fallback(attachment)
+func _get_card_anchor() -> Node3D:
+	return _card_anchor
+
+
+func _on_card_attachments_updated() -> void:
 	if _face_camera_enabled:
 		_orient_card_for_3dof_reading()
 	_update_vst_bbox_frame()
 
 
-func _apply_target_fallback(attachment: Dictionary) -> void:
-	var fallback := str(attachment.get("fallback", TARGET_FALLBACK_HOLD_LAST_POSE))
-	match fallback:
-		TARGET_FALLBACK_DETACH:
-			detach_card(CARD_ANCHOR_NAME)
-		TARGET_FALLBACK_FADE_OUT:
-			_card_anchor.visible = false
-		_:
-			var last_transform = attachment.get("last_transform", _card_anchor.global_transform)
-			if last_transform is Transform3D:
-				_card_anchor.global_transform = last_transform
+func _on_card_attachments_all_detached() -> void:
+	if _anchor_mode == "target":
+		_anchor_mode = "manual"
+		_apply_3dof_anchor_transform()
 
 
-func _normalize_target_offset_rule(offset_rule) -> Dictionary:
-	var normalized := TARGET_DEFAULT_OFFSET_RULE.duplicate()
-	if typeof(offset_rule) == TYPE_DICTIONARY:
-		for key in offset_rule.keys():
-			normalized[key] = offset_rule[key]
-	elif typeof(offset_rule) == TYPE_STRING:
-		normalized["mode"] = str(offset_rule)
-	return normalized
+func attach_to_target(card_id: String, target_id: String, offset_rule = {}) -> bool:
+	if not _card_attachment.attach(card_id, target_id, offset_rule):
+		return false
+	_anchor_mode = "target"
+	_last_command = "attach_target:" + target_id
+	_card_attachment.update_attachments()
+	return true
 
 
-func _target_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:
-	var rule := _normalize_target_offset_rule(offset_rule)
-	if str(rule.get("offset_space", "world")) == "target":
-		return _target_local_offset_transform(target_transform, rule)
-	return _target_world_offset_transform(target_transform, rule)
-
-
-func _target_world_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:
-	var rule := _normalize_target_offset_rule(offset_rule)
-	var result := Transform3D.IDENTITY
-	result.origin = target_transform.origin + _target_offset_vector(rule)
-	return result
-
-
-func _target_local_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:
-	var rule := _normalize_target_offset_rule(offset_rule)
-	var result := target_transform
-	result.origin = target_transform * _target_offset_vector(rule)
-	return result
-
-
-func _target_offset_vector(offset_rule) -> Vector3:
-	var rule := _normalize_target_offset_rule(offset_rule)
-	var mode := str(rule.get("mode", "front"))
-	var distance := float(rule.get("distance_m", 0.35))
-	var local_offset := Vector3.ZERO
-	match mode:
-		"right_top", "top_right":
-			local_offset = Vector3(float(rule.get("right_m", 0.35)), float(rule.get("up_m", 0.35)), float(rule.get("forward_m", 0.0)))
-		"right":
-			local_offset = Vector3(distance, 0.0, 0.0)
-		"top":
-			local_offset = Vector3(0.0, distance, 0.0)
-		"front":
-			local_offset = Vector3(0.0, 0.0, -distance)
-		_:
-			local_offset = Vector3(
-				float(rule.get("x_m", 0.0)),
-				float(rule.get("y_m", 0.0)),
-				float(rule.get("z_m", -distance))
-			)
-	return local_offset
+func detach_card(card_id: String) -> void:
+	_card_attachment.detach(card_id)
 
 
 func _poll_ws(delta: float) -> void:
@@ -1388,14 +1312,14 @@ func _build_proxy_targets_status_snapshot() -> Dictionary:
 		"ws_connected": _proxy_targets_ws.ws_connected(),
 		"ws_subscribed": _proxy_targets_ws.ws_subscribed(),
 		"ws_url": _proxy_targets_ws_url(),
-		"attachments": _card_attachments.size(),
+		"attachments": _card_attachment.attachment_count(),
 		"card_target_id": _proxy_targets_card_target_id(),
 		"proxy_target_count": _proxy_targets_proxy_count(),
 		"proxy_target_ids": _proxy_targets_proxy_ids(),
 		"last_position": _proxy_targets_last_position,
 		"card_resolved_position": _proxy_targets_card_resolved_position(),
 		"card_node_position": _proxy_targets_card_node_position(),
-		"card_apply_count": _proxy_targets_card_apply_count,
+		"card_apply_count": _card_attachment.apply_count(),
 		"packets": _proxy_targets_ws.packets_seen(),
 		"parsed": _proxy_targets_parsed_messages,
 		"live": _proxy_targets_live_messages,

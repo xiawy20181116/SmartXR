@@ -1,8 +1,8 @@
 # HANDOFF
 
-## State (after M3 step 3, YAN-76)
+## State (after M3 step 4, YAN-78)
 
-- All 128 Python tests pass (`python -m unittest tests/test_*.py`).
+- All 131 Python tests pass (`python -m unittest tests/test_*.py`).
 - Schema gate passes on both fixtures.
 - **M3 step 1 done** (YAN-74): status HUD + diagnostics-file subsystem
   extracted into `godot-android/scripts/status_hud.gd` via the
@@ -32,17 +32,33 @@
   subscribe-once-on-open now really happens; everything else is
   behavior-identical (payload string, 2.0 s retry, reconnect semantics,
   snapshot keys/values).
+- **M3 step 4 done** (YAN-78): the attach/fallback state machine around
+  `_card_attachments` (`attach_to_target` / `detach_card` /
+  `_update_target_attachments` / `_apply_target_fallback`), the offset-rule
+  math, and the `TARGET_FALLBACK_*` / `TARGET_DEFAULT_OFFSET_RULE` constants
+  extracted into `godot-android/scripts/card_attachment.gd` (RefCounted,
+  dependency-free, no class_name self-references). Wiring follows the
+  WSTransport Callable pattern (`_setup_card_attachment()`): registry
+  lookups (`_resolve_attachment_target`), the card anchor
+  (`_get_card_anchor` provider), the post-update hook (orientation + VST
+  bbox frame), and the all-detached hook (the "target" -> "manual" +
+  `_apply_3dof_anchor_transform()` transition) — the registry,
+  `_anchor_mode` / `_last_command`, and `_face_camera_enabled` stay
+  card-owned per ADR-4. Card public API and snapshot keys/values unchanged
+  (`attachments` / `card_target_id` / `card_resolved_position` /
+  `card_apply_count` now read through subsystem getters).
 - **Godot runtime verification done on the dev machine** (Godot 4.6.2
-  headless): the new WSTransport probe passes all 30 checks
-  (`tools\run_godot_ws_transport_probe.ps1`), the target-registry probe all
-  32, the StatusHud probe all 29, the options probe all 10, and both
-  pipeline harnesses pass — `run_godot_script_only_websocket_probe.ps1`
+  headless): the new CardAttachment probe passes all 64 checks
+  (`tools\run_godot_card_attachment_probe.ps1`), the WSTransport probe all
+  30, the target-registry probe all 32, the StatusHud probe all 29, the
+  options probe all 10, and both pipeline harnesses pass —
+  `run_godot_script_only_websocket_probe.ps1`
   (`ws_connected=true, packets=1`) and
   `run_godot_proxy_targets_consumer_only.ps1` against a live
   `fake_proxy_targets_publisher.py` (`parsed=1, live=1,
-  registered_targets=1`). `AndroidMovingCard.gd` (all six preloads) +
-  `ws_transport.gd` pass the script-only load/can_instantiate compile check
-  with clean stderr.
+  registered_targets=1`). `AndroidMovingCard.gd` (all seven preloads) +
+  `card_attachment.gd` pass the script-only load/can_instantiate compile
+  check with clean stderr.
 - **Still not verified**: `AndroidMovingCard.gd` as a whole app — headless
   project mode boots the main scene which never exits, so that path needs
   the editor or a device. `godot --check-only` also hangs in this repo (GXR
@@ -50,10 +66,10 @@
 
 ## Unfinished / risks
 
-- M3 steps 4+ not started: CardAttachment (the attach/fallback state machine
-  around `_card_attachments`) and XRBootstrap extractions. Reuse the ADR-4
-  seam (resolve state in the card, format/act in the subsystem) and keep
-  each script loadable in no-project mode (no class_name self-references).
+- M3 step 5 not started: the XRBootstrap extraction (`_try_init_xr` +
+  camera/origin setup). Reuse the ADR-4 seam (resolve state in the card,
+  format/act in the subsystem) and keep the script loadable in no-project
+  mode (no class_name self-references).
 - On-device behavior change to be aware of (from the YAN-76 bug fix): the
   proxy_targets subscribe message is now actually sent once per connection
   and the status snapshot/HUD will show `sub=true` while connected (it was
@@ -86,8 +102,9 @@
   explicit `bool()` cast if the project enables treat-warnings-as-errors.
 - Scripts that script-only probes load must not self-reference their own
   `class_name` (it is unregistered in no-project mode). `smartxr_options.gd`,
-  `status_hud.gd`, `target_registry.gd` and `ws_transport.gd` follow the
-  rule; keep it for future probe-visible scripts. Inner-class references
+  `status_hud.gd`, `target_registry.gd`, `ws_transport.gd` and
+  `card_attachment.gd` follow the rule; keep it for future probe-visible
+  scripts. Inner-class references
   (`Node3DTargetAdapter` inside `target_registry.gd`) are script-scoped and
   safe. The card's untyped helpers
   (`_proxy_targets_card_resolved_position()` etc.) intentionally return
@@ -98,11 +115,10 @@
 
 ## How to continue
 
-Continue M3 with the next slice: CardAttachment (the attach/fallback state
-machine around `_card_attachments`, including `attach_to_target` /
-`detach_card` / `_update_target_attachments` / `_apply_target_fallback` and
-the offset-rule math) is the natural next candidate, or XRBootstrap
-(`_try_init_xr` + camera/origin setup). Update the pinned assertions in
-`tests/test_godot_android_mesh_card.py` in the same commit, add a
-script-only probe per extracted script, and register the new static test in
-`tests/validate_project.ps1`.
+Continue M3 with the last slice: XRBootstrap (`_try_init_xr` + camera/origin
+setup, plus the passthrough-overlay blend handshake if it fits the seam).
+Update the pinned assertions in `tests/test_godot_android_mesh_card.py` in
+the same commit, add a script-only probe per extracted script, and register
+the new static test in `tests/validate_project.ps1`. After that: M4
+(TrackableTarget / VSTTargetAdapter / TargetSource interface) and M5
+(per-subsystem docs).
