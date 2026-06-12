@@ -1,5 +1,67 @@
 # Notes — change log
 
+## M3 step 2 — TargetRegistry extraction (YAN-75)
+
+### Files added
+
+- `godot-android/scripts/target_registry.gd` — the TargetRegistry and
+  Node3DTargetAdapter classes, moved verbatim out of `AndroidMovingCard.gd`
+  (Node3DTargetAdapter is now an inner class of the registry script).
+  RefCounted, dependency-free (no preloads, no env reads, no tree walks of
+  its own — the card passes the lookup root into each adapter), and no
+  class_name self-references so it loads in no-project (script-only) mode.
+- `godot-android/tests/script_only_target_registry_probe.gd` — script-only
+  runtime probe (32 checks: register/unregister/resolve bookkeeping incl.
+  empty-id / null-adapter / unknown-id / overwrite, direct-Node3D vs
+  NodePath vs String adapter modes, path re-resolution after moves,
+  is_available/get_global_transform on live, freed, missing, and
+  non-Node3D targets, freed lookup root). Note: checks run from the first
+  `_process` iteration, not `_initialize` — `get_global_transform` errors
+  with `!is_inside_tree()` before the main loop starts.
+- `tools/run_godot_target_registry_probe.ps1` — headless no-project runner
+  for the probe, following run_godot_status_hud_probe.ps1.
+- `tests/test_godot_target_registry.py` — 3 static tests pinning the
+  registry contract, the card-side delegation, and the probe/runner pair.
+
+### Files modified
+
+- `godot-android/scripts/AndroidMovingCard.gd` — removed the
+  `class Node3DTargetAdapter` / `class TargetRegistry` inner classes
+  (~56 lines). Added `const TargetRegistryScript := preload(...)`;
+  `_target_registry` is now `= TargetRegistryScript.new()` (untyped `=`, no
+  class_name reference, same pattern as `_options`);
+  `register_node3d_target` builds adapters via
+  `TargetRegistryScript.Node3DTargetAdapter.new(self, node_or_path)` with an
+  explicit `bool()` on the return; the two `resolve()` call sites use `=`
+  instead of `:=` (Variant-returning receiver). Public API and behavior
+  unchanged; TrackableTarget / VSTTargetAdapter stay in the card (M4
+  territory).
+- `tests/test_godot_android_mesh_card.py` — registry/adapter pins in
+  `test_card_can_attach_to_registered_node3d_targets` repointed at
+  `target_registry.gd` (per ADR-3); attach/fallback pins stay on the card.
+- `tests/validate_project.ps1` — registers `tests/test_godot_target_registry.py`.
+- `TASKS.md` / `HANDOFF.md` — bookkeeping.
+
+### Verification run
+
+- `python -m unittest tests/test_*.py` → 125 tests, OK.
+- Schema gate on both fixtures → ok.
+- `tools\run_godot_target_registry_probe.ps1` → PASS (32/32 checks, clean
+  stderr).
+- `tools\run_godot_status_hud_probe.ps1` → PASS (29/29 checks).
+- `tools\run_godot_smartxr_options_probe.ps1` → PASS (10/10 checks).
+- `tools\run_godot_script_only_websocket_probe.ps1` → ws_connected=true,
+  packets=1.
+- `tools\run_godot_proxy_targets_consumer_only.ps1` against a live
+  `fake_proxy_targets_publisher.py` on :8766 → exit 0, parsed=1, live=1,
+  registered_targets=1.
+- Compile gate: `AndroidMovingCard.gd` (with all five preloads) and
+  `target_registry.gd` load + `can_instantiate()` in script-only mode
+  (Godot 4.6.2 headless). Gotcha: run the loader from a directory WITHOUT
+  `project.godot` (scripts staged into `.tmp\card_compile_gate\scripts\`) —
+  cwd = `godot-android/` makes headless Godot load the project and hang on
+  the GXR/OpenXR boot.
+
 ## M3 step 1 — StatusHud extraction (YAN-74)
 
 ### Files added
