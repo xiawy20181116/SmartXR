@@ -43,6 +43,31 @@ VST bbox publisher convention:
 - If a 4x4 `right_eye_to_head_matrix` is supplied under the source camera metadata, the publisher applies it instead of the default axis flip.
 - The anchor point is the target center at the source-provided depth or the configured default depth.
 
+## Shared math test vectors
+
+The bbox→head conventions above are pinned by one checked-in fixture,
+`godot-android/fixtures/bbox_math_test_vectors.json` (`schema_version: 1`),
+with named cases for the FOV pinhole projection, the `[x, -y, -z]` default
+flip, the row-major 4x4 `right_eye_to_head` path (plus the GDScript-only
+fewer-than-16-elements fallback to the default flip), and the full
+bbox→yaw/pitch/depth/angular-size→position chain. Two consumers run the same
+numbers:
+
+- Python: `tests/test_bbox_math_vectors.py` drives `smartxr.geometry`
+  (`project_bbox_center_to_camera_point` / `vst_camera_point_to_head`);
+  tolerance `1e-9`.
+- GDScript: `tools/run_godot_bbox_math_probe.ps1` runs
+  `godot-android/tests/script_only_bbox_math_probe.gd` headless against the
+  duplicated math in `AndroidMovingCard.gd` (`_anchor_from_bbox`,
+  `_convert_vst_camera_point_to_head_convention`,
+  `_transform_right_vst_point_to_head`,
+  `_target_position_from_bbox_anchor`); tolerance `1e-4` (Vector3 is
+  float32).
+
+Regenerate or extend with `tools/generate_bbox_math_test_vectors.py`. The
+yaw/pitch/angular decomposition exists only on the GDScript side; it lives in
+the same fixture so target-source refactors (M4) cannot drift it silently.
+
 Current gate:
 
 ```powershell
