@@ -1,5 +1,115 @@
 # Notes — change log
 
+## M3 step 4 — CardAttachment extraction (YAN-77)
+
+### Files added
+
+- `godot-android/scripts/card_attachment.gd` — CardAttachment subsystem
+  (RefCounted, dependency-free, no class_name self-references): the
+  card_id -> attachment store (was the card's `_card_attachments`), the
+  attach/detach lifecycle (`attach` seeds `last_transform` from the
+  target's current pose, exactly like the old `attach_to_target` body),
+  the per-frame `update_attachments(card_anchor, primary_card_id)` pass
+  (primary selection incl. the "single non-primary attachment still drives
+  the card" rule, apply-to-anchor + visible=true, last_transform refresh),
+  the fallback state machine `apply_fallback` (`hold_last_pose` /
+  `detach` / `fade_out`), read-only accessors for the status snapshot
+  (`size` / `is_empty` / `has_attachment` / `get_attachment` /
+  `attached_target_id` / `last_resolved_position`, the latter
+  Vector3-or-null for StatusHud's "n/a"), and the offset-rule math as
+  statics (`normalize_offset_rule`, `offset_transform`,
+  `world_offset_transform`, `local_offset_transform`, `offset_vector`;
+  modes right_top / top_right / right / top / front / custom-xyz,
+  offset_space world / target, `DEFAULT_OFFSET_RULE` +
+  `TARGET_FALLBACK_*` consts moved here from the card). Wiring is three
+  Callables (ADR-4: state resolution stays in the card):
+  `set_resolver` (the card passes `_target_registry.resolve`, so target
+  lookup stays in target_registry.gd), `set_on_applied` (the card keeps
+  its `_proxy_targets_card_apply_count`), and `set_on_detach_card` (the
+  detach fallback routes back through the card's `detach_card`, keeping
+  the anchor-mode flip card-side; unwired, the store detaches locally for
+  probe/standalone use).
+- `godot-android/tests/script_only_card_attachment_probe.gd` — script-only
+  runtime probe (48 checks: normalize defaults / merge / string form /
+  const non-mutation, every offset_vector mode, world-vs-target
+  offset_space against a rotated target transform, attach/detach lifecycle
+  incl. resolver rejection and record shape, default rule when omitted,
+  per-frame apply + on_applied counter, primary-selection rules, and each
+  fallback mode against an unavailable and a resolver-missing target,
+  detach both locally and via the callable, plus the direct
+  `apply_fallback` VST-path call). Uses a probe-local FakeTargetAdapter
+  (is_available/get_global_transform) so the subsystem contract is tested
+  without target_registry.gd.
+- `tools/run_godot_card_attachment_probe.ps1` — headless no-project runner,
+  following run_godot_target_registry_probe.ps1 (env-injected script path +
+  status JSON).
+- `tests/test_godot_card_attachment.py` — 3 static tests pinning the
+  subsystem contract, the card-side delegation/wiring, and the
+  probe/runner pair.
+
+### Files modified
+
+- `godot-android/scripts/AndroidMovingCard.gd` — removed the
+  `_card_attachments` store, the `attach_to_target` /
+  `_update_target_attachments` / `_apply_target_fallback` bodies, the
+  offset math (`_normalize_target_offset_rule`, `_target_offset_transform`,
+  `_target_world_offset_transform`, `_target_local_offset_transform`,
+  `_target_offset_vector`), and the `TARGET_FALLBACK_*` /
+  `TARGET_DEFAULT_OFFSET_RULE` consts (~115 lines). Added
+  `const CardAttachmentScript := preload(...)`; `_card_attachment` is
+  `= CardAttachmentScript.new()` (untyped `=`, same pattern as the other
+  subsystems); `_setup_card_attachment()` (first thing in `_ready`) wires
+  resolver / on_applied / on_detach_card. `attach_to_target`,
+  `detach_card`, and `_update_target_attachments` stay as thin public/
+  per-frame wrappers (mode flip, `_last_command`, orientation +
+  `_update_vst_bbox_frame` only when an attachment was actually
+  processed — same early-out as before). `_apply_vst_target_fallback`
+  reads the record via `get_attachment` and calls `apply_fallback`
+  directly, matching the old direct `_apply_target_fallback` call.
+  `VST_TARGET_OFFSET_RULE.fallback` now references
+  `CardAttachmentScript.TARGET_FALLBACK_HOLD_LAST_POSE` (const-from-
+  preload; verified by the compile gate). Snapshot key values unchanged
+  (`attachments` = store size, `card_target_id`, `card_resolved_position`,
+  `card_apply_count`, `anchor_mode`).
+- `tests/test_godot_android_mesh_card.py` — store/offset-math pins in
+  `test_card_can_attach_to_registered_node3d_targets` and
+  `test_world_target_offset_ignores_target_rotation_for_card_position`
+  repointed at `card_attachment.gd` (per ADR-3); public-API, anchor-mode,
+  and snapshot pins stay on the card.
+- `tests/test_godot_target_registry.py` — the card-side
+  `_target_registry.resolve(target_id)` pin became the resolver wiring
+  (`_card_attachment.set_resolver(_target_registry.resolve)`).
+- `tests/validate_project.ps1` — registers `tests/test_godot_card_attachment.py`.
+- `TASKS.md` / `HANDOFF.md` — bookkeeping.
+
+### Verification run
+
+- `python -m unittest tests/test_*.py` → 131 tests, OK.
+- Schema gate on both fixtures → ok.
+- `tools\run_godot_card_attachment_probe.ps1` → PASS (48/48 checks, clean
+  stderr).
+- `tools\run_godot_ws_transport_probe.ps1` → PASS (30/30 checks).
+- `tools\run_godot_target_registry_probe.ps1` → PASS (32/32 checks).
+- `tools\run_godot_status_hud_probe.ps1` → PASS (29/29 checks).
+- `tools\run_godot_smartxr_options_probe.ps1` → PASS (10/10 checks).
+- `tools\run_godot_script_only_websocket_probe.ps1` → ws_connected=true,
+  packets=1.
+- `tools\run_godot_proxy_targets_consumer_only.ps1` against a live
+  `fake_proxy_targets_publisher.py` on :8766 → exit 0, parsed=1, live=1,
+  registered_targets=1, attachments=1.
+- Compile gate: `AndroidMovingCard.gd` (with all seven preloads) and
+  `card_attachment.gd` load + `can_instantiate()` in script-only mode
+  (Godot 4.6.2 headless, staged into `.tmp\card_compile_gate\scripts\`,
+  clean stderr).
+
+### Next slice recommendation
+
+- **M3-5: XRBootstrap** — `_try_init_xr` + the camera/origin setup
+  (`_setup_camera`) and the alpha-blend request that feeds the
+  passthrough_overlay snapshot. Same ADR-4 seam; after that the card is
+  down to scene building, command handling, bbox math (M4 shares vectors
+  with `smartxr/geometry.py`), and the VST target source (M4).
+
 ## M3 step 3 — WSTransport extraction (YAN-76)
 
 ### Files added

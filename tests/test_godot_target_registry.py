@@ -51,7 +51,10 @@ class GodotTargetRegistryTests(unittest.TestCase):
             card,
         )
         self.assertIn("_target_registry.unregister(target_id)", card)
-        self.assertIn("_target_registry.resolve(target_id)", card)
+        # Since M3 step 4 (YAN-77) the card resolves targets for attachments
+        # through the CardAttachment resolver wiring; lookup still goes
+        # through this registry.
+        self.assertIn("_card_attachment.set_resolver(_target_registry.resolve)", card)
         # The inner classes moved out of the card.
         self.assertNotIn("class TargetRegistry:", card)
         self.assertNotIn("class Node3DTargetAdapter:", card)
