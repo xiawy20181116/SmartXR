@@ -1,8 +1,8 @@
 # HANDOFF
 
-## State (after M3 step 4, YAN-77)
+## State (after M3 step 5, YAN-79)
 
-- All 131 Python tests pass (`python -m unittest tests/test_*.py`).
+- All 134 Python tests pass (`python -m unittest tests/test_*.py`).
 - Schema gate passes on both fixtures.
 - **M3 step 1 done** (YAN-74): status HUD + diagnostics-file subsystem
   extracted into `godot-android/scripts/status_hud.gd` via the
@@ -41,17 +41,39 @@
   anchor-mode flip stays card-side. Behavior-identical, including the
   "single non-primary attachment still drives the card" selection rule and
   "no attachment processed -> no re-orient" early-out.
+- **M3 step 5 done** (YAN-79) — **M3 is complete**: the XR startup path
+  (`_try_init_xr`: OpenXR interface lookup/initialize, viewport
+  use_xr/transparent_bg, the alpha-blend environment request incl. the
+  `set_environment_blend_mode` has_method branch, vsync disable, the
+  "XR init:" prints and the exact error strings) and the camera/origin
+  construction (`_setup_camera`: XROrigin3D + XRCamera3D when XR is
+  active, FallbackCamera with look_at + make_current otherwise) extracted
+  from `AndroidMovingCard.gd` into `godot-android/scripts/xr_bootstrap.gd`
+  (RefCounted, dependency-free, no class_name self-references). ADR-4
+  seam: the card calls `try_init_xr(get_viewport())` /
+  `setup_camera(self)` and copies the results back into `_xr_active` /
+  `_xr_interface_found` / `_xr_initialize_ok` / `_xr_init_error` /
+  `_xr_origin` / `_camera` / `_passthrough_overlay_requested_blend_mode` /
+  `_passthrough_overlay_blend_ok`, so every status-snapshot key keeps
+  identical values. The interface lookup is injectable
+  (`set_interface_provider`, duck-typed interface use) and the fallback
+  camera's look_at target routes back through
+  `_anchor_position_from_yaw_pitch_depth`
+  (`set_fallback_look_at_provider`).
 - **Godot runtime verification done on the dev machine** (Godot 4.6.2
-  headless): the new CardAttachment probe passes all 48 checks
-  (`tools\run_godot_card_attachment_probe.ps1`), the WSTransport probe all
-  30, the target-registry probe all 32, the StatusHud probe all 29, the
-  options probe all 10, and both pipeline harnesses pass —
-  `run_godot_script_only_websocket_probe.ps1` (`ws_connected=true,
-  packets=1`) and `run_godot_proxy_targets_consumer_only.ps1` against a
-  live `fake_proxy_targets_publisher.py` (`parsed=1, live=1,
-  registered_targets=1, attachments=1`). `AndroidMovingCard.gd` (all seven
-  preloads) + `card_attachment.gd` pass the script-only
-  load/can_instantiate compile check with clean stderr (staged into
+  headless): the new XRBootstrap probe passes all 31 checks
+  (`tools\run_godot_xr_bootstrap_probe.ps1`, fakes for the interface — the
+  not-found, initialize-false, fallback-camera, XR-active origin+camera,
+  and all three blend-request branches run headless), the CardAttachment
+  probe all 48, the WSTransport probe all 30, the target-registry probe
+  all 32, the StatusHud probe all 29, the options probe all 10, and both
+  pipeline harnesses pass — `run_godot_script_only_websocket_probe.ps1`
+  (`ws_connected=true, packets=1`) and
+  `run_godot_proxy_targets_consumer_only.ps1` against a live
+  `fake_proxy_targets_publisher.py` (`parsed=1, live=1,
+  registered_targets=1, attachments=1`). `AndroidMovingCard.gd` (all eight
+  preloads) + `xr_bootstrap.gd` pass the script-only load/can_instantiate
+  compile check with clean stderr (staged into
   `.tmp\card_compile_gate\scripts\`).
 - **Still not verified**: `AndroidMovingCard.gd` as a whole app — headless
   project mode boots the main scene which never exits, so that path needs
@@ -60,10 +82,6 @@
 
 ## Unfinished / risks
 
-- M3 step 5 not started: XRBootstrap (`_try_init_xr` + camera/origin setup)
-  is the last card subsystem slated for extraction. Reuse the ADR-4 seam
-  (resolve state in the card, format/act in the subsystem) and keep the
-  script loadable in no-project mode (no class_name self-references).
 - Const-from-preload now exists in the card:
   `VST_TARGET_OFFSET_RULE.fallback` references
   `CardAttachmentScript.TARGET_FALLBACK_HOLD_LAST_POSE`. This compiles and
@@ -96,9 +114,9 @@
   explicit `bool()` cast if the project enables treat-warnings-as-errors.
 - Scripts that script-only probes load must not self-reference their own
   `class_name` (it is unregistered in no-project mode). `smartxr_options.gd`,
-  `status_hud.gd`, `target_registry.gd`, `ws_transport.gd` and
-  `card_attachment.gd` follow the rule; keep it for future probe-visible
-  scripts. Inner-class references (`Node3DTargetAdapter` inside
+  `status_hud.gd`, `target_registry.gd`, `ws_transport.gd`,
+  `card_attachment.gd` and `xr_bootstrap.gd` follow the rule; keep it for
+  future probe-visible scripts. Inner-class references (`Node3DTargetAdapter` inside
   `target_registry.gd`) are script-scoped and safe. The card's untyped
   helpers (`_proxy_targets_card_resolved_position()` etc.) intentionally
   return Vector3-or-null; StatusHud renders null as "n/a".
@@ -108,11 +126,13 @@
 
 ## How to continue
 
-Continue M3 with the last slice: XRBootstrap (`_try_init_xr` + the
-camera/origin setup in `_setup_camera`, plus the blend-mode request that
-feeds the passthrough_overlay snapshot) as M3 step 5. Update the pinned
-assertions in `tests/test_godot_android_mesh_card.py` in the same commit,
-add a script-only probe per extracted script, and register the new static
-test in `tests/validate_project.ps1`. After that, M4 (TargetSource strategy
-interface: TrackableTarget / VSTTargetAdapter and target-source
-unification) and M5 (per-subsystem docs).
+M3 is complete — all five card subsystems (StatusHud, TargetRegistry,
+WSTransport, CardAttachment, XRBootstrap) are extracted. Continue with M4
+(TargetSource strategy interface: unify the on-device ncnn path — the
+TrackableTarget / VSTTargetAdapter inner classes still in the card — the
+remote proxy_targets WS path, and fixture replay behind one source
+interface, and promote `docs/proxy_targets_payload_contract.md` into shared
+test vectors used by both `smartxr/geometry.py` and the GDScript bbox
+math), then M5 (per-subsystem docs following `docs/smartxr_options.md`
+style). Keep the ADR-4 seam and the no-project-mode rules for any new
+probe-visible script.

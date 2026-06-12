@@ -23,6 +23,11 @@ WS_TRANSPORT = ROOT / "godot-android" / "scripts" / "ws_transport.gd"
 # assertions are pinned there, the public API, anchor-mode switching, and the
 # status snapshot stay on the card.
 CARD_ATTACHMENT = ROOT / "godot-android" / "scripts" / "card_attachment.gd"
+# The XR startup path (_try_init_xr) and the camera/origin construction moved
+# to scripts/xr_bootstrap.gd in M3 step 5 (YAN-79); init/blend/camera
+# assertions are pinned there, the resolved _xr_* state and the status
+# snapshot stay on the card.
+XR_BOOTSTRAP = ROOT / "godot-android" / "scripts" / "xr_bootstrap.gd"
 VALIDATOR = ROOT / "tests" / "validate_project.ps1"
 ANDROID_ACTIVITY = (
     ROOT
@@ -650,11 +655,15 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_xr_visibility_diagnostic_uses_alpha_blend_composition_for_pcmr_seethrough(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        # The transparent-composition setup moved to xr_bootstrap.gd in M3
+        # step 5 (YAN-79); the card delegates and keeps the resolved state.
+        bootstrap = XR_BOOTSTRAP.read_text(encoding="utf-8")
         project = (GODOT_ANDROID / "project.godot").read_text(encoding="utf-8")
 
-        self.assertIn("get_viewport().transparent_bg = true", source)
-        self.assertIn("XRInterface.XR_ENV_BLEND_MODE_ALPHA_BLEND", source)
-        self.assertIn("blend=alpha", source)
+        self.assertIn("_xr_bootstrap.try_init_xr(get_viewport())", source)
+        self.assertIn("viewport.transparent_bg = true", bootstrap)
+        self.assertIn("XRInterface.XR_ENV_BLEND_MODE_ALPHA_BLEND", bootstrap)
+        self.assertIn("blend=alpha", bootstrap)
         self.assertIn("environment/defaults/default_clear_color=Color(0.02, 0.025, 0.03, 1)", project)
 
     def test_android_adaptive_icon_references_existing_mipmap_resources(self):
