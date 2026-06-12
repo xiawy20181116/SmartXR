@@ -13,6 +13,118 @@
 - Verification (re-run after rebasing onto the merged M3-4, PR #13): full
   Python suite (131 tests) OK; smartxr options probe 10/10 PASS (resolution
   order unchanged); card compile gate clean; no test pinned the old literal.
+  Re-verified after merging the M3-5 main (PR #15): 134 tests OK, options
+  probe 10/10, card compile gate clean.
+
+## M3 step 5 — XRBootstrap extraction (YAN-79)
+
+### Files added
+
+- `godot-android/scripts/xr_bootstrap.gd` — XRBootstrap subsystem
+  (RefCounted, dependency-free, no class_name self-references): the XR
+  startup path moved verbatim from the card's `_try_init_xr` (OpenXR
+  interface lookup, initialize, viewport use_xr / transparent_bg, the
+  alpha-blend environment request including the
+  `set_environment_blend_mode` has_method branch and the
+  `environment_blend_mode` property else-branch, vsync disable, and the
+  byte-for-byte "XR init:" prints and error strings "OpenXR interface not
+  found" / "OpenXR initialize returned false"), plus the camera/origin
+  construction from `_setup_camera` (XROrigin3D "XROrigin" + XRCamera3D
+  "XRCamera" far=50 when XR is active; "FallbackCamera" with
+  look_at + make_current otherwise). Injection per the M3-3/M3-4 Callable
+  pattern (ADR-4: state resolution stays in the card, never a back-pointer
+  preload): `set_interface_provider` replaces the default
+  `XRServer.find_interface("OpenXR")` lookup and the interface is used
+  duck-typed only (initialize / has_method / call /
+  environment_blend_mode), so probes can exercise every path headless with
+  fakes; `set_fallback_look_at_provider` routes the fallback camera's
+  look_at target back into the card's 3DoF anchor math. Results are
+  exposed through read-only getters (`interface_found` / `initialize_ok` /
+  `xr_active` / `init_error` / `requested_blend_mode` / `blend_request_ok`
+  / `xr_origin` / `camera`) with defaults mirroring the card's pre-init
+  state ("not attempted", "alpha_blend", false).
+- `godot-android/tests/script_only_xr_bootstrap_probe.gd` — script-only
+  runtime probe (31 checks: pre-init defaults; the interface-not-found
+  fallback with the exact error string and untouched viewport; the
+  initialize-false fallback with the exact error string, no blend request,
+  untouched viewport; fallback camera construction — name/far/position
+  zero/no origin/make_current/look_at toward an injected target and the
+  one-meter-forward default; the XR-active path with a fake interface —
+  flags, empty init_error, viewport use_xr/transparent_bg flips,
+  blend-mode request bookkeeping including the recorded
+  XR_ENV_BLEND_MODE_ALPHA_BLEND argument, XROrigin3D + XRCamera3D
+  construction/parenting; the has_method branch returning false; and the
+  property else-branch). Uses probe-local FakeXRInterface /
+  FakePropertyXRInterface duck-typed fakes.
+- `tools/run_godot_xr_bootstrap_probe.ps1` — headless no-project runner,
+  following run_godot_card_attachment_probe.ps1 (env-injected script path +
+  status JSON: SMARTXR_XR_BOOTSTRAP_SCRIPT /
+  SMARTXR_XR_BOOTSTRAP_PROBE_STATUS_PATH).
+- `tests/test_godot_xr_bootstrap.py` — 3 static tests pinning the
+  subsystem contract, the card-side delegation/state copies, and the
+  probe/runner pair.
+
+### Files modified
+
+- `godot-android/scripts/AndroidMovingCard.gd` — `_try_init_xr` and
+  `_setup_camera` became thin delegating wrappers: the card calls
+  `_xr_bootstrap.try_init_xr(get_viewport())` /
+  `_xr_bootstrap.setup_camera(self)` and copies the results into its own
+  state (`_xr_interface_found`, `_xr_initialize_ok`, `_xr_active`,
+  `_xr_init_error`, `_passthrough_overlay_requested_blend_mode`,
+  `_passthrough_overlay_blend_ok`, `_xr_origin`, `_camera`), so every
+  status-snapshot key (`xr.*`, the passthrough_overlay blend fields,
+  `camera_position` / `camera_rotation_degrees` / `xr_origin_position`)
+  keeps identical values (ADR-4). Added
+  `const XRBootstrapScript := preload(...)`; `_xr_bootstrap` is
+  `= XRBootstrapScript.new()` (untyped `=`, same pattern as the other
+  subsystems); `_setup_xr_bootstrap()` (after `_setup_card_attachment()`
+  in `_ready`, before `_try_init_xr()` — the init order is unchanged)
+  wires the fallback look_at provider to
+  `_anchor_position_from_yaw_pitch_depth`. The interface lookup keeps the
+  subsystem's default OpenXR lookup (the card never touches XRServer now).
+- `tests/test_godot_android_mesh_card.py` — the transparent-composition
+  pins in
+  `test_xr_visibility_diagnostic_uses_alpha_blend_composition_for_pcmr_seethrough`
+  (`transparent_bg = true`, `XR_ENV_BLEND_MODE_ALPHA_BLEND`,
+  `blend=alpha`) repointed at `xr_bootstrap.gd` (per ADR-3); a delegation
+  pin (`_xr_bootstrap.try_init_xr(get_viewport())`) was added on the card.
+  `test_moving_card_reports_xr_pose_for_tracking_diagnosis` and the
+  test_vst_ncnn_port.py XR pins needed no changes — the `_xr_*` state vars
+  and the snapshot assembly stay on the card.
+- `tests/validate_project.ps1` — registers `tests/test_godot_xr_bootstrap.py`.
+- `TASKS.md` / `HANDOFF.md` — bookkeeping.
+
+### Verification run
+
+- `python -m unittest tests/test_*.py` → 134 tests, OK.
+- Schema gate on both fixtures → ok.
+- `tools\run_godot_xr_bootstrap_probe.ps1` → PASS (31/31 checks, clean
+  stderr).
+- `tools\run_godot_card_attachment_probe.ps1` → PASS (48/48 checks).
+- `tools\run_godot_ws_transport_probe.ps1` → PASS (30/30 checks).
+- `tools\run_godot_target_registry_probe.ps1` → PASS (32/32 checks).
+- `tools\run_godot_status_hud_probe.ps1` → PASS (29/29 checks).
+- `tools\run_godot_smartxr_options_probe.ps1` → PASS (10/10 checks).
+- `tools\run_godot_script_only_websocket_probe.ps1` → ws_connected=true,
+  packets=1.
+- `tools\run_godot_proxy_targets_consumer_only.ps1` against a live
+  `fake_proxy_targets_publisher.py` on :8766 → exit 0, parsed=1, live=1,
+  registered_targets=1, attachments=1.
+- Compile gate: `AndroidMovingCard.gd` (with all eight preloads) and
+  `xr_bootstrap.gd` load + `can_instantiate()` in script-only mode
+  (Godot 4.6.2 headless, staged into `.tmp\card_compile_gate\scripts\`,
+  clean stderr).
+
+### Next slice recommendation
+
+- **M4: TargetSource strategy interface** — M3 is complete; the card is
+  now scene building, command handling, bbox math, and the VST target
+  source. Unify on-device ncnn (TrackableTarget / VSTTargetAdapter, still
+  card-inner classes), the remote proxy_targets WS path, and fixture
+  replay behind one source interface, and promote
+  `docs/proxy_targets_payload_contract.md` into shared test vectors used
+  by both `smartxr/geometry.py` and the GDScript bbox math.
 
 ## M3 step 4 — CardAttachment extraction (YAN-77)
 

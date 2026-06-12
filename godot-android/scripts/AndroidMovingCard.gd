@@ -48,6 +48,7 @@ const SmartXROptionsScript := preload("res://scripts/smartxr_options.gd")
 const StatusHudScript := preload("res://scripts/status_hud.gd")
 const TargetRegistryScript := preload("res://scripts/target_registry.gd")
 const WSTransportScript := preload("res://scripts/ws_transport.gd")
+const XRBootstrapScript := preload("res://scripts/xr_bootstrap.gd")
 
 # Centralized runtime configuration (env var -> user://smartxr_options.json
 # -> script const default). The consts below stay as the defaults; deployment
@@ -188,6 +189,15 @@ class VSTTargetAdapter:
 			_proxy.global_transform = target.transform
 
 
+# XR bootstrap subsystem (scripts/xr_bootstrap.gd): the OpenXR startup path
+# (interface lookup/initialize, viewport use_xr/transparent_bg, the
+# alpha-blend request, vsync disable) and the camera/origin construction,
+# extracted in M3 step 5. The card keeps the resolved XR state in the vars
+# below and the status snapshot (ADR-4); the fallback camera's look_at target
+# routes back through _anchor_position_from_yaw_pitch_depth in
+# _setup_xr_bootstrap(). Untyped `=` on purpose (no class_name reference) so
+# script-only probes can load both scripts.
+var _xr_bootstrap = XRBootstrapScript.new()
 var _xr_active := false
 var _xr_interface_found := false
 var _xr_initialize_ok := false
@@ -289,6 +299,7 @@ var _vst_uses_eye_to_head_anchor := false
 func _ready() -> void:
 	_passthrough_overlay_enabled = _use_passthrough_overlay()
 	_setup_card_attachment()
+	_setup_xr_bootstrap()
 	_try_init_xr()
 	_setup_camera()
 	_build_passthrough_overlay_layer()
@@ -308,33 +319,26 @@ func _ready() -> void:
 	set_process(true)
 
 
+## Wires the XRBootstrap subsystem: the fallback camera's look_at target
+## routes back into the card's 3DoF anchor math so state resolution stays
+## where the state lives (ADR-4). The interface lookup keeps the subsystem's
+## default OpenXR lookup; probes inject fakes instead.
+func _setup_xr_bootstrap() -> void:
+	_xr_bootstrap.set_fallback_look_at_provider(_anchor_position_from_yaw_pitch_depth)
+
+
+## Delegates the XR startup path to xr_bootstrap.gd, then copies the results
+## into the card's state so every status-snapshot key keeps identical values
+## (ADR-4): the xr.* keys read _xr_*, the passthrough_overlay blend keys read
+## _passthrough_overlay_requested_blend_mode / _passthrough_overlay_blend_ok.
 func _try_init_xr() -> void:
-	var xr := XRServer.find_interface("OpenXR")
-	_xr_interface_found = xr != null
-	if xr == null:
-		_xr_initialize_ok = false
-		_xr_active = false
-		_xr_init_error = "OpenXR interface not found"
-		print("XR init: " + _xr_init_error)
-		return
-	_xr_initialize_ok = bool(xr.initialize())
-	if not _xr_initialize_ok:
-		_xr_active = false
-		_xr_init_error = "OpenXR initialize returned false"
-		print("XR init: " + _xr_init_error)
-		return
-	_xr_active = true
-	get_viewport().use_xr = true
-	get_viewport().transparent_bg = true
-	_passthrough_overlay_requested_blend_mode = "alpha_blend"
-	if xr.has_method("set_environment_blend_mode"):
-		_passthrough_overlay_blend_ok = bool(xr.call("set_environment_blend_mode", XRInterface.XR_ENV_BLEND_MODE_ALPHA_BLEND))
-	else:
-		xr.environment_blend_mode = XRInterface.XR_ENV_BLEND_MODE_ALPHA_BLEND
-		_passthrough_overlay_blend_ok = true
-	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
-	_xr_init_error = ""
-	print("XR init: active use_xr=%s transparent=%s blend=alpha" % [str(get_viewport().use_xr), str(get_viewport().transparent_bg)])
+	_xr_bootstrap.try_init_xr(get_viewport())
+	_xr_interface_found = _xr_bootstrap.interface_found()
+	_xr_initialize_ok = _xr_bootstrap.initialize_ok()
+	_xr_active = _xr_bootstrap.xr_active()
+	_xr_init_error = _xr_bootstrap.init_error()
+	_passthrough_overlay_requested_blend_mode = _xr_bootstrap.requested_blend_mode()
+	_passthrough_overlay_blend_ok = _xr_bootstrap.blend_request_ok()
 
 
 func _use_passthrough_overlay() -> bool:
@@ -391,28 +395,14 @@ func _make_passthrough_overlay_ui() -> Control:
 	return root
 
 
+## Delegates camera/origin construction to xr_bootstrap.gd (XROrigin3D +
+## XRCamera3D when XR is active, FallbackCamera otherwise) and copies the
+## nodes back so the snapshot keys camera_position / camera_rotation_degrees /
+## xr_origin_position keep identical values (ADR-4).
 func _setup_camera() -> void:
-	if _xr_active:
-		var origin := XROrigin3D.new()
-		origin.name = "XROrigin"
-		add_child(origin)
-		_xr_origin = origin
-		var camera := XRCamera3D.new()
-		camera.name = "XRCamera"
-		camera.far = 50.0
-		origin.add_child(camera)
-		_camera = camera
-		return
-
-	var camera := Camera3D.new()
-	camera.name = "FallbackCamera"
-	camera.position = Vector3(0.0, 0.0, 0.0)
-	camera.far = 50.0
-	add_child(camera)
-	camera.look_at(_anchor_position_from_yaw_pitch_depth(), Vector3.UP)
-	camera.make_current()
-	_xr_origin = null
-	_camera = camera
+	_xr_bootstrap.setup_camera(self)
+	_xr_origin = _xr_bootstrap.xr_origin()
+	_camera = _xr_bootstrap.camera()
 
 
 func _setup_light() -> void:

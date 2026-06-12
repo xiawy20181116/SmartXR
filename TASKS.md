@@ -58,16 +58,24 @@ side.
   Card public API and every status-snapshot key unchanged. Runtime probe:
   `tools/run_godot_card_attachment_probe.ps1` (48 checks). Tests:
   `tests/test_godot_card_attachment.py`.
+- [x] **M3 step 5 — XRBootstrap** (YAN-79): the XR startup path
+  (`_try_init_xr`: OpenXR interface lookup/initialize, viewport
+  use_xr/transparent_bg, the alpha-blend environment request incl. the
+  `set_environment_blend_mode` has_method branch, vsync disable, the
+  "XR init:" prints) and the camera/origin construction (`_setup_camera`:
+  XROrigin3D + XRCamera3D when XR is active, FallbackCamera with look_at
+  otherwise) extracted from `AndroidMovingCard.gd` into
+  `godot-android/scripts/xr_bootstrap.gd` (RefCounted, dependency-free;
+  the interface lookup is injectable via a provider Callable with
+  duck-typed interface checks, and the fallback camera's look_at target
+  routes back into the card's 3DoF anchor math per ADR-4). The card copies
+  the bootstrap results into `_xr_*` / `_camera` / the passthrough_overlay
+  blend fields, so every status-snapshot key keeps identical values. M3 is
+  complete. Runtime probe: `tools/run_godot_xr_bootstrap_probe.ps1`
+  (31 checks). Tests: `tests/test_godot_xr_bootstrap.py`.
 
 ## Next (not started)
 
-- [ ] **M3 — Split `AndroidMovingCard.gd`** remaining subsystem:
-  XRBootstrap (`_try_init_xr` + camera/origin setup), with the scene tree
-  unchanged. Move one subsystem at a time; keep
-  `tests/test_godot_android_mesh_card.py` green at each step (update pinned
-  assertions alongside each move). StatusHud (step 1), TargetRegistry
-  (step 2), WSTransport (step 3), and CardAttachment (step 4) are done —
-  see above.
 - [ ] **M4 — TargetSource strategy interface**: unify on-device ncnn, remote
   proxy_targets WS, and fixture replay behind one source interface; promote
   the payload contract doc into shared test vectors used by both the Python
@@ -77,7 +85,7 @@ side.
 ## Verification
 
 ```powershell
-# Full suite (131 tests)
+# Full suite (134 tests)
 python -m unittest (Get-ChildItem tests\test_*.py | ForEach-Object { "tests/$($_.Name)" })
 
 # Schema gate
@@ -89,6 +97,7 @@ powershell -File tools\run_godot_status_hud_probe.ps1
 powershell -File tools\run_godot_target_registry_probe.ps1
 powershell -File tools\run_godot_ws_transport_probe.ps1
 powershell -File tools\run_godot_card_attachment_probe.ps1
+powershell -File tools\run_godot_xr_bootstrap_probe.ps1
 powershell -File tools\run_godot_script_only_websocket_probe.ps1
 # consumer-only needs a publisher on :8766 first (fake_proxy_targets_publisher.py)
 powershell -File tools\run_godot_proxy_targets_consumer_only.ps1
