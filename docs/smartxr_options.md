@@ -47,6 +47,15 @@ normal card scene and card logic, but `SimBootstrap` injects a non-XR interface
 provider so OpenXR/GXR startup does not run. The fallback camera becomes the
 simulated head pose.
 
+### Stereo eye preview
+
+Simulator mode also creates a stereo eye preview for debugging left/right eye
+card behavior before a headset is available. The simulated head pose drives two
+per-eye cameras with the default 64 mm IPD and 70 degree FOV; the desktop window
+shows the left/right eye render side by side through `SubViewport` textures.
+This is still a Godot preview, not the final OpenXR compositor output: it does
+not simulate lens distortion, timewarp, or runtime composition.
+
 Controls:
 
 - Left click captures the mouse; Esc releases it.

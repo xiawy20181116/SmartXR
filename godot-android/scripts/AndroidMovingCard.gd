@@ -214,6 +214,8 @@ func _ready() -> void:
 	_build_card_anchor()
 	_build_xr_render_probe()
 	_build_vst_bbox_frame()
+	if _sim_enabled:
+		_sim_bootstrap.build_stereo_preview(self, get_viewport())
 	_build_status_hud()
 	_build_vst_target_proxy()
 	_build_debug_target_marker()

@@ -77,6 +77,29 @@ func _run_checks() -> String:
 		and snapshot.get("camera_position") is Vector3 \
 		and snapshot.get("camera_rotation_degrees") is Vector3 \
 		and float(snapshot.get("move_speed_mps", 0.0)) > 0.0
+	sim.build_stereo_preview(stage, root)
+	var left_viewport := stage.get_node_or_null("SimStereoPreview/SimStereoRoot/LeftEyeViewport")
+	var right_viewport := stage.get_node_or_null("SimStereoPreview/SimStereoRoot/RightEyeViewport")
+	var left_label := stage.get_node_or_null("SimStereoPreview/SimStereoRoot/SimStereoViews/LeftEyePanel/LeftEyeLabel")
+	var right_label := stage.get_node_or_null("SimStereoPreview/SimStereoRoot/SimStereoViews/RightEyePanel/RightEyeLabel")
+	var left_camera := left_viewport.get_node_or_null("LeftEyeCamera") if left_viewport != null else null
+	var right_camera := right_viewport.get_node_or_null("RightEyeCamera") if right_viewport != null else null
+	_checks["stereo_preview_builds_left_and_right_eye_viewports"] = left_viewport is SubViewport \
+		and right_viewport is SubViewport \
+		and left_camera is Camera3D \
+		and right_camera is Camera3D \
+		and left_camera.current == true \
+		and right_camera.current == true
+	_checks["stereo_preview_labels_left_and_right_eyes"] = left_label is Label \
+		and right_label is Label \
+		and str(left_label.text) == "LEFT" \
+		and str(right_label.text) == "RIGHT"
+	var stereo_snapshot: Dictionary = sim.status_snapshot()
+	_checks["stereo_status_reports_ipd_and_eye_positions"] = bool(stereo_snapshot.get("stereo_enabled", false)) \
+		and float(stereo_snapshot.get("ipd_m", 0.0)) > 0.0 \
+		and stereo_snapshot.get("left_eye_position") is Vector3 \
+		and stereo_snapshot.get("right_eye_position") is Vector3 \
+		and not stereo_snapshot.get("left_eye_position").is_equal_approx(stereo_snapshot.get("right_eye_position"))
 	return "-"
 
 
