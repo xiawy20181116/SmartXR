@@ -108,10 +108,18 @@ side.
   JSON, delegates to the injected proxy_targets card adapter, and reports
   coarse errors. Probe: `tools/run_godot_target_source_probe.ps1` (15
   checks). Tests: `tests/test_godot_target_source.py`.
+- [x] **M5 — Per-subsystem docs**: added subsystem docs following
+  `docs/smartxr_options.md` style for StatusHud, TargetRegistry,
+  WSTransport, CardAttachment, XRBootstrap, and TargetSource/proxy_targets.
+  Docs: `docs/status_hud.md`, `docs/target_registry.md`,
+  `docs/ws_transport.md`, `docs/card_attachment.md`,
+  `docs/xr_bootstrap.md`, `docs/target_source.md`.
 
-## Next (not started)
+## Next
 
-- [ ] **M5 — Per-subsystem docs** following `docs/smartxr_options.md` style.
+- [ ] Track the stripped-project live-harness Godot 4.6.2 crash separately
+  if it becomes important; it is outside the completed M1-M5 encapsulation
+  docs path.
 
 ## Verification
 
