@@ -114,6 +114,13 @@ side.
   Docs: `docs/status_hud.md`, `docs/target_registry.md`,
   `docs/ws_transport.md`, `docs/card_attachment.md`,
   `docs/xr_bootstrap.md`, `docs/target_source.md`.
+- [x] **YAN-86 follow-up — PCMR overlay visual check runner**: added
+  `tools/run_windows_pcmr_overlay_visual_check.ps1`, a hold-open manual
+  headset runner that manages the fake proxy_targets publisher, Windows GXR
+  disable/restore, `PROXY_TARGETS_WS_URL`, and
+  `SMARTXR_USE_PASSTHROUGH_OVERLAY`. Docs:
+  `docs/pcmr_overlay_visual_check.md`. Tests:
+  `tests/test_run_windows_pcmr.py`.
 
 ## Next
 
@@ -142,4 +149,7 @@ powershell -File tools\run_godot_bbox_math_probe.ps1
 powershell -File tools\run_godot_script_only_websocket_probe.ps1
 # consumer-only needs a publisher on :8766 first (fake_proxy_targets_publisher.py)
 powershell -File tools\run_godot_proxy_targets_consumer_only.ps1
+
+# Manual PCMR headset visual check; keeps Godot open until the user closes it.
+powershell -File tools\run_windows_pcmr_overlay_visual_check.ps1
 ```

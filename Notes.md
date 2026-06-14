@@ -203,6 +203,37 @@
   `run_godot_proxy_targets_consumer_only.ps1` with a local
   `fake_proxy_targets_publisher.py` on `127.0.0.1:8766`.
 
+## YAN-86 follow-up — PCMR overlay visual check runner
+
+### Files added
+
+- `tools/run_windows_pcmr_overlay_visual_check.ps1` — hold-open manual
+  headset runner. It starts `fake_proxy_targets_publisher.py` on an isolated
+  proxy_targets port (default 8767), disables the GXR extension for Windows
+  PCMR runtime use, sets `PROXY_TARGETS_WS_URL` and
+  `SMARTXR_USE_PASSTHROUGH_OVERLAY`, launches Godot in the foreground, and
+  restores publisher/env/GXR state when Godot exits.
+- `docs/pcmr_overlay_visual_check.md` — operator doc covering the one-command
+  flow, expected `PASSTHROUGH OVERLAY` headset view, status files, and the
+  difference between manual hold-open visual inspection and automated
+  `run_windows_pcmr_proxy_targets_live.ps1` validation.
+
+### Files modified
+
+- `tests/test_run_windows_pcmr.py` — static pins for the new runner contract
+  and documentation.
+- `README.md`, `TASKS.md`, `HANDOFF.md`, `Notes.md` — handoff and operator
+  breadcrumbs for the next feature.
+
+### Verification run
+
+- `python -m unittest tests.test_run_windows_pcmr` -> 5 tests, OK.
+- PowerShell parser check for
+  `tools/run_windows_pcmr_overlay_visual_check.ps1` -> OK.
+- `python -m unittest discover tests` -> 168 tests, OK.
+- `powershell -ExecutionPolicy Bypass -File tests\validate_project.ps1` ->
+  106 registered tests, OK.
+
 ## YAN-76 follow-up — WS_URL default flipped to loopback
 
 - `godot-android/scripts/AndroidMovingCard.gd` — `WS_URL` default changed
