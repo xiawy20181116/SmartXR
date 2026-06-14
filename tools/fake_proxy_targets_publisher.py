@@ -13,7 +13,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from smartxr.cli.fake_publisher import main, parse_args, serve  # noqa: E402,F401
+from smartxr.cli.fake_publisher import is_proxy_targets_request, main, parse_args, serve  # noqa: E402,F401
 from smartxr.publisher import (  # noqa: E402,F401
     build_fake_proxy_targets_message as build_proxy_targets_message,
 )

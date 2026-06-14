@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 import unittest
 
+from smartxr import transport
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLISHER = ROOT / "tools" / "fake_proxy_targets_publisher.py"
@@ -67,6 +69,27 @@ class FakeProxyTargetsPublisherTests(unittest.TestCase):
 
         self.assertIn("proxy_targets fake publisher listening", source)
         self.assertIn("flush=True", source)
+
+    def test_rejects_control_websocket_path(self):
+        publisher = load_publisher_module()
+
+        self.assertTrue(publisher.is_proxy_targets_request("GET /proxy_targets HTTP/1.1"))
+        self.assertTrue(publisher.is_proxy_targets_request("GET /proxy_targets?debug=1 HTTP/1.1"))
+        self.assertFalse(publisher.is_proxy_targets_request("GET /control HTTP/1.1"))
+        self.assertFalse(publisher.is_proxy_targets_request("GET / HTTP/1.1"))
+
+    def test_handshake_reset_is_treated_as_rejected_client(self):
+        class ResetBeforeRequest:
+            def recv(self, _size):
+                raise ConnectionResetError(10054, "reset")
+
+            def sendall(self, _payload):
+                raise AssertionError("handshake response should not be sent")
+
+        ok, first_line = transport.handshake(ResetBeforeRequest())
+
+        self.assertFalse(ok)
+        self.assertEqual(first_line, "")
 
 
 if __name__ == "__main__":
