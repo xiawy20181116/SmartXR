@@ -126,13 +126,18 @@ def parse_headers(request: str) -> Dict[str, str]:
     return headers
 
 
-def handshake(conn: socket.socket) -> Tuple[bool, str]:
+def handshake(conn: socket.socket, allow_request: Callable[[str], bool] | None = None) -> Tuple[bool, str]:
     """Perform the server side of the WebSocket upgrade handshake."""
-    request = read_http_request(conn)
+    try:
+        request = read_http_request(conn)
+    except (ConnectionResetError, OSError):
+        return False, ""
     first_line = request.splitlines()[0] if request else ""
     headers = parse_headers(request)
     key = headers.get("sec-websocket-key", "")
     if not first_line.startswith("GET ") or not key:
+        return False, first_line
+    if allow_request is not None and not allow_request(first_line):
         return False, first_line
     response = (
         "HTTP/1.1 101 Switching Protocols\r\n"
@@ -150,6 +155,7 @@ def serve_single_client(
     port: int,
     handle_client: Callable[[socket.socket], None],
     on_listening: Callable[[], None] | None = None,
+    allow_request: Callable[[str], bool] | None = None,
 ) -> None:
     """Accept loop shared by every publisher: one client at a time, forever.
 
@@ -165,7 +171,7 @@ def serve_single_client(
         while True:
             conn, address = server.accept()
             with conn:
-                ok, first_line = handshake(conn)
+                ok, first_line = handshake(conn, allow_request=allow_request)
                 if not ok:
                     print(f"rejected {address}: {first_line}", flush=True)
                     continue

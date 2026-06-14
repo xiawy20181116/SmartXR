@@ -20,6 +20,7 @@ $PassthroughOverlayStatusFile = Join-Path $env:APPDATA "Godot\app_userdata\demo_
 $WorkDir = Join-Path $RepoRoot ".tmp\windows_pcmr_proxy_targets"
 $GodotLog = Join-Path $WorkDir "godot_pcmr.log"
 $GodotErr = Join-Path $WorkDir "godot_pcmr.err.log"
+$WorkDirStatusFile = Join-Path $WorkDir "proxy_targets_live_status.json"
 
 function Restore-EnvVar {
     param(
@@ -101,7 +102,7 @@ try {
         $ExitCode = $LASTEXITCODE
     } elseif ($ValidateProxyTargets) {
         New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-        Remove-Item -LiteralPath $GodotLog, $GodotErr, $StatusFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $GodotLog, $GodotErr, $StatusFile, $WorkDirStatusFile -Force -ErrorAction SilentlyContinue
 
         $GodotProcess = Start-Process `
             -FilePath $GodotExe `
@@ -116,6 +117,9 @@ try {
             --require attached `
             --timeout $ProxyTargetsTimeoutSeconds
         $ExitCode = $LASTEXITCODE
+        if (Test-Path -LiteralPath $StatusFile) {
+            Copy-Item -LiteralPath $StatusFile -Destination $WorkDirStatusFile -Force
+        }
     } else {
         & $GodotExe --path $ProjectDir
         $ExitCode = $LASTEXITCODE
@@ -133,6 +137,7 @@ try {
         Write-Host "  Godot stderr: $GodotErr"
         if ($ValidateProxyTargets) {
             Write-Host "  Status JSON:  $StatusFile"
+            Write-Host "  Status JSON copy: $WorkDirStatusFile"
         }
         if ($UseAntmanPassthroughOverlay) {
             Write-Host "  Passthrough overlay JSON: $PassthroughOverlayStatusFile"

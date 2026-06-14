@@ -4,6 +4,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "tools" / "run_windows_pcmr.ps1"
+LIVE_RUNNER = ROOT / "tools" / "run_windows_pcmr_proxy_targets_live.ps1"
 
 
 class WindowsPcmrRunnerTests(unittest.TestCase):
@@ -25,6 +26,25 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("SmartXR-PCMR Antman passthrough overlay", source)
         self.assertIn("Restore-EnvVar -Name \"SMARTXR_USE_PASSTHROUGH_OVERLAY\"", source)
         self.assertIn("Restore-EnvVar -Name \"PROXY_TARGETS_WS_URL\"", source)
+
+    def test_runner_copies_proxy_targets_status_into_work_dir(self):
+        source = RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn('$WorkDirStatusFile = Join-Path $WorkDir "proxy_targets_live_status.json"', source)
+        self.assertIn("Copy-Item -LiteralPath $StatusFile -Destination $WorkDirStatusFile -Force", source)
+        self.assertIn("Status JSON copy:", source)
+
+    def test_live_runner_starts_isolated_fake_publisher_before_pcmr_validation(self):
+        self.assertTrue(LIVE_RUNNER.exists())
+        source = LIVE_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("fake_proxy_targets_publisher.py", source)
+        self.assertIn("run_windows_pcmr.ps1", source)
+        self.assertIn("[int]$Port = 8767", source)
+        self.assertIn("-ProxyTargetsWsUrl", source)
+        self.assertIn("ws://${HostName}:${Port}/proxy_targets", source)
+        self.assertIn("-ValidateProxyTargets", source)
+        self.assertIn("Stop-ChildProcess -Process $PublisherProcess", source)
 
 
 if __name__ == "__main__":

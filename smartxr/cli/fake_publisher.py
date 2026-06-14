@@ -11,6 +11,14 @@ from smartxr.publisher import build_fake_proxy_targets_message
 from smartxr.transport import drain_client_frames, encode_websocket_text_frame, serve_single_client
 
 
+def is_proxy_targets_request(first_line: str) -> bool:
+    parts = first_line.split()
+    if len(parts) < 2:
+        return False
+    path = parts[1].split("?", 1)[0]
+    return path == "/proxy_targets"
+
+
 def _publish_loop(conn: socket.socket, hz: float, target_id: str, card_id: str, mode: str, log_every: int) -> None:
     start = time.monotonic()
     interval_s = 1.0 / max(hz, 0.1)
@@ -47,6 +55,7 @@ def serve(host: str, port: int, hz: float, target_id: str, card_id: str, mode: s
         on_listening=lambda: print(
             f"proxy_targets fake publisher listening on ws://{host}:{port}/proxy_targets", flush=True
         ),
+        allow_request=is_proxy_targets_request,
     )
 
 
