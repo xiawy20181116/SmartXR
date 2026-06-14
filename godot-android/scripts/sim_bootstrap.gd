@@ -65,11 +65,13 @@ func build_stereo_preview(owner: Node, source_viewport: Viewport) -> void:
 	var root := Control.new()
 	root.name = "SimStereoRoot"
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_stereo_layer.add_child(root)
 
 	var views := HBoxContainer.new()
 	views.name = "SimStereoViews"
 	views.set_anchors_preset(Control.PRESET_FULL_RECT)
+	views.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(views)
 
 	_left_eye_viewport = _make_eye_viewport("LeftEyeViewport", "LeftEyeCamera", source_viewport)
@@ -168,6 +170,7 @@ func _make_eye_texture_rect(rect_name: String, viewport: SubViewport) -> Texture
 	rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	rect.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	rect.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return rect
 
 
@@ -176,6 +179,7 @@ func _make_eye_panel(panel_name: String, rect_name: String, label_name: String, 
 	panel.name = panel_name
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	var rect := _make_eye_texture_rect(rect_name, viewport)
 	rect.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -191,6 +195,7 @@ func _make_eye_panel(panel_name: String, rect_name: String, label_name: String, 
 	label.add_theme_font_size_override("font_size", 20)
 	label.add_theme_color_override("font_color", Color(0.6, 0.95, 1.0, 1.0))
 	label.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.75))
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_child(label)
 	return panel
 

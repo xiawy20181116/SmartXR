@@ -82,6 +82,12 @@ func _run_checks() -> String:
 	var right_viewport := stage.get_node_or_null("SimStereoPreview/SimStereoRoot/RightEyeViewport")
 	var left_label := stage.get_node_or_null("SimStereoPreview/SimStereoRoot/SimStereoViews/LeftEyePanel/LeftEyeLabel")
 	var right_label := stage.get_node_or_null("SimStereoPreview/SimStereoRoot/SimStereoViews/RightEyePanel/RightEyeLabel")
+	var stereo_root := stage.get_node_or_null("SimStereoPreview/SimStereoRoot")
+	var stereo_views := stage.get_node_or_null("SimStereoPreview/SimStereoRoot/SimStereoViews")
+	var left_panel := stage.get_node_or_null("SimStereoPreview/SimStereoRoot/SimStereoViews/LeftEyePanel")
+	var right_panel := stage.get_node_or_null("SimStereoPreview/SimStereoRoot/SimStereoViews/RightEyePanel")
+	var left_texture := stage.get_node_or_null("SimStereoPreview/SimStereoRoot/SimStereoViews/LeftEyePanel/LeftEyeTexture")
+	var right_texture := stage.get_node_or_null("SimStereoPreview/SimStereoRoot/SimStereoViews/RightEyePanel/RightEyeTexture")
 	var left_camera := left_viewport.get_node_or_null("LeftEyeCamera") if left_viewport != null else null
 	var right_camera := right_viewport.get_node_or_null("RightEyeCamera") if right_viewport != null else null
 	_checks["stereo_preview_builds_left_and_right_eye_viewports"] = left_viewport is SubViewport \
@@ -94,6 +100,18 @@ func _run_checks() -> String:
 		and right_label is Label \
 		and str(left_label.text) == "LEFT" \
 		and str(right_label.text) == "RIGHT"
+	_checks["stereo_preview_ignores_mouse_input"] = stereo_root is Control \
+		and stereo_views is Control \
+		and left_panel is Control \
+		and right_panel is Control \
+		and left_texture is Control \
+		and right_texture is Control \
+		and stereo_root.mouse_filter == Control.MOUSE_FILTER_IGNORE \
+		and stereo_views.mouse_filter == Control.MOUSE_FILTER_IGNORE \
+		and left_panel.mouse_filter == Control.MOUSE_FILTER_IGNORE \
+		and right_panel.mouse_filter == Control.MOUSE_FILTER_IGNORE \
+		and left_texture.mouse_filter == Control.MOUSE_FILTER_IGNORE \
+		and right_texture.mouse_filter == Control.MOUSE_FILTER_IGNORE
 	var stereo_snapshot: Dictionary = sim.status_snapshot()
 	_checks["stereo_status_reports_ipd_and_eye_positions"] = bool(stereo_snapshot.get("stereo_enabled", false)) \
 		and float(stereo_snapshot.get("ipd_m", 0.0)) > 0.0 \
