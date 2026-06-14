@@ -46,3 +46,19 @@ class SimulatedVoiceSession:
             scheduling="NON_BLOCKING",
         )
         return [await dispatch_tool_call(call, self.registry)]
+
+    async def run_tool_call(
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        call_id: str = "simulated-tool-call-1",
+        scheduling: str = "NON_BLOCKING",
+    ) -> dict[str, Any]:
+        call = ToolCall(
+            id=call_id,
+            name=name,
+            args=args,
+            scheduling=scheduling,
+        )
+        return await dispatch_tool_call(call, self.registry)

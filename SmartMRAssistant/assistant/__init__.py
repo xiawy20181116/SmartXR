@@ -3,7 +3,7 @@
 from .context import SceneContext
 from .dispatcher import ToolCall, dispatch_tool_call
 from .session import LiveVoiceSession, SimulatedVoiceSession
-from .tools import ToolRegistry, create_default_registry
+from .tools import ToolRegistry, create_default_registry, identity_lookup_tool, jira_lookup_tool
 
 __all__ = [
     "SceneContext",
@@ -13,4 +13,6 @@ __all__ = [
     "ToolRegistry",
     "create_default_registry",
     "dispatch_tool_call",
+    "identity_lookup_tool",
+    "jira_lookup_tool",
 ]
