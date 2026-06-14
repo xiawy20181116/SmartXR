@@ -142,11 +142,13 @@ class GodotSimBootstrapTests(unittest.TestCase):
         self.assertIn("set_gxr_extension.ps1", sim_runner)
         self.assertIn("-Mode disable", sim_runner)
         self.assertIn('SMARTXR_SIM_MODE', sim_runner)
+        self.assertIn('"--xr-mode", "off"', sim_runner)
         self.assertIn('"--path", $ProjectDir', sim_runner)
         self.assertIn("Desktop simulator", docs)
         self.assertIn("Stereo eye preview", docs)
         self.assertIn("left/right eye", docs)
         self.assertIn("IPD", docs)
+        self.assertIn("--xr-mode off", docs)
         self.assertIn("tools\\run_desktop_sim.ps1", docs)
         self.assertIn("SMARTXR_SIM_MODE=1", docs)
 

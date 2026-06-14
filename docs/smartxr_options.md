@@ -41,11 +41,13 @@ powershell -File tools\run_desktop_sim.ps1 [-GodotExe <path to Godot 4 exe>]
 ```
 
 The wrapper runs `tools\set_gxr_extension.ps1 -Mode disable` before project
-startup, launches `godot-android` with `SMARTXR_SIM_MODE=1`, and re-enables the
-extension after Godot exits. In simulator mode `AndroidMovingCard.gd` reuses the
-normal card scene and card logic, but `SimBootstrap` injects a non-XR interface
-provider so OpenXR/GXR startup does not run. The fallback camera becomes the
-simulated head pose.
+startup, launches `godot-android` with `SMARTXR_SIM_MODE=1` and `--xr-mode off`,
+and re-enables the extension after Godot exits. `--xr-mode off` prevents the
+Godot engine from requesting OpenXR before game scripts load; `SimBootstrap`
+then injects a non-XR interface provider so the app-level OpenXR/GXR startup
+path also stays off. In simulator mode `AndroidMovingCard.gd` reuses the normal
+card scene and card logic, and the fallback camera becomes the simulated head
+pose.
 
 ### Stereo eye preview
 

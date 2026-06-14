@@ -18,6 +18,7 @@ $OldSimMode = $env:SMARTXR_SIM_MODE
 $env:SMARTXR_SIM_MODE = "1"
 try {
     Start-Process -FilePath $GodotExe -ArgumentList @(
+        "--xr-mode", "off",
         "--path", $ProjectDir
     ) -WorkingDirectory $ProjectDir -Wait
 } finally {
