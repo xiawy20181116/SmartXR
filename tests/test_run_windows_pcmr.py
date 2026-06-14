@@ -5,6 +5,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "tools" / "run_windows_pcmr.ps1"
 LIVE_RUNNER = ROOT / "tools" / "run_windows_pcmr_proxy_targets_live.ps1"
+VISUAL_RUNNER = ROOT / "tools" / "run_windows_pcmr_overlay_visual_check.ps1"
+VISUAL_DOC = ROOT / "docs" / "pcmr_overlay_visual_check.md"
 
 
 class WindowsPcmrRunnerTests(unittest.TestCase):
@@ -45,6 +47,32 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("ws://${HostName}:${Port}/proxy_targets", source)
         self.assertIn("-ValidateProxyTargets", source)
         self.assertIn("Stop-ChildProcess -Process $PublisherProcess", source)
+
+    def test_overlay_visual_check_runner_holds_godot_open_for_manual_inspection(self):
+        self.assertTrue(VISUAL_RUNNER.exists())
+        source = VISUAL_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("fake_proxy_targets_publisher.py", source)
+        self.assertIn("[int]$Port = 8767", source)
+        self.assertIn("ws://${HostName}:${Port}/proxy_targets", source)
+        self.assertIn("set_gxr_extension.ps1", source)
+        self.assertIn("& $GxrExtensionSwitch -Mode disable -ProjectDir $ProjectDir", source)
+        self.assertIn("& $GxrExtensionSwitch -Mode enable -ProjectDir $ProjectDir", source)
+        self.assertIn('$env:PROXY_TARGETS_WS_URL = $ProxyTargetsWsUrl', source)
+        self.assertIn('$env:SMARTXR_USE_PASSTHROUGH_OVERLAY = "1"', source)
+        self.assertIn("& $GodotExe --path $ProjectDir", source)
+        self.assertNotIn("-ValidateProxyTargets", source)
+        self.assertIn("Stop-ChildProcess -Process $PublisherProcess", source)
+
+    def test_overlay_visual_check_runner_is_documented(self):
+        self.assertTrue(VISUAL_DOC.exists())
+        source = VISUAL_DOC.read_text(encoding="utf-8")
+
+        self.assertIn("run_windows_pcmr_overlay_visual_check.ps1", source)
+        self.assertIn("run_windows_pcmr_proxy_targets_live.ps1", source)
+        self.assertIn("holds Godot open", source)
+        self.assertIn("PASSTHROUGH OVERLAY", source)
+        self.assertIn("fake proxy_targets publisher", source)
 
 
 if __name__ == "__main__":

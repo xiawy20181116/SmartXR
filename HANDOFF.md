@@ -95,10 +95,12 @@
   preloads) + `xr_bootstrap.gd` pass the script-only load/can_instantiate
   compile check with clean stderr (staged into
   `.tmp\card_compile_gate\scripts\`).
-- **Still not verified**: `AndroidMovingCard.gd` as a whole app — headless
-  project mode boots the main scene which never exits, so that path needs
-  the editor or a device. `godot --check-only` also hangs in this repo (GXR
-  extension + OpenXR boot); use the script-only loader-probe pattern instead.
+- **Whole-app PCMR verification path**: headless project mode still boots the
+  main scene and never exits, and `godot --check-only` still hangs in this repo
+  (GXR extension + OpenXR boot), so keep using script-only/no-project probes for
+  automated checks. For human headset inspection, use
+  `tools/run_windows_pcmr_overlay_visual_check.ps1`; it holds Godot open until
+  the user closes it.
 
 ## Unfinished / risks
 
@@ -147,6 +149,15 @@
   `docs/target_registry.md`, `docs/ws_transport.md`,
   `docs/card_attachment.md`, `docs/xr_bootstrap.md`, and
   `docs/target_source.md`.
+- PCMR overlay manual visual verification is wrapped in
+  `tools/run_windows_pcmr_overlay_visual_check.ps1`. It starts the managed
+  fake proxy_targets publisher on port 8767, disables/re-enables the GXR
+  extension around the Windows run, sets `PROXY_TARGETS_WS_URL` and
+  `SMARTXR_USE_PASSTHROUGH_OVERLAY`, then holds Godot open for headset
+  inspection until the user closes it. Docs:
+  `docs/pcmr_overlay_visual_check.md`. Use
+  `tools/run_windows_pcmr_proxy_targets_live.ps1` for automated pass/fail
+  validation; use the overlay visual check runner for human headset inspection.
 - GDScript bbox math in `AndroidMovingCard.gd` still duplicates
   `smartxr/geometry.py` by design until M4-3; both sides are now
   locked to `godot-android/fixtures/bbox_math_test_vectors.json`, so any
@@ -165,3 +176,9 @@ per-subsystem docs. Keep the ADR-4 boundary and the no-project-mode rules for
 any new probe-visible script. Track the stripped-project live-harness Godot
 4.6.2 crash separately if it becomes important; it is outside the completed
 script-only/no-project path.
+
+For a final PCMR overlay smoke check before moving to the next feature, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\run_windows_pcmr_overlay_visual_check.ps1
+```
