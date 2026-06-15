@@ -146,6 +146,13 @@ side.
   lifecycle state, enablement state, and snapshot composition. Runtime probe:
   `tools/run_godot_passthrough_overlay_presenter_probe.ps1`. Docs:
   `docs/passthrough_overlay_presenter.md`.
+- [x] **A3 final slice — CardView** (YAN-103): main card `SubViewport`,
+  `MovingCardUI`, card anchor/panel mesh, viewport-texture material binding,
+  and the red XR render probe extracted from `AndroidMovingCard.gd` into
+  dependency-free `godot-android/scripts/card_view.gd`. The card keeps motion,
+  orientation, target attachment, XR/VST/proxy orchestration, public API, and
+  status snapshots. Runtime probe: `tools/run_godot_card_view_probe.ps1`.
+  Docs: `docs/card_view.md`.
 - [x] **YAN-86 follow-up — PCMR overlay visual check runner**: added
   `tools/run_windows_pcmr_overlay_visual_check.ps1`, a hold-open manual
   headset runner that manages the fake proxy_targets publisher, Windows GXR

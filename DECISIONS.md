@@ -91,6 +91,14 @@ composition; the presenter owns the transparent overlay viewport, UI,
 helpers, and overlay status values. The script-only probe covers the boundary
 without live Godot project runs, PCMR, proxy_targets, or headset smoke tests.
 
+*Update (YAN-103 A3 card-view slice):* main card viewport/mesh/UI ownership is
+now split into `godot-android/scripts/card_view.gd`. The card keeps motion,
+orientation, target attachment, public API, XR/VST/proxy orchestration, and
+status snapshots; CardView owns only `SubViewport`, `MovingCardUI`,
+`CardAnchor`, `CardPanel`, material binding, and the small XR render probe. The
+script-only probe locks the constructed nodes and material values without live
+Godot project runs, PCMR, proxy_targets, or headset smoke tests.
+
 ## ADR-5: Shared JSON test vectors lock the duplicated bbox math (M4-1)
 
 **Context.** The bbox→head math exists twice on purpose until M4-2/M4-3:

@@ -44,6 +44,9 @@ XR_BOOTSTRAP = ROOT / "godot-android" / "scripts" / "xr_bootstrap.gd"
 PASSTHROUGH_OVERLAY_PRESENTER = (
     ROOT / "godot-android" / "scripts" / "passthrough_overlay_presenter.gd"
 )
+# Card viewport/mesh/UI construction moved to scripts/card_view.gd in YAN-103;
+# card-side assertions cover only owner wiring and retained handles.
+CARD_VIEW = ROOT / "godot-android" / "scripts" / "card_view.gd"
 VALIDATOR = ROOT / "tests" / "validate_project.ps1"
 ANDROID_ACTIVITY = (
     ROOT
@@ -72,12 +75,18 @@ FAKE_PROXY_TARGETS_PUBLISHER = ROOT / "tools" / "fake_proxy_targets_publisher.py
 class GodotAndroidMeshCardTests(unittest.TestCase):
     def test_moving_card_uses_regular_mesh_card_anchor(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        card_view = CARD_VIEW.read_text(encoding="utf-8")
 
         self.assertIn('CARD_ANCHOR_NAME := "CardAnchor"', source)
-        self.assertIn("MeshInstance3D.new()", source)
-        self.assertIn("QuadMesh.new()", source)
-        self.assertIn("StandardMaterial3D.new()", source)
-        self.assertIn("albedo_texture = _card_viewport.get_texture()", source)
+        self.assertIn("var _card_view = CardViewScript.new(", source)
+        self.assertIn("_card_view.build(self, CARD_ANCHOR_NAME)", source)
+        self.assertIn("_card_viewport = _card_view.viewport()", source)
+        self.assertIn("_card_anchor = _card_view.anchor()", source)
+        self.assertIn("_card_mesh = _card_view.card_mesh()", source)
+        self.assertIn("MeshInstance3D.new()", card_view)
+        self.assertIn("QuadMesh.new()", card_view)
+        self.assertIn("StandardMaterial3D.new()", card_view)
+        self.assertIn("albedo_texture = _viewport.get_texture()", card_view)
 
     def test_antman_passthrough_overlay_layer_path_is_gated_by_env(self):
         source = SCRIPT.read_text(encoding="utf-8")

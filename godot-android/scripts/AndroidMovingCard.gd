@@ -42,6 +42,7 @@ const PASSTHROUGH_OVERLAY_VIEWPORT_SIZE := Vector2i(512, 256)
 const PASSTHROUGH_OVERLAY_QUAD_SIZE_M := Vector2(0.42, 0.20)
 const PASSTHROUGH_OVERLAY_DEPTH_M := 1.5
 const CardAttachmentScript := preload("res://scripts/card_attachment.gd")
+const CardViewScript := preload("res://scripts/card_view.gd")
 const ProxyTargetsConsumerScript := preload("res://scripts/proxy_targets_consumer.gd")
 const ProxyTargetsCardAdapterScript := preload("res://scripts/proxy_targets_card_adapter.gd")
 const PassthroughOverlayPresenterScript := preload("res://scripts/passthrough_overlay_presenter.gd")
@@ -114,6 +115,11 @@ var _card_viewport: SubViewport = null
 var _card_anchor: Node3D = null
 var _card_mesh: MeshInstance3D = null
 var _xr_probe_mesh: MeshInstance3D = null
+var _card_view = CardViewScript.new({
+	"viewport_size": CARD_VIEWPORT_SIZE,
+	"card_size_m": CARD_SIZE_M,
+	"xr_probe_size_m": XR_PROBE_SIZE_M,
+})
 var _status_hud: Node = null
 var _status_snapshot_composer = StatusSnapshotComposerScript.new()
 var _speed_deg_per_second := CARD_DEFAULT_SPEED_DEG_PER_SECOND
@@ -285,106 +291,20 @@ func _setup_light() -> void:
 
 
 func _build_card_anchor() -> void:
-	_card_viewport = SubViewport.new()
-	_card_viewport.name = "CardViewport"
-	_card_viewport.size = CARD_VIEWPORT_SIZE
-	_card_viewport.transparent_bg = true
-	_card_viewport.disable_3d = true
-	_card_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	add_child(_card_viewport)
-	_card_viewport.add_child(_make_card_ui())
-
-	_card_anchor = Node3D.new()
-	_card_anchor.name = CARD_ANCHOR_NAME
-	add_child(_card_anchor)
-
-	var mesh := QuadMesh.new()
-	mesh.size = CARD_SIZE_M
-
-	var material := StandardMaterial3D.new()
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.albedo_texture = _card_viewport.get_texture()
-	material.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
-	material.no_depth_test = false
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-
-	_card_mesh = MeshInstance3D.new()
-	_card_mesh.name = "CardPanel"
-	_card_mesh.mesh = mesh
-	_card_mesh.set_surface_override_material(0, material)
-	_card_anchor.add_child(_card_mesh)
+	_card_view.build(self, CARD_ANCHOR_NAME)
+	_card_viewport = _card_view.viewport()
+	_card_anchor = _card_view.anchor()
+	_card_mesh = _card_view.card_mesh()
 	_apply_3dof_anchor_transform()
 
 
 func _build_xr_render_probe() -> void:
-	if _card_anchor == null:
-		return
-	var mesh := QuadMesh.new()
-	mesh.size = XR_PROBE_SIZE_M
-
-	var material := StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.albedo_color = Color(1.0, 0.05, 0.05, 1.0)
-	material.no_depth_test = true
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-
-	_xr_probe_mesh = MeshInstance3D.new()
-	_xr_probe_mesh.name = "XRRenderProbe"
-	_xr_probe_mesh.mesh = mesh
-	_xr_probe_mesh.position = Vector3(-0.56, 0.58, 0.025)
-	_xr_probe_mesh.set_surface_override_material(0, material)
-	_card_anchor.add_child(_xr_probe_mesh)
+	_xr_probe_mesh = _card_view.build_xr_render_probe()
 
 
 func _build_vst_debug_ui() -> void:
 	_vst_debug_ui.build_raw_debug_panel(_camera)
 	_vst_debug_ui.build_world_bbox_frame(self)
-
-
-func _make_card_ui() -> Control:
-	var panel := PanelContainer.new()
-	panel.name = "MovingCardUI"
-	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
-	panel.offset_left = 24
-	panel.offset_top = 24
-	panel.offset_right = -24
-	panel.offset_bottom = -24
-	panel.add_theme_stylebox_override("panel", _make_panel_style())
-
-	var margin := MarginContainer.new()
-	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
-	margin.add_theme_constant_override("margin_left", 48)
-	margin.add_theme_constant_override("margin_top", 56)
-	margin.add_theme_constant_override("margin_right", 48)
-	margin.add_theme_constant_override("margin_bottom", 56)
-	panel.add_child(margin)
-
-	var body := VBoxContainer.new()
-	body.alignment = BoxContainer.ALIGNMENT_CENTER
-	body.add_theme_constant_override("separation", 18)
-	margin.add_child(body)
-
-	body.add_child(_make_label("安炫百  C17PROJ-90", 58, Color(0.95, 1.0, 0.35, 1.0)))
-	body.add_child(_make_label("Jira issues: 1", 38, Color(0.72, 0.95, 1.0, 1.0)))
-	body.add_child(_make_label("Matting 效果", 50, Color(0.92, 0.98, 1.0, 1.0)))
-	body.add_child(_make_label("Status: New    Priority: Medium", 36, Color(0.72, 0.95, 1.0, 1.0)))
-	body.add_child(_make_label("Updated: 2026-03-05", 30, Color(0.62, 0.82, 0.92, 1.0)))
-	return panel
-
-
-func _make_label(text: String, font_size: int, color: Color) -> Label:
-	var label := Label.new()
-	label.text = text
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	label.add_theme_font_size_override("font_size", font_size)
-	label.add_theme_color_override("font_color", color)
-	label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.82))
-	label.add_theme_constant_override("outline_size", 5)
-	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	return label
 
 
 func _build_status_hud() -> void:
@@ -1120,12 +1040,3 @@ func _on_vst_tracker_anchor(anchor: Dictionary) -> void:
 		])
 
 
-func _make_panel_style() -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.06, 0.075, 0.09, 0.92)
-	style.border_color = Color(0.18, 0.78, 0.86, 0.98)
-	style.set_border_width_all(4)
-	style.set_corner_radius_all(4)
-	style.shadow_color = Color(0.0, 0.0, 0.0, 0.45)
-	style.shadow_size = 24
-	return style

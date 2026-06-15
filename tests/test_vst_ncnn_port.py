@@ -20,6 +20,7 @@ JNI_DEBUG = ANDROID / "android" / "build" / "libs" / "debug" / "arm64-v8a"
 JNI_RELEASE = ANDROID / "android" / "build" / "libs" / "release" / "arm64-v8a"
 SCRIPT = ANDROID / "scripts" / "AndroidMovingCard.gd"
 VST_CAPTURE = ANDROID / "scripts" / "vst_capture.gd"
+CARD_VIEW = ANDROID / "scripts" / "card_view.gd"
 # Status-line rendering moved to the StatusHud subsystem in M3 step 1 (YAN-74);
 # the card assembles the xr/vst snapshots that feed those lines.
 STATUS_HUD = ANDROID / "scripts" / "status_hud.gd"
@@ -109,6 +110,7 @@ class AndroidMovingCardVstScaffoldTests(unittest.TestCase):
     def setUp(self):
         self.source = SCRIPT.read_text(encoding="utf-8")
         self.vst_capture = VST_CAPTURE.read_text(encoding="utf-8")
+        self.card_view = CARD_VIEW.read_text(encoding="utf-8")
 
     def test_script_probes_for_dual_vst_capture_class(self):
         self.assertIn('ClassDB.class_exists(&"GXRDualVstCapture")', self.vst_capture)
@@ -165,9 +167,10 @@ class AndroidMovingCardVstScaffoldTests(unittest.TestCase):
 
     def test_script_has_simple_xr_render_probe(self):
         self.assertIn("_build_xr_render_probe()", self.source)
-        self.assertIn('"XRRenderProbe"', self.source)
+        self.assertIn("_card_view.build_xr_render_probe()", self.source)
         self.assertIn("XR_PROBE_SIZE_M", self.source)
-        self.assertIn("Color(1.0, 0.05, 0.05, 1.0)", self.source)
+        self.assertIn('"XRRenderProbe"', self.card_view)
+        self.assertIn("Color(1.0, 0.05, 0.05, 1.0)", self.card_view)
 
     def test_script_shuts_capture_down_on_exit(self):
         self.assertIn("func _exit_tree()", self.source)
