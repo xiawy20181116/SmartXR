@@ -48,6 +48,7 @@ const SmartXROptionsScript := preload("res://scripts/smartxr_options.gd")
 const StatusHudScript := preload("res://scripts/status_hud.gd")
 const TargetRegistryScript := preload("res://scripts/target_registry.gd")
 const TargetSourceScript := preload("res://scripts/target_source.gd")
+const VSTCaptureScript := preload("res://scripts/vst_capture.gd")
 const WSTransportScript := preload("res://scripts/ws_transport.gd")
 const XRBootstrapScript := preload("res://scripts/xr_bootstrap.gd")
 
@@ -180,10 +181,24 @@ var _passthrough_overlay_requested_blend_mode := "alpha_blend"
 var _passthrough_overlay_viewport: SubViewport = null
 var _passthrough_overlay_layer: OpenXRCompositionLayerQuad = null
 
-# M1: VST capture state. _vst_capture stays null on vanilla SDK and every helper
-# below short-circuits in that case, so all existing behaviour is preserved.
+# VSTCapture subsystem (scripts/vst_capture.gd): owns GXRDualVstCapture setup,
+# right-frame polling, tracker boxes, calibration diagnostics, and bbox->head
+# math. The card keeps scene/UI side effects, target update wiring, and status
+# snapshot assembly (ADR-4).
+var _vst_capture = VSTCaptureScript.new({
+	"ncnn_param_res": VST_NCNN_PARAM_RES,
+	"ncnn_bin_res": VST_NCNN_BIN_RES,
+	"ncnn_param_user": VST_NCNN_PARAM_USER,
+	"ncnn_bin_user": VST_NCNN_BIN_USER,
+	"right_tracker_enabled": VST_RIGHT_TRACKER_ENABLED,
+	"right_tracker_frame_stride": VST_RIGHT_TRACKER_FRAME_STRIDE,
+	"horizontal_fov_deg": BBOX_HORIZONTAL_FOV_DEG,
+	"vertical_fov_deg": BBOX_VERTICAL_FOV_DEG,
+	"min_depth_m": MIN_DEPTH_M,
+	"max_depth_m": MAX_DEPTH_M,
+	"start_depth_m": CARD_START_DEPTH_M,
+})
 var _vst_class_registered := false
-var _vst_capture: Object = null
 var _vst_init_ok := false
 var _vst_last_error := "not initialized"
 var _vst_right_image_size := Vector2.ZERO
@@ -982,52 +997,31 @@ func _apply_bbox_anchor() -> void:
 
 
 func _anchor_from_bbox(center_px: Vector2, size_px: Vector2, image_size: Vector2, depth_m: float) -> Dictionary:
-	var fx := (image_size.x * 0.5) / tan(deg_to_rad(BBOX_HORIZONTAL_FOV_DEG) * 0.5)
-	var fy := (image_size.y * 0.5) / tan(deg_to_rad(BBOX_VERTICAL_FOV_DEG) * 0.5)
-	var nx := (center_px.x - image_size.x * 0.5) / fx
-	var ny := (center_px.y - image_size.y * 0.5) / fy
-	# VST camera axes: +X right, +Y down, +Z forward.
-	var point_vst := Vector3(nx, ny, 1.0).normalized() * depth_m
-	var point_head := _convert_vst_camera_point_to_head_convention(point_vst)
-	if _vst_uses_eye_to_head_anchor:
-		point_head = _transform_right_vst_point_to_head(point_vst)
-	var yaw_deg := rad_to_deg(atan2(point_head.x, -point_head.z))
-	var pitch_deg := rad_to_deg(atan2(point_head.y, sqrt(point_head.x * point_head.x + point_head.z * point_head.z)))
-	var angular_w := rad_to_deg(2.0 * atan((size_px.x * 0.5) / fx))
-	var angular_h := rad_to_deg(2.0 * atan((size_px.y * 0.5) / fy))
-	return {
-		"yaw_deg": yaw_deg,
-		"pitch_deg": pitch_deg,
-		"depth_m": point_head.length() if _vst_uses_eye_to_head_anchor else depth_m,
-		"angular_size_deg": Vector2(angular_w, angular_h),
-	}
+	_sync_vst_capture_probe_matrix()
+	return _vst_capture.anchor_from_bbox(center_px, size_px, image_size, depth_m)
 
 
 func _target_position_from_bbox_anchor(anchor: Dictionary) -> Vector3:
-	var depth_m := float(anchor.get("depth_m", CARD_START_DEPTH_M))
-	var yaw := deg_to_rad(float(anchor.get("yaw_deg", 0.0)))
-	var pitch := deg_to_rad(float(anchor.get("pitch_deg", 0.0)))
-	var horizontal_depth := depth_m * cos(pitch)
-	return Vector3(
-		horizontal_depth * sin(yaw),
-		depth_m * sin(pitch),
-		-horizontal_depth * cos(yaw)
-	)
+	return _vst_capture.target_position_from_bbox_anchor(anchor)
 
 
 func _convert_vst_camera_point_to_head_convention(point: Vector3) -> Vector3:
-	return Vector3(point.x, -point.y, -point.z)
+	return _vst_capture.convert_vst_camera_point_to_head_convention(point)
 
 
 func _transform_right_vst_point_to_head(point: Vector3) -> Vector3:
-	if _vst_right_eye_to_head_matrix.size() < 16:
-		return _convert_vst_camera_point_to_head_convention(point)
-	var m := _vst_right_eye_to_head_matrix
-	return Vector3(
-		float(m[0]) * point.x + float(m[1]) * point.y + float(m[2]) * point.z + float(m[3]),
-		float(m[4]) * point.x + float(m[5]) * point.y + float(m[6]) * point.z + float(m[7]),
-		float(m[8]) * point.x + float(m[9]) * point.y + float(m[10]) * point.z + float(m[11])
-	)
+	_sync_vst_capture_probe_matrix()
+	return _vst_capture.transform_right_vst_point_to_head(point)
+
+
+func _sync_vst_capture_probe_matrix() -> void:
+	if _vst_uses_eye_to_head_anchor or _vst_right_eye_to_head_matrix.size() >= 16:
+		_vst_capture.store_right_eye_to_head_matrix({
+			"ret": 0,
+			"right": _vst_right_eye_to_head_matrix,
+		})
+	else:
+		_vst_capture.store_right_eye_to_head_matrix({"ret": -1})
 
 
 func _anchor_position_from_yaw_pitch_depth() -> Vector3:
@@ -1188,20 +1182,9 @@ func _build_vst_status_snapshot() -> Dictionary:
 	var target_state := "lost"
 	if _vst_target_source != null:
 		target_state = _vst_target_source.target_state()
-	return {
-		"class_registered": _vst_class_registered,
-		"init_ok": _vst_init_ok,
-		"frames": _vst_right_frames,
-		"box_count": _vst_box_count,
-		"latency_ms": _vst_tracker_latency_ms,
-		"image_size": _vst_right_image_size,
-		"first_box": _vst_first_box,
-		"target_state": target_state,
-		"last_error": _vst_last_error,
-		"uses_eye_to_head_anchor": _vst_uses_eye_to_head_anchor,
-		"eye_to_head_status": _vst_eye_to_head_status,
-		"calibration_status": _vst_calibration_status,
-	}
+	var snapshot: Dictionary = _vst_capture.status_snapshot()
+	snapshot["target_state"] = target_state
+	return snapshot
 
 
 func _build_proxy_targets_status_snapshot() -> Dictionary:
@@ -1245,183 +1228,48 @@ func _build_passthrough_overlay_status_snapshot() -> Dictionary:
 
 
 func _exit_tree() -> void:
-	if _vst_capture != null and _vst_capture.has_method(&"shutdown"):
-		_vst_capture.shutdown()
+	_vst_capture.shutdown()
 
 
 func _setup_vst_capture() -> void:
-	if not _xr_active:
-		_vst_last_error = "OpenXR inactive; VST disabled to avoid passthrough-only false success"
-		print("VST init blocked: " + _vst_last_error)
-		return
-	_vst_class_registered = ClassDB.class_exists(&"GXRDualVstCapture")
-	if not _vst_class_registered:
-		_vst_last_error = "GXRDualVstCapture class not registered"
-		return
-	_vst_capture = ClassDB.instantiate(&"GXRDualVstCapture")
-	if _vst_capture == null:
-		_vst_last_error = "instantiate GXRDualVstCapture failed"
-		return
-	if VST_RIGHT_TRACKER_ENABLED:
-		_configure_vst_right_tracker_model()
-	_vst_init_ok = bool(_vst_capture.initialize())
-	if _vst_init_ok:
-		_vst_last_error = ""
-		_refresh_vst_calibration_diagnostics()
-	else:
-		_vst_last_error = str(_vst_capture.get_last_error()) if _vst_capture.has_method(&"get_last_error") else "initialize returned false"
-
-
-func _configure_vst_right_tracker_model() -> void:
-	if _vst_capture == null or not _vst_capture.has_method(&"configure_right_tracker_model"):
-		_vst_last_error = "configure_right_tracker_model API unavailable"
-		return
-	var param_path := _stage_vst_tracker_asset(VST_NCNN_PARAM_RES, VST_NCNN_PARAM_USER)
-	var bin_path := _stage_vst_tracker_asset(VST_NCNN_BIN_RES, VST_NCNN_BIN_USER)
-	if param_path.is_empty() or bin_path.is_empty():
-		_vst_last_error = "ncnn asset staging failed"
-		return
-	var ok := bool(_vst_capture.configure_right_tracker_model(param_path, bin_path))
-	print("VST tracker model: ok=%s param=%s bin=%s" % [str(ok), param_path, bin_path])
-	if _vst_capture.has_method(&"set_right_tracker_enabled"):
-		_vst_capture.set_right_tracker_enabled(true)
-	if _vst_capture.has_method(&"set_right_tracker_frame_stride"):
-		_vst_capture.set_right_tracker_frame_stride(VST_RIGHT_TRACKER_FRAME_STRIDE)
-	if not ok:
-		_vst_last_error = "configure_right_tracker_model returned false"
-
-
-func _stage_vst_tracker_asset(source_path: String, target_path: String) -> String:
-	if not DirAccess.dir_exists_absolute("user://ncnn"):
-		var err := DirAccess.make_dir_recursive_absolute("user://ncnn")
-		if err != OK:
-			return ""
-	if FileAccess.file_exists(target_path):
-		return ProjectSettings.globalize_path(target_path)
-	var source := FileAccess.open(source_path, FileAccess.READ)
-	if source == null:
-		return ""
-	var target := FileAccess.open(target_path, FileAccess.WRITE)
-	if target == null:
-		source.close()
-		return ""
-	target.store_buffer(source.get_buffer(source.get_length()))
-	target.close()
-	source.close()
-	return ProjectSettings.globalize_path(target_path)
+	_vst_capture.set_raw_image_callback(_on_vst_raw_right_image)
+	_vst_capture.set_boxes_callback(_on_vst_tracker_boxes)
+	_vst_capture.set_anchor_callback(_on_vst_tracker_anchor)
+	_vst_capture.setup_capture(_xr_active)
 
 
 func _poll_vst_bbox() -> void:
-	if _vst_capture == null or not _vst_init_ok:
-		return
-	if _vst_capture.has_method(&"has_new_frame_right") and bool(_vst_capture.has_new_frame_right()):
-		var right_img: Image = _vst_capture.capture_frame_right() if _vst_capture.has_method(&"capture_frame_right") else null
-		if right_img != null:
-			_vst_right_image_size = Vector2(right_img.get_width(), right_img.get_height())
-			if _vst_raw_right_sprite != null:
-				_vst_raw_right_sprite.texture = ImageTexture.create_from_image(right_img)
-			_vst_right_frames += 1
-	if _vst_capture.has_method(&"get_right_tracker_boxes"):
-		var boxes: PackedFloat32Array = _vst_capture.get_right_tracker_boxes()
-		_vst_box_count = boxes.size() / 5
-		if boxes.size() >= 5:
-			_vst_first_box = PackedFloat32Array()
-			for i in range(5):
-				_vst_first_box.push_back(float(boxes[i]))
-			_update_vst_raw_bbox_overlay(boxes)
-			_apply_vst_tracker_anchor(boxes)
-		else:
-			_vst_first_box = PackedFloat32Array()
-			_set_vst_raw_bbox_visible(false)
-			_set_vst_bbox_frame_visible(false)
-	if _vst_capture.has_method(&"get_right_tracker_total_latency_ms"):
-		_vst_tracker_latency_ms = float(_vst_capture.get_right_tracker_total_latency_ms())
+	_vst_capture.set_depth_m(_bbox_depth_m)
+	_vst_capture.poll()
 
 
-func _refresh_vst_calibration_diagnostics() -> void:
-	if _vst_capture == null:
-		return
-	if _vst_capture.has_method(&"get_eye_to_head_matrices"):
-		var eye_info = _vst_capture.get_eye_to_head_matrices()
-		if typeof(eye_info) == TYPE_DICTIONARY:
-			_store_right_eye_to_head_matrix(eye_info)
-			_vst_eye_to_head_status = _format_eye_to_head_status(eye_info)
-		else:
-			_vst_eye_to_head_status = "eye2head: invalid response"
+func _on_vst_raw_right_image(right_img: Image, image_size: Vector2, frames: int) -> void:
+	_vst_right_image_size = image_size
+	_vst_right_frames = frames
+	if _vst_raw_right_sprite != null:
+		_vst_raw_right_sprite.texture = ImageTexture.create_from_image(right_img)
+
+
+func _on_vst_tracker_boxes(boxes: PackedFloat32Array, image_size: Vector2) -> void:
+	_vst_right_image_size = image_size
+	if boxes.size() >= 5:
+		_update_vst_raw_bbox_overlay(boxes)
 	else:
-		_vst_eye_to_head_status = "eye2head: API missing"
-
-	if _vst_capture.has_method(&"get_calibration_coeff_info"):
-		var right_info = _vst_capture.get_calibration_coeff_info(GXR_CAL_CV_DEWARP_R, 4096)
-		var slam_info = _vst_capture.get_calibration_coeff_info(GXR_CAL_CV_SLAM, 4096)
-		var left_info = _vst_capture.get_calibration_coeff_info(GXR_CAL_CV_DEWARP_L, 256)
-		_vst_calibration_status = "cal: L %s R %s SLAM %s" % [
-			_format_calibration_probe(left_info),
-			_format_calibration_probe(right_info),
-			_format_calibration_probe(slam_info),
-		]
-	else:
-		_vst_calibration_status = "cal: API missing"
-	print("VST calibration: %s | %s" % [_vst_eye_to_head_status, _vst_calibration_status])
+		_set_vst_raw_bbox_visible(false)
+		_set_vst_bbox_frame_visible(false)
 
 
-func _store_right_eye_to_head_matrix(eye_info: Dictionary) -> void:
-	_vst_right_eye_to_head_matrix = PackedFloat64Array()
-	_vst_uses_eye_to_head_anchor = false
-	if int(eye_info.get("ret", -999)) != 0:
-		return
-	var right = eye_info.get("right", PackedFloat64Array())
-	if not (right is PackedFloat64Array) or right.size() < 16:
-		return
-	for i in range(16):
-		_vst_right_eye_to_head_matrix.push_back(float(right[i]))
-	_vst_uses_eye_to_head_anchor = true
-
-
-func _format_eye_to_head_status(eye_info: Dictionary) -> String:
-	var ret := int(eye_info.get("ret", -999))
-	var right = eye_info.get("right", PackedFloat64Array())
-	if right is PackedFloat64Array and right.size() >= 16:
-		return "eye2head: ret=%d r03=%.4f r13=%.4f r23=%.4f" % [
-			ret,
-			float(right[3]),
-			float(right[7]),
-			float(right[11]),
-		]
-	return "eye2head: ret=%d no-matrix" % ret
-
-
-func _format_calibration_probe(info) -> String:
-	if typeof(info) != TYPE_DICTIONARY:
-		return "invalid"
-	var bytes_size := 0
-	var bytes = info.get("bytes", PackedByteArray())
-	if bytes is PackedByteArray:
-		bytes_size = bytes.size()
-	return "ret=%d size=%d bytes=%d" % [
-		int(info.get("result", -999)),
-		int(info.get("actual_size", 0)),
-		bytes_size,
-	]
-
-
-func _apply_vst_tracker_anchor(boxes: PackedFloat32Array) -> void:
-	if boxes.size() < 5 or _vst_right_image_size.x <= 0.0 or _vst_right_image_size.y <= 0.0:
-		return
-	var x := clampf(float(boxes[0]), 0.0, 1.0)
-	var y := clampf(float(boxes[1]), 0.0, 1.0)
-	var w := clampf(float(boxes[2]), 0.02, 1.0)
-	var h := clampf(float(boxes[3]), 0.02, 1.0)
-	var confidence := clampf(float(boxes[4]), 0.0, 1.0)
-	_bbox_center_px = Vector2((x + w * 0.5) * _vst_right_image_size.x, (y + h * 0.5) * _vst_right_image_size.y)
-	_bbox_size_px = Vector2(w * _vst_right_image_size.x, h * _vst_right_image_size.y)
-	_bbox_image_size = _vst_right_image_size
-	_bbox_depth_m = clampf(_bbox_depth_m, MIN_DEPTH_M, MAX_DEPTH_M)
-	var target_transform := _vst_tracker_box_to_target_transform(boxes)
+func _on_vst_tracker_anchor(anchor: Dictionary) -> void:
+	_bbox_center_px = anchor.get("center_px", _bbox_center_px)
+	_bbox_size_px = anchor.get("size_px", _bbox_size_px)
+	_bbox_image_size = anchor.get("image_size", _bbox_image_size)
+	_bbox_depth_m = float(anchor.get("depth_m", _bbox_depth_m))
+	_bbox_angular_size_deg = anchor.get("angular_size_deg", _bbox_angular_size_deg)
+	var target_transform: Transform3D = anchor.get("target_transform", Transform3D.IDENTITY)
+	var confidence := float(anchor.get("confidence", 0.0))
 	var updated := update_vst_target(VST_TRACKED_TARGET_ID, target_transform, confidence, float(Time.get_ticks_msec()))
 	_update_vst_bbox_frame()
-	_vst_anchor_updates += 1
-	if updated and _vst_anchor_updates <= 5:
+	if updated and int(anchor.get("anchor_updates", 0)) <= 5:
 		print("VST target: center=%.1f %.1f size=%.1f %.1f image=%.0f %.0f pos=%.2f %.2f %.2f conf=%.2f" % [
 			_bbox_center_px.x,
 			_bbox_center_px.y,
@@ -1434,22 +1282,6 @@ func _apply_vst_tracker_anchor(boxes: PackedFloat32Array) -> void:
 			target_transform.origin.z,
 			confidence,
 		])
-
-
-func _vst_tracker_box_to_target_transform(boxes: PackedFloat32Array) -> Transform3D:
-	if boxes.size() < 5:
-		return Transform3D.IDENTITY
-	var x := clampf(float(boxes[0]), 0.0, 1.0)
-	var y := clampf(float(boxes[1]), 0.0, 1.0)
-	var w := clampf(float(boxes[2]), 0.02, 1.0)
-	var h := clampf(float(boxes[3]), 0.02, 1.0)
-	var center_px := Vector2((x + w * 0.5) * _vst_right_image_size.x, (y + h * 0.5) * _vst_right_image_size.y)
-	var size_px := Vector2(w * _vst_right_image_size.x, h * _vst_right_image_size.y)
-	var anchor := _anchor_from_bbox(center_px, size_px, _vst_right_image_size, clampf(_bbox_depth_m, MIN_DEPTH_M, MAX_DEPTH_M))
-	_bbox_angular_size_deg = anchor["angular_size_deg"]
-	var target_transform := Transform3D.IDENTITY
-	target_transform.origin = _target_position_from_bbox_anchor(anchor)
-	return target_transform
 
 
 func _make_panel_style() -> StyleBoxFlat:

@@ -103,3 +103,26 @@ FOV default change requires regenerating the fixture deliberately. The probe
 loads the card itself, which sets the precedent for staging `scripts\` into
 a no-project temp cwd (the compile-gate trick) whenever a probe needs a
 script that preloads siblings.
+
+## ADR-6: VSTCapture owns native polling and bbox math, card owns side effects
+
+**Context.** After M3-M5, `AndroidMovingCard.gd` still owned the most fragile
+device-specific path: `GXRDualVstCapture` setup, ncnn tracker asset staging,
+right-frame polling, tracker boxes, eye-to-head calibration diagnostics, and
+bbox-to-head math. That made the card hard to reason about and mixed native SDK
+state with scene side effects.
+
+**Decision.** Extract those responsibilities into
+`godot-android/scripts/vst_capture.gd` (`VSTCapture`), a dependency-free
+`RefCounted` script. The subsystem owns native capture state, calibration
+strings, first-box/frame/latency counters, and bbox math. The card wires three
+callbacks for side effects it must still own: raw-image texture updates,
+tracker-box debug overlays, and target-source updates/attachment through the
+existing public APIs.
+
+**Consequences.** `AndroidMovingCard.gd` is reduced to VST orchestration for
+this path while preserving public methods such as `update_vst_target`,
+`register_node3d_target`, and `attach_to_target`. `StatusHud` receives the same
+VST snapshot keys through the card. `tools/run_godot_vst_capture_probe.ps1`
+validates the subsystem in no-project mode, and the existing bbox fixture probe
+continues to guard numeric drift.

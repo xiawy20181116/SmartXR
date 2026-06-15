@@ -27,6 +27,9 @@ CARD_ATTACHMENT = ROOT / "godot-android" / "scripts" / "card_attachment.gd"
 # step 2 (YAN-84); state-machine assertions are pinned there, bbox math and
 # target-source wiring stay on the card.
 TARGET_SOURCE = ROOT / "godot-android" / "scripts" / "target_source.gd"
+# VST capture/polling/calibration/bbox math moved to scripts/vst_capture.gd
+# in YAN-99; card-side assertions only cover scene callbacks and public API.
+VST_CAPTURE = ROOT / "godot-android" / "scripts" / "vst_capture.gd"
 # The XR startup path (_try_init_xr) and the camera/origin construction moved
 # to scripts/xr_bootstrap.gd in M3 step 5 (YAN-79); init/blend/camera
 # assertions are pinned there, the resolved _xr_* state and the status
@@ -177,13 +180,14 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_vst_tracker_boxes_drive_proxy_target_not_bbox_anchor(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        vst_capture = VST_CAPTURE.read_text(encoding="utf-8")
 
-        self.assertIn("_apply_vst_tracker_anchor(boxes)", source)
-        self.assertIn("func _apply_vst_tracker_anchor(boxes: PackedFloat32Array) -> void:", source)
+        self.assertIn("_apply_vst_tracker_anchor(boxes)", vst_capture)
+        self.assertIn("func _apply_vst_tracker_anchor(boxes: PackedFloat32Array) -> void:", vst_capture)
         self.assertIn("_bbox_center_px = Vector2", source)
         self.assertIn("_bbox_size_px = Vector2", source)
-        self.assertIn("_bbox_image_size = _vst_right_image_size", source)
-        self.assertIn("var target_transform := _vst_tracker_box_to_target_transform(boxes)", source)
+        self.assertIn('_bbox_image_size = anchor.get("image_size", _bbox_image_size)', source)
+        self.assertIn('"target_transform": target_transform', vst_capture)
         self.assertIn("update_vst_target(VST_TRACKED_TARGET_ID, target_transform, confidence, float(Time.get_ticks_msec()))", source)
         self.assertIn('_last_command = "vst_target"', source)
         self.assertIn("VST target:", source)
@@ -191,6 +195,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
     def test_vst_tracker_updates_standard_trackable_target_proxy(self):
         source = SCRIPT.read_text(encoding="utf-8")
         target_source = TARGET_SOURCE.read_text(encoding="utf-8")
+        vst_capture = VST_CAPTURE.read_text(encoding="utf-8")
 
         self.assertIn("class TrackableTarget", target_source)
         self.assertIn('const TRACKABLE_STATE_TRACKED := "tracked"', target_source)
@@ -203,9 +208,8 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("var _vst_target_proxy: Node3D = null", source)
         self.assertIn('register_node3d_target(VST_TRACKED_TARGET_ID, _vst_target_proxy)', source)
         self.assertIn('attach_to_target(CARD_ANCHOR_NAME, VST_TRACKED_TARGET_ID, VST_TARGET_OFFSET_RULE)', source)
-        self.assertIn("_vst_tracker_box_to_target_transform(boxes)", source)
-        self.assertIn("func _vst_tracker_box_to_target_transform(boxes: PackedFloat32Array) -> Transform3D:", source)
-        self.assertIn("target_transform.origin = _target_position_from_bbox_anchor(anchor)", source)
+        self.assertIn("func tracker_box_to_target_transform(boxes: PackedFloat32Array, depth_m: float) -> Transform3D:", vst_capture)
+        self.assertIn("target_transform.origin = target_position_from_bbox_anchor(anchor)", vst_capture)
 
     def test_vst_target_adapter_tracks_confidence_timestamp_and_fallback_states(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -239,9 +243,9 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("func _on_vst_target_lost(_target_id: String) -> void:", source)
 
     def test_vst_tracker_does_not_use_bbox_direct_anchor_inside_proxy_entrypoint(self):
-        source = SCRIPT.read_text(encoding="utf-8")
+        source = VST_CAPTURE.read_text(encoding="utf-8")
         match = re.search(
-            r"func _apply_vst_tracker_anchor\(boxes: PackedFloat32Array\) -> void:(?P<body>.*?)(?=\n\nfunc )",
+            r"func _apply_vst_tracker_anchor\(boxes: PackedFloat32Array\) -> void:(?P<body>.*?)(?=\n\nfunc |\Z)",
             source,
             re.S,
         )
@@ -251,22 +255,24 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertNotIn('_anchor_mode = "bbox"', body)
         self.assertNotIn('_last_command = "vst_bbox"', body)
         self.assertNotIn("_apply_bbox_anchor()", body)
-        self.assertIn("update_vst_target(", body)
+        self.assertIn("_on_anchor.call({", body)
+        self.assertIn('"target_transform": target_transform', body)
 
     def test_vst_bbox_anchor_uses_right_eye_to_head_transform_when_available(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        vst_capture = VST_CAPTURE.read_text(encoding="utf-8")
         hud = STATUS_HUD.read_text(encoding="utf-8")
 
-        self.assertIn("var _vst_right_eye_to_head_matrix := PackedFloat64Array()", source)
-        self.assertIn("var _vst_uses_eye_to_head_anchor := false", source)
-        self.assertIn("VST camera axes: +X right, +Y down, +Z forward", source)
-        self.assertIn("var point_vst := Vector3(nx, ny, 1.0).normalized() * depth_m", source)
-        self.assertIn("_convert_vst_camera_point_to_head_convention(point_vst)", source)
-        self.assertIn("_store_right_eye_to_head_matrix(eye_info)", source)
-        self.assertIn("func _transform_right_vst_point_to_head(point: Vector3) -> Vector3:", source)
-        self.assertIn("point_head = _transform_right_vst_point_to_head(point_vst)", source)
+        self.assertIn("var _right_eye_to_head_matrix := PackedFloat64Array()", vst_capture)
+        self.assertIn("var _uses_eye_to_head_anchor := false", vst_capture)
+        self.assertIn("VST camera axes: +X right, +Y down, +Z forward", vst_capture)
+        self.assertIn("var point_vst := Vector3(nx, ny, 1.0).normalized() * depth_m", vst_capture)
+        self.assertIn("convert_vst_camera_point_to_head_convention(point_vst)", vst_capture)
+        self.assertIn("store_right_eye_to_head_matrix(eye_info)", vst_capture)
+        self.assertIn("func transform_right_vst_point_to_head(point: Vector3) -> Vector3:", vst_capture)
+        self.assertIn("point_head = transform_right_vst_point_to_head(point_vst)", vst_capture)
         # The anchor-mode line is rendered by StatusHud from the vst snapshot.
-        self.assertIn('"uses_eye_to_head_anchor": _vst_uses_eye_to_head_anchor', source)
+        self.assertIn('"uses_eye_to_head_anchor": _uses_eye_to_head_anchor', vst_capture)
         self.assertIn("Anchor: %s", hud)
         self.assertIn('"eye2head" if bool(vst.get("uses_eye_to_head_anchor", false)) else "raw-fov"', hud)
 

@@ -65,6 +65,7 @@ jobs:
             "tools/run_godot_card_attachment_probe.ps1",
             "tools/run_godot_xr_bootstrap_probe.ps1",
             "tools/run_godot_target_source_probe.ps1",
+            "tools/run_godot_vst_capture_probe.ps1",
             "tools/run_godot_bbox_math_probe.ps1"
           )
           foreach ($probe in $probes) {

@@ -114,6 +114,15 @@ side.
   Docs: `docs/status_hud.md`, `docs/target_registry.md`,
   `docs/ws_transport.md`, `docs/card_attachment.md`,
   `docs/xr_bootstrap.md`, `docs/target_source.md`.
+- [x] **M6 — VSTCapture + bbox math** (YAN-99): GXRDualVstCapture setup,
+  ncnn tracker asset staging, right-frame polling, tracker boxes,
+  calibration diagnostics, and bbox-to-head math extracted from
+  `AndroidMovingCard.gd` into dependency-free
+  `godot-android/scripts/vst_capture.gd` (`VSTCapture`). The card keeps
+  public API, target-source updates, scene/debug UI side effects, and status
+  snapshot composition. Runtime probe:
+  `tools/run_godot_vst_capture_probe.ps1`; fixture math probe remains
+  `tools/run_godot_bbox_math_probe.ps1`. Docs: `docs/vst_capture.md`.
 - [x] **YAN-86 follow-up — PCMR overlay visual check runner**: added
   `tools/run_windows_pcmr_overlay_visual_check.ps1`, a hold-open manual
   headset runner that manages the fake proxy_targets publisher, Windows GXR
@@ -145,6 +154,7 @@ powershell -File tools\run_godot_ws_transport_probe.ps1
 powershell -File tools\run_godot_card_attachment_probe.ps1
 powershell -File tools\run_godot_xr_bootstrap_probe.ps1
 powershell -File tools\run_godot_target_source_probe.ps1
+powershell -File tools\run_godot_vst_capture_probe.ps1
 powershell -File tools\run_godot_bbox_math_probe.ps1
 powershell -File tools\run_godot_script_only_websocket_probe.ps1
 # consumer-only needs a publisher on :8766 first (fake_proxy_targets_publisher.py)
