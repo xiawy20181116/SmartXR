@@ -1,11 +1,19 @@
 # HANDOFF
 
-## State (after VSTDebugUI extraction, YAN-100)
+## State (after StatusSnapshotComposer extraction, YAN-103 first slice)
 
-- All 190 Python tests pass (`python -m unittest discover -s tests -p "test_*.py"`).
-- Schema gate passes on both fixtures.
-- Full script-only Godot probe set passes on Godot 4.6.2, including the new
-  VSTDebugUI probe.
+- Focused StatusSnapshotComposer script-only probe passes on Godot 4.6.2:
+  `tools/run_godot_status_snapshot_composer_probe.ps1`.
+- **YAN-103 first slice done**: status snapshot Dictionary composition moved
+  from `AndroidMovingCard.gd` into
+  `godot-android/scripts/status_snapshot_composer.gd`. The card still resolves
+  all live values from WS/XR/VST/proxy_targets/overlay state and delegates only
+  the stable top-level and nested Dictionary layouts. Docs:
+  `docs/status_snapshot_composer.md`. This is a pure script-only refactor and
+  does not require real-device VST smoke testing.
+- Prior baseline: all 190 Python tests passed, schema gate passed on both
+  fixtures, and the full script-only Godot probe set passed on Godot 4.6.2
+  after VSTDebugUI extraction.
 - **YAN-100 done**: VST debug scene visuals moved out of
   `AndroidMovingCard.gd` into `godot-android/scripts/vst_debug_ui.gd`
   (`VSTDebugUI`). It owns the world bbox frame, raw right-image Sprite3D,
