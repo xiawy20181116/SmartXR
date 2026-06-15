@@ -138,6 +138,14 @@ side.
   `xr`, `vst`, `proxy_targets`, and `passthrough_overlay` Dictionary shapes.
   Runtime probe: `tools/run_godot_status_snapshot_composer_probe.ps1`.
   Docs: `docs/status_snapshot_composer.md`.
+- [x] **A3 second slice — PassthroughOverlayPresenter** (YAN-103):
+  passthrough overlay viewport/layer/UI construction, camera-relative layer
+  update, alpha/position helpers, env truth parsing, and overlay status values
+  extracted from `AndroidMovingCard.gd` into dependency-free
+  `godot-android/scripts/passthrough_overlay_presenter.gd`. The card keeps XR
+  lifecycle state, enablement state, and snapshot composition. Runtime probe:
+  `tools/run_godot_passthrough_overlay_presenter_probe.ps1`. Docs:
+  `docs/passthrough_overlay_presenter.md`.
 - [x] **YAN-86 follow-up — PCMR overlay visual check runner**: added
   `tools/run_windows_pcmr_overlay_visual_check.ps1`, a hold-open manual
   headset runner that manages the fake proxy_targets publisher, Windows GXR
@@ -169,6 +177,7 @@ powershell -File tools\run_godot_ws_transport_probe.ps1
 powershell -File tools\run_godot_card_attachment_probe.ps1
 powershell -File tools\run_godot_xr_bootstrap_probe.ps1
 powershell -File tools\run_godot_status_snapshot_composer_probe.ps1
+powershell -File tools\run_godot_passthrough_overlay_presenter_probe.ps1
 powershell -File tools\run_godot_target_source_probe.ps1
 powershell -File tools\run_godot_vst_capture_probe.ps1
 powershell -File tools\run_godot_vst_debug_ui_probe.ps1

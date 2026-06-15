@@ -1,7 +1,16 @@
 # HANDOFF
 
-## State (after StatusSnapshotComposer extraction, YAN-103 first slice)
+## State (after PassthroughOverlayPresenter extraction, YAN-103 second slice)
 
+- **YAN-103 second slice done**: passthrough overlay scene-node ownership moved
+  from `AndroidMovingCard.gd` into
+  `godot-android/scripts/passthrough_overlay_presenter.gd`. The presenter owns
+  env truth parsing, transparent overlay viewport/UI construction,
+  `OpenXRCompositionLayerQuad`, camera-relative update, alpha/position helpers,
+  and overlay status values. The card keeps XR lifecycle state, enablement
+  state, and snapshot composition. Docs:
+  `docs/passthrough_overlay_presenter.md`. Probe:
+  `tools/run_godot_passthrough_overlay_presenter_probe.ps1`.
 - Focused StatusSnapshotComposer script-only probe passes on Godot 4.6.2:
   `tools/run_godot_status_snapshot_composer_probe.ps1`.
 - **YAN-103 first slice done**: status snapshot Dictionary composition moved

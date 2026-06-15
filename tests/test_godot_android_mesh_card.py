@@ -38,6 +38,12 @@ VST_DEBUG_UI = ROOT / "godot-android" / "scripts" / "vst_debug_ui.gd"
 # assertions are pinned there, the resolved _xr_* state and the status
 # snapshot stay on the card.
 XR_BOOTSTRAP = ROOT / "godot-android" / "scripts" / "xr_bootstrap.gd"
+# Passthrough overlay viewport/layer construction moved to
+# scripts/passthrough_overlay_presenter.gd in YAN-103; card-side assertions
+# cover only enablement state and delegation.
+PASSTHROUGH_OVERLAY_PRESENTER = (
+    ROOT / "godot-android" / "scripts" / "passthrough_overlay_presenter.gd"
+)
 VALIDATOR = ROOT / "tests" / "validate_project.ps1"
 ANDROID_ACTIVITY = (
     ROOT
@@ -76,20 +82,24 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
     def test_antman_passthrough_overlay_layer_path_is_gated_by_env(self):
         source = SCRIPT.read_text(encoding="utf-8")
         hud = STATUS_HUD.read_text(encoding="utf-8")
+        presenter = PASSTHROUGH_OVERLAY_PRESENTER.read_text(encoding="utf-8")
 
         self.assertIn('const PASSTHROUGH_OVERLAY_ENV := "SMARTXR_USE_PASSTHROUGH_OVERLAY"', source)
         self.assertIn('const PASSTHROUGH_OVERLAY_STATUS_RES := "user://passthrough_overlay_status.json"', hud)
         self.assertIn("var _passthrough_overlay_enabled := false", source)
         self.assertIn("func _use_passthrough_overlay() -> bool:", source)
-        self.assertIn("OS.get_environment(PASSTHROUGH_OVERLAY_ENV)", source)
+        self.assertIn("overlay_enabled_from_env(PASSTHROUGH_OVERLAY_ENV)", source)
+        self.assertIn("OS.get_environment(env_name)", presenter)
         self.assertIn("func _build_passthrough_overlay_layer() -> void:", source)
-        self.assertIn("OpenXRCompositionLayerQuad.new()", source)
-        self.assertIn("_passthrough_overlay_layer.layer_viewport = _passthrough_overlay_viewport", source)
-        self.assertIn("_passthrough_overlay_layer.alpha_blend = true", source)
-        self.assertIn("PASSTHROUGH OVERLAY", source)
-        # The card assembles the overlay status snapshot; StatusHud writes the file.
+        self.assertIn("build_layer(self, _xr_active, _passthrough_overlay_enabled)", source)
+        self.assertIn("OpenXRCompositionLayerQuad.new()", presenter)
+        self.assertIn("_layer.layer_viewport = _viewport", presenter)
+        self.assertIn("_layer.alpha_blend = true", presenter)
+        self.assertIn("PASSTHROUGH OVERLAY", presenter)
+        # The presenter reports overlay status values; StatusHud writes the file.
         self.assertIn("func _build_passthrough_overlay_status_snapshot() -> Dictionary:", source)
-        self.assertIn('"layer_alpha_blend": _passthrough_overlay_layer_alpha_blend()', source)
+        self.assertIn("status_values(", source)
+        self.assertIn('"layer_alpha_blend": layer_alpha_blend()', presenter)
         self.assertIn("func _write_passthrough_overlay_status_file(snapshot: Dictionary, delta: float) -> void:", hud)
         self.assertIn('"overlay_enabled": overlay.get("enabled", false)', hud)
 

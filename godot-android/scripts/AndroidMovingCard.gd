@@ -44,6 +44,7 @@ const PASSTHROUGH_OVERLAY_DEPTH_M := 1.5
 const CardAttachmentScript := preload("res://scripts/card_attachment.gd")
 const ProxyTargetsConsumerScript := preload("res://scripts/proxy_targets_consumer.gd")
 const ProxyTargetsCardAdapterScript := preload("res://scripts/proxy_targets_card_adapter.gd")
+const PassthroughOverlayPresenterScript := preload("res://scripts/passthrough_overlay_presenter.gd")
 const SmartXROptionsScript := preload("res://scripts/smartxr_options.gd")
 const StatusHudScript := preload("res://scripts/status_hud.gd")
 const StatusSnapshotComposerScript := preload("res://scripts/status_snapshot_composer.gd")
@@ -166,8 +167,11 @@ var _proxy_targets_card_apply_count := 0
 var _passthrough_overlay_enabled := false
 var _passthrough_overlay_blend_ok := false
 var _passthrough_overlay_requested_blend_mode := "alpha_blend"
-var _passthrough_overlay_viewport: SubViewport = null
-var _passthrough_overlay_layer: OpenXRCompositionLayerQuad = null
+var _passthrough_overlay_presenter = PassthroughOverlayPresenterScript.new({
+	"viewport_size": PASSTHROUGH_OVERLAY_VIEWPORT_SIZE,
+	"quad_size_m": PASSTHROUGH_OVERLAY_QUAD_SIZE_M,
+	"depth_m": PASSTHROUGH_OVERLAY_DEPTH_M,
+})
 
 # VSTCapture subsystem (scripts/vst_capture.gd): owns GXRDualVstCapture setup,
 # right-frame polling, tracker boxes, calibration diagnostics, and bbox->head
@@ -250,57 +254,16 @@ func _try_init_xr() -> void:
 
 
 func _use_passthrough_overlay() -> bool:
-	var value := OS.get_environment(PASSTHROUGH_OVERLAY_ENV).strip_edges().to_lower()
-	return ["1", "true", "yes", "on"].has(value)
+	return _passthrough_overlay_presenter.overlay_enabled_from_env(PASSTHROUGH_OVERLAY_ENV)
 
 
 func _build_passthrough_overlay_layer() -> void:
-	if not _passthrough_overlay_enabled:
-		return
-	if not _xr_active:
-		return
-	_passthrough_overlay_viewport = SubViewport.new()
-	_passthrough_overlay_viewport.name = "PassthroughOverlayViewport"
-	_passthrough_overlay_viewport.size = PASSTHROUGH_OVERLAY_VIEWPORT_SIZE
-	_passthrough_overlay_viewport.transparent_bg = true
-	_passthrough_overlay_viewport.disable_3d = true
-	_passthrough_overlay_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	add_child(_passthrough_overlay_viewport)
-	_passthrough_overlay_viewport.add_child(_make_passthrough_overlay_ui())
-
-	_passthrough_overlay_layer = OpenXRCompositionLayerQuad.new()
-	_passthrough_overlay_layer.name = "AntmanPassthroughOverlayLayer"
-	_passthrough_overlay_layer.layer_viewport = _passthrough_overlay_viewport
-	_passthrough_overlay_layer.quad_size = PASSTHROUGH_OVERLAY_QUAD_SIZE_M
-	# Antman_Smart gotcha: default false makes transparent viewport areas compose as black.
-	_passthrough_overlay_layer.alpha_blend = true
-	_passthrough_overlay_layer.visible = true
-	add_child(_passthrough_overlay_layer)
+	_passthrough_overlay_presenter.build_layer(self, _xr_active, _passthrough_overlay_enabled)
 	_update_passthrough_overlay_layer()
 
 
 func _make_passthrough_overlay_ui() -> Control:
-	var root := Control.new()
-	root.name = "PassthroughOverlayUI"
-	root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	root.size = Vector2(PASSTHROUGH_OVERLAY_VIEWPORT_SIZE)
-
-	var panel := ColorRect.new()
-	panel.name = "PassthroughOverlayPanel"
-	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
-	panel.color = Color(0.05, 1.0, 0.35, 0.58)
-	root.add_child(panel)
-
-	var label := Label.new()
-	label.name = "PassthroughOverlayLabel"
-	label.text = "PASSTHROUGH OVERLAY"
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.set_anchors_preset(Control.PRESET_FULL_RECT)
-	label.add_theme_font_size_override("font_size", 34)
-	label.add_theme_color_override("font_color", Color(0.0, 0.05, 0.02, 1.0))
-	root.add_child(label)
-	return root
+	return Control.new()
 
 
 ## Delegates camera/origin construction to xr_bootstrap.gd (XROrigin3D +
@@ -688,27 +651,17 @@ func _process(delta: float) -> void:
 
 
 func _update_passthrough_overlay_layer() -> void:
-	if not _passthrough_overlay_enabled:
-		return
-	if _passthrough_overlay_layer == null or _camera == null:
-		return
-	var camera_transform := _camera.global_transform
-	var world_position: Vector3 = camera_transform * Vector3(0.0, 0.0, -PASSTHROUGH_OVERLAY_DEPTH_M)
-	_passthrough_overlay_layer.global_transform = Transform3D(camera_transform.basis, world_position)
+	_passthrough_overlay_presenter.update_layer(_camera)
 
 
 func _passthrough_overlay_layer_alpha_blend() -> bool:
-	if _passthrough_overlay_layer == null:
-		return false
-	return bool(_passthrough_overlay_layer.alpha_blend)
+	return _passthrough_overlay_presenter.layer_alpha_blend()
 
 
 # Untyped return: Vector3 when the layer exists, null otherwise (StatusHud
 # formats null as "n/a").
 func _passthrough_overlay_layer_position():
-	if _passthrough_overlay_layer == null:
-		return null
-	return _passthrough_overlay_layer.global_transform.origin
+	return _passthrough_overlay_presenter.layer_position()
 
 
 func _build_vst_target_proxy() -> void:
@@ -1104,15 +1057,11 @@ func _build_proxy_targets_status_snapshot() -> Dictionary:
 
 
 func _build_passthrough_overlay_status_snapshot() -> Dictionary:
-	return _status_snapshot_composer.build_passthrough_overlay_status_snapshot({
-		"enabled": _passthrough_overlay_enabled,
-		"requested_blend_mode": _passthrough_overlay_requested_blend_mode,
-		"blend_request_ok": _passthrough_overlay_blend_ok,
-		"layer_created": _passthrough_overlay_layer != null,
-		"layer_visible": _passthrough_overlay_layer.visible if _passthrough_overlay_layer != null else false,
-		"layer_alpha_blend": _passthrough_overlay_layer_alpha_blend(),
-		"layer_position": _passthrough_overlay_layer_position(),
-	})
+	return _status_snapshot_composer.build_passthrough_overlay_status_snapshot(_passthrough_overlay_presenter.status_values(
+		_passthrough_overlay_enabled,
+		_passthrough_overlay_requested_blend_mode,
+		_passthrough_overlay_blend_ok
+	))
 
 
 func _exit_tree() -> void:
