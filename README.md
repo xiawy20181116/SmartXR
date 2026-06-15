@@ -1,5 +1,7 @@
 # SmartXR
 
+[![CI](https://github.com/xiawy20181116/SmartXR/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/xiawy20181116/SmartXR/actions/workflows/ci.yml)
+
 ## PCMR overlay visual check
 
 For manual headset inspection of the Antman passthrough overlay:
