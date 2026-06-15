@@ -1,9 +1,19 @@
 # HANDOFF
 
-## State (after M4 step 1, YAN-80)
+## State (after VSTCapture extraction, YAN-99)
 
 - All 148 Python tests pass (`python -m unittest tests/test_*.py`).
 - Schema gate passes on both fixtures.
+- **YAN-99 done**: VSTCapture extraction moved GXRDualVstCapture setup,
+  ncnn tracker asset staging, right-frame polling, tracker boxes,
+  calibration diagnostics, and bbox-to-head math into
+  `godot-android/scripts/vst_capture.gd` (`VSTCapture`). The card now wires
+  callbacks for raw-image texture updates, debug bbox overlays, and target
+  updates while keeping public APIs (`register_node3d_target`,
+  `attach_to_target`, `update_vst_target`) unchanged. Docs:
+  `docs/vst_capture.md`. Probe:
+  `tools/run_godot_vst_capture_probe.ps1` →
+  `godot-android/tests/script_only_vst_capture_probe.gd`.
 - **M4 step 1 done** (YAN-80): the duplicated bbox→head math —
   `smartxr/geometry.py` vs `_anchor_from_bbox` /
   `_convert_vst_camera_point_to_head_convention` /
@@ -138,7 +148,8 @@
 - Scripts that script-only probes load must not self-reference their own
   `class_name` (it is unregistered in no-project mode). `smartxr_options.gd`,
   `status_hud.gd`, `target_registry.gd`, `ws_transport.gd`,
-  `card_attachment.gd`, `xr_bootstrap.gd`, and `target_source.gd` follow the rule; keep it for
+  `card_attachment.gd`, `xr_bootstrap.gd`, `target_source.gd`, and
+  `vst_capture.gd` follow the rule; keep it for
   future probe-visible scripts. Inner-class references (`Node3DTargetAdapter` inside
   `target_registry.gd`) are script-scoped and safe. The card's untyped
   helpers (`_proxy_targets_card_resolved_position()` etc.) intentionally
@@ -158,9 +169,9 @@
   `docs/pcmr_overlay_visual_check.md`. Use
   `tools/run_windows_pcmr_proxy_targets_live.ps1` for automated pass/fail
   validation; use the overlay visual check runner for human headset inspection.
-- GDScript bbox math in `AndroidMovingCard.gd` still duplicates
-  `smartxr/geometry.py` by design until M4-3; both sides are now
-  locked to `godot-android/fixtures/bbox_math_test_vectors.json`, so any
+- GDScript bbox math is now owned by `VSTCapture`; compatibility wrappers in
+  `AndroidMovingCard.gd` keep the existing bbox probe/public debug path stable.
+  It remains locked to `godot-android/fixtures/bbox_math_test_vectors.json`, so any
   move that changes the numbers fails the probe or the Python suite. The
   full-chain vectors are authored with the card's FOV consts (70/43); the
   probe fails on FOV drift (`chain:*:fov_matches_card`), so changing

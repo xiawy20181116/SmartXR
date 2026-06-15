@@ -19,6 +19,7 @@ NCNN_BIN = NCNN_DIR / "yolov8n_320.opt.ncnn.bin"
 JNI_DEBUG = ANDROID / "android" / "build" / "libs" / "debug" / "arm64-v8a"
 JNI_RELEASE = ANDROID / "android" / "build" / "libs" / "release" / "arm64-v8a"
 SCRIPT = ANDROID / "scripts" / "AndroidMovingCard.gd"
+VST_CAPTURE = ANDROID / "scripts" / "vst_capture.gd"
 # Status-line rendering moved to the StatusHud subsystem in M3 step 1 (YAN-74);
 # the card assembles the xr/vst snapshots that feed those lines.
 STATUS_HUD = ANDROID / "scripts" / "status_hud.gd"
@@ -107,17 +108,18 @@ class VstNcnnPortLayoutTests(unittest.TestCase):
 class AndroidMovingCardVstScaffoldTests(unittest.TestCase):
     def setUp(self):
         self.source = SCRIPT.read_text(encoding="utf-8")
+        self.vst_capture = VST_CAPTURE.read_text(encoding="utf-8")
 
     def test_script_probes_for_dual_vst_capture_class(self):
-        self.assertIn('ClassDB.class_exists(&"GXRDualVstCapture")', self.source)
-        self.assertIn('ClassDB.instantiate(&"GXRDualVstCapture")', self.source)
+        self.assertIn('ClassDB.class_exists(&"GXRDualVstCapture")', self.vst_capture)
+        self.assertIn('ClassDB.instantiate(&"GXRDualVstCapture")', self.vst_capture)
 
     def test_script_stages_ncnn_model_to_user_dir(self):
         self.assertIn('"res://ncnn/yolov8n_320.opt.ncnn.param"', self.source)
         self.assertIn('"res://ncnn/yolov8n_320.opt.ncnn.bin"', self.source)
         self.assertIn('"user://ncnn/yolov8n_320.opt.ncnn.param"', self.source)
         self.assertIn('"user://ncnn/yolov8n_320.opt.ncnn.bin"', self.source)
-        self.assertIn("_stage_vst_tracker_asset(", self.source)
+        self.assertIn("_stage_vst_tracker_asset(", self.vst_capture)
 
     def test_android_export_includes_ncnn_model_assets(self):
         export_presets = (ANDROID / "export_presets.cfg").read_text(encoding="utf-8")
@@ -125,16 +127,17 @@ class AndroidMovingCardVstScaffoldTests(unittest.TestCase):
         self.assertIn('include_filter="ncnn/*.param,ncnn/*.bin"', export_presets)
 
     def test_script_configures_right_tracker_model(self):
-        self.assertIn("_configure_vst_right_tracker_model()", self.source)
-        self.assertIn('configure_right_tracker_model', self.source)
+        self.assertIn("_configure_vst_right_tracker_model()", self.vst_capture)
+        self.assertIn('configure_right_tracker_model', self.vst_capture)
         self.assertIn("VST_RIGHT_TRACKER_FRAME_STRIDE", self.source)
 
     def test_script_polls_right_tracker_boxes_each_frame(self):
         self.assertIn("_poll_vst_bbox()", self.source)
-        self.assertIn("get_right_tracker_boxes", self.source)
-        self.assertIn("has_new_frame_right", self.source)
-        self.assertIn("capture_frame_right", self.source)
-        self.assertIn("get_right_tracker_total_latency_ms", self.source)
+        self.assertIn("_vst_capture.poll()", self.source)
+        self.assertIn("get_right_tracker_boxes", self.vst_capture)
+        self.assertIn("has_new_frame_right", self.vst_capture)
+        self.assertIn("capture_frame_right", self.vst_capture)
+        self.assertIn("get_right_tracker_total_latency_ms", self.vst_capture)
 
     def test_script_reports_vst_diagnostics_in_status_label(self):
         hud = STATUS_HUD.read_text(encoding="utf-8")
@@ -155,9 +158,9 @@ class AndroidMovingCardVstScaffoldTests(unittest.TestCase):
         self.assertIn("_xr_init_error", self.source)
 
     def test_script_does_not_enable_vst_when_openxr_is_inactive(self):
-        setup_index = self.source.index("func _setup_vst_capture()")
-        gated_index = self.source.index("if not _xr_active:", setup_index)
-        class_probe_index = self.source.index('ClassDB.class_exists(&"GXRDualVstCapture")', setup_index)
+        setup_index = self.vst_capture.index("func setup_capture(xr_active: bool) -> void:")
+        gated_index = self.vst_capture.index("if not xr_active:", setup_index)
+        class_probe_index = self.vst_capture.index('ClassDB.class_exists(&"GXRDualVstCapture")', setup_index)
         self.assertLess(gated_index, class_probe_index)
 
     def test_script_has_simple_xr_render_probe(self):
@@ -176,19 +179,19 @@ class AndroidMovingCardVstScaffoldTests(unittest.TestCase):
         self.assertIn("const BBOX_IMAGE_SIZE := Vector2(872.0, 652.0)", self.source)
 
     def test_vst_tracker_boxes_are_normalized_xywh(self):
-        self.assertIn("var x := clampf(float(boxes[0]), 0.0, 1.0)", self.source)
-        self.assertIn("var y := clampf(float(boxes[1]), 0.0, 1.0)", self.source)
-        self.assertIn("var w := clampf(float(boxes[2]), 0.02, 1.0)", self.source)
-        self.assertIn("_bbox_center_px = Vector2((x + w * 0.5) * _vst_right_image_size.x", self.source)
+        self.assertIn("var x := clampf(float(boxes[0]), 0.0, 1.0)", self.vst_capture)
+        self.assertIn("var y := clampf(float(boxes[1]), 0.0, 1.0)", self.vst_capture)
+        self.assertIn("var w := clampf(float(boxes[2]), 0.02, 1.0)", self.vst_capture)
+        self.assertIn("var center_px := Vector2((x + w * 0.5) * _right_image_size.x", self.vst_capture)
 
     def test_script_and_extension_expose_runtime_calibration_diagnostics(self):
-        self.assertIn("const GXR_CAL_CV_DEWARP_R := 0x00400061", self.source)
-        self.assertIn("const GXR_CAL_CV_SLAM := 0x00400070", self.source)
-        self.assertIn("_refresh_vst_calibration_diagnostics()", self.source)
-        self.assertIn("_vst_eye_to_head_status", self.source)
-        self.assertIn("_vst_calibration_status", self.source)
-        self.assertIn("get_eye_to_head_matrices", self.source)
-        self.assertIn("get_calibration_coeff_info", self.source)
+        self.assertIn("const GXR_CAL_CV_DEWARP_R := 0x00400061", self.vst_capture)
+        self.assertIn("const GXR_CAL_CV_SLAM := 0x00400070", self.vst_capture)
+        self.assertIn("_refresh_vst_calibration_diagnostics()", self.vst_capture)
+        self.assertIn("_eye_to_head_status", self.vst_capture)
+        self.assertIn("_calibration_status", self.vst_capture)
+        self.assertIn("get_eye_to_head_matrices", self.vst_capture)
+        self.assertIn("get_calibration_coeff_info", self.vst_capture)
 
         debug_binary = (ADDON_SO / "libgxr_sdk.android.template_debug.arm64.so").read_bytes()
         release_binary = (ADDON_SO / "libgxr_sdk.android.template_release.arm64.so").read_bytes()
