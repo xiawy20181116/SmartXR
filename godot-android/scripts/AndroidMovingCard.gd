@@ -46,6 +46,7 @@ const CardViewScript := preload("res://scripts/card_view.gd")
 const CommandDispatcherScript := preload("res://scripts/command_dispatcher.gd")
 const ProxyTargetsConsumerScript := preload("res://scripts/proxy_targets_consumer.gd")
 const ProxyTargetsCardAdapterScript := preload("res://scripts/proxy_targets_card_adapter.gd")
+const ProxyTargetsStatusFragmentScript := preload("res://scripts/proxy_targets_status_fragment.gd")
 const PassthroughOverlayPresenterScript := preload("res://scripts/passthrough_overlay_presenter.gd")
 const SmartXROptionsScript := preload("res://scripts/smartxr_options.gd")
 const StatusHudScript := preload("res://scripts/status_hud.gd")
@@ -160,17 +161,8 @@ var _proxy_targets_target_source = null
 # Second WSTransport instance (see _control_ws above): the proxy_targets
 # stream adds the subscribe-once-on-open payload on top of the same loop.
 var _proxy_targets_ws = WSTransportScript.new()
-var _proxy_targets_parsed_messages := 0
 var _proxy_targets_live_messages := 0
-var _proxy_targets_last_sequence := -1
-var _proxy_targets_last_position := Vector3.ZERO
-var _proxy_targets_last_packet_preview := "-"
-var _proxy_targets_last_message_type := "-"
-var _proxy_targets_last_error := "-"
-var _proxy_targets_last_source_coordinate := {}
-var _proxy_targets_last_world_from_head_applied := false
-var _proxy_targets_last_local_position := Vector3.ZERO
-var _proxy_targets_last_world_position := Vector3.ZERO
+var _proxy_targets_status_fragment = ProxyTargetsStatusFragmentScript.new()
 var _proxy_targets_card_apply_count := 0
 var _passthrough_overlay_enabled := false
 var _passthrough_overlay_blend_ok := false
@@ -398,71 +390,43 @@ func _poll_proxy_targets_ws(delta: float) -> void:
 
 
 func _on_proxy_targets_ws_packet(payload: String) -> void:
-	_proxy_targets_last_packet_preview = StatusHudScript.sanitize_status_text(payload)
+	_proxy_targets_status_fragment.set_packet_preview(StatusHudScript.sanitize_status_text(payload))
 	_apply_proxy_targets_live_payload(payload)
 
 
 func _apply_proxy_targets_live_payload(payload: String) -> void:
 	if _proxy_targets_target_source == null:
-		_proxy_targets_last_error = "adapter_null"
+		_proxy_targets_status_fragment.set_error("adapter_null")
 		return
 	var applied: bool = bool(_proxy_targets_target_source.apply_proxy_targets_json(payload))
 	var source_error := str(_proxy_targets_target_source.last_error())
 	if source_error == "json_invalid":
-		_proxy_targets_last_message_type = "invalid"
-		_proxy_targets_last_error = "json_invalid"
+		_proxy_targets_status_fragment.set_message_type("invalid")
+		_proxy_targets_status_fragment.set_error("json_invalid")
 		_last_command = "proxy_live_invalid"
 		return
 	if applied:
 		_proxy_targets_live_messages += 1
-		_proxy_targets_last_error = "-"
+		_proxy_targets_status_fragment.set_error("-")
 		_last_command = "proxy_live"
 	else:
-		_proxy_targets_last_error = source_error
+		_proxy_targets_status_fragment.set_error(source_error)
 		_last_command = "proxy_live_failed"
 
 
 func _on_proxy_targets_message_parsed(message: Dictionary) -> void:
-	_proxy_targets_parsed_messages += 1
-	_record_proxy_targets_diagnostics(message)
+	_proxy_targets_status_fragment.record_parsed_message(message, _proxy_targets_head_to_world_info())
 
 
-func _record_proxy_targets_diagnostics(message: Dictionary) -> void:
-	_proxy_targets_last_message_type = str(message.get("type", "-"))
-	_proxy_targets_last_sequence = int(message.get("sequence", _proxy_targets_last_sequence))
-	var targets = message.get("targets", [])
-	if not (targets is Array) or targets.is_empty():
-		return
-	var target = targets[0]
-	if typeof(target) != TYPE_DICTIONARY:
-		return
-	var transform = target.get("transform", {})
-	if typeof(transform) != TYPE_DICTIONARY:
-		return
-	var position = transform.get("position", [])
-	if not (position is Array) or position.size() < 3:
-		return
-	_proxy_targets_last_position = Vector3(float(position[0]), float(position[1]), float(position[2]))
-	var source_coordinate = target.get("source_coordinate", {})
-	if typeof(source_coordinate) == TYPE_DICTIONARY:
-		_proxy_targets_last_source_coordinate = source_coordinate.duplicate(true)
-	else:
-		_proxy_targets_last_source_coordinate = {}
-	_record_proxy_targets_head_to_world_diagnostics()
-
-
-func _record_proxy_targets_head_to_world_diagnostics() -> void:
-	_proxy_targets_last_world_from_head_applied = false
+func _proxy_targets_head_to_world_info() -> Dictionary:
 	if _proxy_targets_consumer == null:
-		return
+		return {}
 	if not _proxy_targets_consumer.has_method("get_last_applied_target_info"):
-		return
+		return {}
 	var info = _proxy_targets_consumer.get_last_applied_target_info()
 	if typeof(info) != TYPE_DICTIONARY:
-		return
-	_proxy_targets_last_world_from_head_applied = bool(info.get("world_from_head_applied", false))
-	_proxy_targets_last_local_position = _vector3_from_status_array(info.get("local_position", []), _proxy_targets_last_local_position)
-	_proxy_targets_last_world_position = _vector3_from_status_array(info.get("world_position", []), _proxy_targets_last_world_position)
+		return {}
+	return info
 
 
 func _proxy_targets_card_target_id() -> String:
@@ -470,35 +434,19 @@ func _proxy_targets_card_target_id() -> String:
 
 
 func _proxy_targets_proxy_count() -> int:
-	if _proxy_targets_consumer == null:
-		return 0
-	if not _proxy_targets_consumer.has_method("get_proxy_targets"):
-		return 0
-	var targets = _proxy_targets_consumer.get_proxy_targets()
-	if typeof(targets) != TYPE_DICTIONARY:
-		return 0
-	return targets.size()
+	return ProxyTargetsStatusFragmentScript.proxy_target_count(_proxy_targets_proxy_dictionary())
 
 
 func _proxy_targets_proxy_ids() -> Array:
+	return ProxyTargetsStatusFragmentScript.proxy_target_ids(_proxy_targets_proxy_dictionary())
+
+
+func _proxy_targets_proxy_dictionary():
 	if _proxy_targets_consumer == null:
-		return []
+		return {}
 	if not _proxy_targets_consumer.has_method("get_proxy_targets"):
-		return []
-	var targets = _proxy_targets_consumer.get_proxy_targets()
-	if typeof(targets) != TYPE_DICTIONARY:
-		return []
-	var ids := []
-	for target_id in targets.keys():
-		ids.append(str(target_id))
-	ids.sort()
-	return ids
-
-
-func _vector3_from_status_array(value, fallback: Vector3) -> Vector3:
-	if typeof(value) != TYPE_ARRAY or value.size() < 3:
-		return fallback
-	return Vector3(float(value[0]), float(value[1]), float(value[2]))
+		return {}
+	return _proxy_targets_consumer.get_proxy_targets()
 
 
 # Untyped returns: Vector3 when resolvable, null otherwise. StatusHud formats
@@ -934,7 +882,7 @@ func _build_vst_status_snapshot() -> Dictionary:
 
 
 func _build_proxy_targets_status_snapshot() -> Dictionary:
-	return _status_snapshot_composer.build_proxy_targets_status_snapshot({
+	return _status_snapshot_composer.build_proxy_targets_status_snapshot(_proxy_targets_status_fragment.status_values({
 		"ws_connected": _proxy_targets_ws.ws_connected(),
 		"ws_subscribed": _proxy_targets_ws.ws_subscribed(),
 		"ws_url": _proxy_targets_ws_url(),
@@ -942,23 +890,13 @@ func _build_proxy_targets_status_snapshot() -> Dictionary:
 		"card_target_id": _proxy_targets_card_target_id(),
 		"proxy_target_count": _proxy_targets_proxy_count(),
 		"proxy_target_ids": _proxy_targets_proxy_ids(),
-		"last_position": _proxy_targets_last_position,
 		"card_resolved_position": _proxy_targets_card_resolved_position(),
 		"card_node_position": _proxy_targets_card_node_position(),
 		"card_apply_count": _proxy_targets_card_apply_count,
 		"packets": _proxy_targets_ws.packets_seen(),
-		"parsed": _proxy_targets_parsed_messages,
 		"live": _proxy_targets_live_messages,
-		"sequence": _proxy_targets_last_sequence,
 		"packet_bytes": _proxy_targets_ws.last_packet_bytes(),
-		"packet_preview": _proxy_targets_last_packet_preview,
-		"message_type": _proxy_targets_last_message_type,
-		"source_coordinate": _proxy_targets_last_source_coordinate,
-		"world_from_head_applied": _proxy_targets_last_world_from_head_applied,
-		"local_position": _proxy_targets_last_local_position,
-		"world_position": _proxy_targets_last_world_position,
-		"error": _proxy_targets_last_error,
-	})
+	}))
 
 
 func _build_passthrough_overlay_status_snapshot() -> Dictionary:
