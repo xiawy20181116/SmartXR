@@ -83,6 +83,14 @@ script-only probe locks that shape headless, so this refactor remains in the
 Windows / script-only verification tier and does not require real-device VST
 smoke testing.
 
+*Update (YAN-103 A3 overlay slice):* passthrough overlay scene-node ownership is
+now split into `godot-android/scripts/passthrough_overlay_presenter.gd`. The card
+keeps XR lifecycle state, env-gated enablement state, and status snapshot
+composition; the presenter owns the transparent overlay viewport, UI,
+`OpenXRCompositionLayerQuad`, camera-relative transform update, alpha/position
+helpers, and overlay status values. The script-only probe covers the boundary
+without live Godot project runs, PCMR, proxy_targets, or headset smoke tests.
+
 ## ADR-5: Shared JSON test vectors lock the duplicated bbox math (M4-1)
 
 **Context.** The bbox→head math exists twice on purpose until M4-2/M4-3:

@@ -32,6 +32,7 @@ powershell -ExecutionPolicy Bypass -File tools/run_godot_ws_transport_probe.ps1 
 powershell -ExecutionPolicy Bypass -File tools/run_godot_card_attachment_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_xr_bootstrap_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_status_snapshot_composer_probe.ps1 -GodotExe $env:GODOT_BIN
+powershell -ExecutionPolicy Bypass -File tools/run_godot_passthrough_overlay_presenter_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_target_source_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_vst_capture_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_vst_debug_ui_probe.ps1 -GodotExe $env:GODOT_BIN
@@ -54,3 +55,6 @@ should make the job pass again.
 
 The StatusSnapshotComposer probe guards the dependency-free status Dictionary
 layout used by `AndroidMovingCard.gd` and `StatusHud`.
+
+The PassthroughOverlayPresenter probe guards the dependency-free overlay
+viewport/layer/UI construction and camera-relative transform update.
