@@ -31,6 +31,7 @@ powershell -ExecutionPolicy Bypass -File tools/run_godot_target_registry_probe.p
 powershell -ExecutionPolicy Bypass -File tools/run_godot_ws_transport_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_card_attachment_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_command_dispatcher_probe.ps1 -GodotExe $env:GODOT_BIN
+powershell -ExecutionPolicy Bypass -File tools/run_godot_proxy_targets_status_fragment_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_xr_bootstrap_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_status_snapshot_composer_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_passthrough_overlay_presenter_probe.ps1 -GodotExe $env:GODOT_BIN

@@ -27,6 +27,13 @@ CARD_ATTACHMENT = ROOT / "godot-android" / "scripts" / "card_attachment.gd"
 # YAN-104; command alias assertions are pinned there, while the card keeps
 # node side effects and state copy-back.
 COMMAND_DISPATCHER = ROOT / "godot-android" / "scripts" / "command_dispatcher.gd"
+# Proxy target diagnostics/status snapshot assembly moved to
+# scripts/proxy_targets_status_fragment.gd in YAN-104; packet/message state
+# assertions are pinned there, while the card keeps transport and live
+# consumer wiring.
+PROXY_TARGETS_STATUS_FRAGMENT = (
+    ROOT / "godot-android" / "scripts" / "proxy_targets_status_fragment.gd"
+)
 # TrackableTarget / VSTTargetAdapter moved to scripts/target_source.gd in M4
 # step 2 (YAN-84); state-machine assertions are pinned there, bbox math and
 # target-source wiring stay on the card.
@@ -456,6 +463,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         # step 3 (YAN-76); see tests/test_godot_ws_transport.py for the full
         # transport contract.
         transport = WS_TRANSPORT.read_text(encoding="utf-8")
+        fragment = PROXY_TARGETS_STATUS_FRAGMENT.read_text(encoding="utf-8")
 
         self.assertIn("const PROXY_TARGETS_WS_ENABLED := true", source)
         self.assertIn('const PROXY_TARGETS_WS_URL := "ws://127.0.0.1:8766/proxy_targets"', source)
@@ -464,20 +472,20 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("var _proxy_targets_live_messages := 0", source)
         self.assertIn("var _subscribed := false", transport)
         self.assertIn("var _packets_seen := 0", transport)
-        self.assertIn("var _proxy_targets_parsed_messages := 0", source)
-        self.assertIn("var _proxy_targets_last_sequence := -1", source)
-        self.assertIn("var _proxy_targets_last_position := Vector3.ZERO", source)
+        self.assertIn("var _parsed_messages := 0", fragment)
+        self.assertIn("var _last_sequence := -1", fragment)
+        self.assertIn("var _last_position := Vector3.ZERO", fragment)
         self.assertIn("var _last_packet_bytes := 0", transport)
-        self.assertIn('var _proxy_targets_last_packet_preview := "-"', source)
-        self.assertIn('var _proxy_targets_last_message_type := "-"', source)
-        self.assertIn('var _proxy_targets_last_error := "-"', source)
-        self.assertIn("var _proxy_targets_last_source_coordinate := {}", source)
+        self.assertIn('var _last_packet_preview := "-"', fragment)
+        self.assertIn('var _last_message_type := "-"', fragment)
+        self.assertIn('var _last_error := "-"', fragment)
+        self.assertIn("var _last_source_coordinate := {}", fragment)
         self.assertIn("var _proxy_targets_status_write_elapsed := 0.0", hud)
         self.assertIn("func _connect_proxy_targets_ws() -> void:", source)
         self.assertIn("func _poll_proxy_targets_ws(delta: float) -> void:", source)
         self.assertIn("func _send_subscribe_once() -> void:", transport)
         self.assertIn("func _apply_proxy_targets_live_payload(payload: String) -> void:", source)
-        self.assertIn("func _record_proxy_targets_diagnostics(message: Dictionary) -> void:", source)
+        self.assertIn("func record_parsed_message(message: Dictionary, head_info: Dictionary = {}) -> void:", fragment)
         self.assertIn("func _write_proxy_targets_status_file(snapshot: Dictionary, delta: float) -> void:", hud)
         self.assertIn("func _format_proxy_targets_status_line(proxy: Dictionary) -> String:", hud)
         self.assertIn("_connect_proxy_targets_ws()", source)
@@ -495,10 +503,10 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("connect_to_url(url)", transport)
         self.assertIn("_packets_seen += 1", transport)
         self.assertIn("_last_packet_bytes = packet.size()", transport)
-        self.assertIn("_proxy_targets_last_packet_preview = StatusHudScript.sanitize_status_text(payload)", source)
+        self.assertIn("_proxy_targets_status_fragment.set_packet_preview(StatusHudScript.sanitize_status_text(payload))", source)
         self.assertIn("_proxy_targets_target_source.apply_proxy_targets_json(payload)", source)
         self.assertIn("func _on_proxy_targets_message_parsed(message: Dictionary) -> void:", source)
-        self.assertIn("_record_proxy_targets_diagnostics(message)", source)
+        self.assertIn("_proxy_targets_status_fragment.record_parsed_message(message, _proxy_targets_head_to_world_info())", source)
         # Per-frame seam: the card assembles the snapshot, StatusHud writes the files.
         self.assertIn("_update_status_hud(delta)", source)
         self.assertIn("_status_hud.write_status_files(snapshot, delta)", source)
@@ -521,8 +529,8 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("func _proxy_targets_card_resolved_position():", source)
         self.assertIn("func _proxy_targets_card_node_position():", source)
         self.assertIn("_proxy_targets_card_apply_count += 1", source)
-        self.assertIn('"packet_preview": _proxy_targets_last_packet_preview', source)
-        self.assertIn('"source_coordinate": _proxy_targets_last_source_coordinate', source)
+        self.assertIn('"packet_preview": _last_packet_preview', fragment)
+        self.assertIn('"source_coordinate": _last_source_coordinate', fragment)
         self.assertIn('"source_coordinate_summary": _source_coordinate_summary(proxy.get("source_coordinate", {}))', hud)
         self.assertIn("func _source_coordinate_summary(source_coordinate: Dictionary) -> String:", hud)
         self.assertLess(source.index("_proxy_targets_target_source.apply_proxy_targets_json(payload)"), source.index('_last_command = "proxy_live"'))
@@ -578,15 +586,16 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
     def test_proxy_targets_status_reports_head_to_world_diagnostics(self):
         source = SCRIPT.read_text(encoding="utf-8")
         hud = STATUS_HUD.read_text(encoding="utf-8")
+        fragment = PROXY_TARGETS_STATUS_FRAGMENT.read_text(encoding="utf-8")
 
         self.assertIn("_proxy_targets_consumer.set_head_reference(_camera)", source)
-        self.assertIn("var _proxy_targets_last_world_from_head_applied := false", source)
-        self.assertIn("var _proxy_targets_last_local_position := Vector3.ZERO", source)
-        self.assertIn("var _proxy_targets_last_world_position := Vector3.ZERO", source)
+        self.assertIn("var _last_world_from_head_applied := false", fragment)
+        self.assertIn("var _last_local_position := Vector3.ZERO", fragment)
+        self.assertIn("var _last_world_position := Vector3.ZERO", fragment)
         self.assertIn("get_last_applied_target_info", source)
-        self.assertIn('"world_from_head_applied": _proxy_targets_last_world_from_head_applied', source)
-        self.assertIn('"local_position": _proxy_targets_last_local_position', source)
-        self.assertIn('"world_position": _proxy_targets_last_world_position', source)
+        self.assertIn('"world_from_head_applied": _last_world_from_head_applied', fragment)
+        self.assertIn('"local_position": _last_local_position', fragment)
+        self.assertIn('"world_position": _last_world_position', fragment)
         self.assertIn('"proxy_local_position": _format_vec3(proxy.get("local_position", Vector3.ZERO))', hud)
         self.assertIn('"proxy_world_position": _format_vec3(proxy.get("world_position", Vector3.ZERO))', hud)
 
