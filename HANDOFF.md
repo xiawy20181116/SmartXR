@@ -1,7 +1,14 @@
 # HANDOFF
 
-## State (after PassthroughOverlayPresenter extraction, YAN-103 second slice)
+## State (after CardView extraction, YAN-103 final slice)
 
+- **YAN-103 final slice done**: main card viewport/mesh/UI ownership moved from
+  `AndroidMovingCard.gd` into `godot-android/scripts/card_view.gd`. CardView
+  owns `CardViewport`, `MovingCardUI`, `CardAnchor`, `CardPanel`, the
+  viewport-texture material binding, and the red `XRRenderProbe`. The card keeps
+  motion, orientation, target attachment, XR/VST/proxy orchestration, public
+  API, status snapshots, and retained node handles. Docs:
+  `docs/card_view.md`. Probe: `tools/run_godot_card_view_probe.ps1`.
 - **YAN-103 second slice done**: passthrough overlay scene-node ownership moved
   from `AndroidMovingCard.gd` into
   `godot-android/scripts/passthrough_overlay_presenter.gd`. The presenter owns
