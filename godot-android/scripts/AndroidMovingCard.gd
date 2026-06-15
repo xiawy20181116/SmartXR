@@ -43,6 +43,7 @@ const PASSTHROUGH_OVERLAY_QUAD_SIZE_M := Vector2(0.42, 0.20)
 const PASSTHROUGH_OVERLAY_DEPTH_M := 1.5
 const CardAttachmentScript := preload("res://scripts/card_attachment.gd")
 const CardViewScript := preload("res://scripts/card_view.gd")
+const CommandDispatcherScript := preload("res://scripts/command_dispatcher.gd")
 const ProxyTargetsConsumerScript := preload("res://scripts/proxy_targets_consumer.gd")
 const ProxyTargetsCardAdapterScript := preload("res://scripts/proxy_targets_card_adapter.gd")
 const PassthroughOverlayPresenterScript := preload("res://scripts/passthrough_overlay_presenter.gd")
@@ -135,6 +136,7 @@ var _bbox_angular_size_deg := Vector2.ZERO
 var _paused := false
 var _face_camera_enabled := true
 var _last_command := "none"
+var _command_dispatcher_config := CommandDispatcherScript.default_config()
 # Target registry subsystem (scripts/target_registry.gd): id -> adapter
 # bookkeeping plus the Node3D/NodePath adapter, extracted in M3 step 2.
 # Untyped `=` on purpose (no class_name reference) so script-only probes can
@@ -707,79 +709,62 @@ func _handle_packet(payload: String) -> void:
 
 
 func _apply_command(command: String) -> void:
-	_last_command = command
-	match command:
-		"yaw_left", "left", "move_left", "a":
-			_anchor_mode = "manual"
-			_anchor_yaw_deg -= CARD_YAW_STEP_DEG
-		"yaw_right", "right", "move_right", "d":
-			_anchor_mode = "manual"
-			_anchor_yaw_deg += CARD_YAW_STEP_DEG
-		"pitch_up", "up", "move_up", "w":
-			_anchor_mode = "manual"
-			_anchor_pitch_deg += CARD_PITCH_STEP_DEG
-		"pitch_down", "down", "move_down", "s":
-			_anchor_mode = "manual"
-			_anchor_pitch_deg -= CARD_PITCH_STEP_DEG
-		"depth_in", "closer":
-			_anchor_mode = "manual"
-			_anchor_depth_m = clampf(_anchor_depth_m - CARD_DEPTH_STEP_M, MIN_DEPTH_M, MAX_DEPTH_M)
-		"depth_out", "farther":
-			_anchor_mode = "manual"
-			_anchor_depth_m = clampf(_anchor_depth_m + CARD_DEPTH_STEP_M, MIN_DEPTH_M, MAX_DEPTH_M)
-		"toggle_bbox_mode":
-			_anchor_mode = "manual" if _anchor_mode == "bbox" else "bbox"
-			if _anchor_mode == "bbox":
+	var next_state: Dictionary = CommandDispatcherScript.apply_command(
+		_command_state(),
+		command,
+		_command_dispatcher_config
+	)
+	_apply_command_state(next_state)
+	_run_command_effects(Array(next_state.get("effects", [])))
+
+
+func _command_state() -> Dictionary:
+	return {
+		"speed_deg_per_second": _speed_deg_per_second,
+		"anchor_yaw_deg": _anchor_yaw_deg,
+		"anchor_pitch_deg": _anchor_pitch_deg,
+		"anchor_depth_m": _anchor_depth_m,
+		"anchor_mode": _anchor_mode,
+		"bbox_center_px": _bbox_center_px,
+		"bbox_size_px": _bbox_size_px,
+		"bbox_image_size": _bbox_image_size,
+		"bbox_depth_m": _bbox_depth_m,
+		"bbox_angular_size_deg": _bbox_angular_size_deg,
+		"paused": _paused,
+		"last_command": _last_command,
+	}
+
+
+func _apply_command_state(next_state: Dictionary) -> void:
+	_speed_deg_per_second = float(next_state.get("speed_deg_per_second", _speed_deg_per_second))
+	_anchor_yaw_deg = float(next_state.get("anchor_yaw_deg", _anchor_yaw_deg))
+	_anchor_pitch_deg = float(next_state.get("anchor_pitch_deg", _anchor_pitch_deg))
+	_anchor_depth_m = float(next_state.get("anchor_depth_m", _anchor_depth_m))
+	_anchor_mode = str(next_state.get("anchor_mode", _anchor_mode))
+	_bbox_center_px = Vector2(next_state.get("bbox_center_px", _bbox_center_px))
+	_bbox_size_px = Vector2(next_state.get("bbox_size_px", _bbox_size_px))
+	_bbox_image_size = Vector2(next_state.get("bbox_image_size", _bbox_image_size))
+	_bbox_depth_m = float(next_state.get("bbox_depth_m", _bbox_depth_m))
+	_bbox_angular_size_deg = Vector2(next_state.get("bbox_angular_size_deg", _bbox_angular_size_deg))
+	_paused = bool(next_state.get("paused", _paused))
+	_last_command = str(next_state.get("last_command", _last_command))
+
+
+func _run_command_effects(effects: Array) -> void:
+	for effect in effects:
+		match str(effect):
+			CommandDispatcherScript.EFFECT_APPLY_BBOX_ANCHOR:
 				_apply_bbox_anchor()
-		"bbox_left":
-			_anchor_mode = "bbox"
-			_bbox_center_px.x = clampf(_bbox_center_px.x - BBOX_CENTER_STEP_PX, 0.0, _bbox_image_size.x)
-			_apply_bbox_anchor()
-		"bbox_right":
-			_anchor_mode = "bbox"
-			_bbox_center_px.x = clampf(_bbox_center_px.x + BBOX_CENTER_STEP_PX, 0.0, _bbox_image_size.x)
-			_apply_bbox_anchor()
-		"bbox_up":
-			_anchor_mode = "bbox"
-			_bbox_center_px.y = clampf(_bbox_center_px.y - BBOX_CENTER_STEP_PX, 0.0, _bbox_image_size.y)
-			_apply_bbox_anchor()
-		"bbox_down":
-			_anchor_mode = "bbox"
-			_bbox_center_px.y = clampf(_bbox_center_px.y + BBOX_CENTER_STEP_PX, 0.0, _bbox_image_size.y)
-			_apply_bbox_anchor()
-		"bbox_depth_in":
-			_anchor_mode = "bbox"
-			_bbox_depth_m = clampf(_bbox_depth_m - BBOX_DEPTH_STEP_M, MIN_DEPTH_M, MAX_DEPTH_M)
-			_apply_bbox_anchor()
-		"bbox_depth_out":
-			_anchor_mode = "bbox"
-			_bbox_depth_m = clampf(_bbox_depth_m + BBOX_DEPTH_STEP_M, MIN_DEPTH_M, MAX_DEPTH_M)
-			_apply_bbox_anchor()
-		"speed_up", "plus":
-			_speed_deg_per_second = clampf(_speed_deg_per_second + CARD_SPEED_STEP_DEG_PER_SECOND, MIN_SPEED_DEG_PER_SECOND, MAX_SPEED_DEG_PER_SECOND)
-		"speed_down", "minus":
-			_speed_deg_per_second = clampf(_speed_deg_per_second - CARD_SPEED_STEP_DEG_PER_SECOND, MIN_SPEED_DEG_PER_SECOND, MAX_SPEED_DEG_PER_SECOND)
-		"pause", "toggle_pause", "space":
-			_paused = not _paused
-		"debug_target_free":
-			if _debug_target_marker != null and is_instance_valid(_debug_target_marker):
-				_debug_target_marker.queue_free()
-			_debug_target_marker = null
-		"debug_target_reset":
-			_build_debug_target_marker()
-		"reset", "r":
-			_anchor_yaw_deg = CARD_START_YAW_DEG
-			_anchor_pitch_deg = CARD_START_PITCH_DEG
-			_anchor_depth_m = CARD_START_DEPTH_M
-			_anchor_mode = "manual"
-			_bbox_center_px = BBOX_START_CENTER_PX
-			_bbox_size_px = BBOX_START_SIZE_PX
-			_bbox_image_size = BBOX_IMAGE_SIZE
-			_bbox_depth_m = CARD_START_DEPTH_M
-			_bbox_angular_size_deg = Vector2.ZERO
-			_set_vst_bbox_frame_visible(false)
-			_paused = false
-	_apply_3dof_anchor_transform()
+			CommandDispatcherScript.EFFECT_HIDE_VST_BBOX_FRAME:
+				_set_vst_bbox_frame_visible(false)
+			CommandDispatcherScript.EFFECT_DEBUG_TARGET_FREE:
+				if _debug_target_marker != null and is_instance_valid(_debug_target_marker):
+					_debug_target_marker.queue_free()
+				_debug_target_marker = null
+			CommandDispatcherScript.EFFECT_DEBUG_TARGET_RESET:
+				_build_debug_target_marker()
+			CommandDispatcherScript.EFFECT_APPLY_3DOF_ANCHOR:
+				_apply_3dof_anchor_transform()
 
 
 func _apply_bbox_payload(parsed: Dictionary) -> void:

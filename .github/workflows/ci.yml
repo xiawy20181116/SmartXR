@@ -63,6 +63,7 @@ jobs:
             "tools/run_godot_target_registry_probe.ps1",
             "tools/run_godot_ws_transport_probe.ps1",
             "tools/run_godot_card_attachment_probe.ps1",
+            "tools/run_godot_command_dispatcher_probe.ps1",
             "tools/run_godot_xr_bootstrap_probe.ps1",
             "tools/run_godot_status_snapshot_composer_probe.ps1",
             "tools/run_godot_passthrough_overlay_presenter_probe.ps1",
