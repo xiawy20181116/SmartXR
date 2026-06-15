@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    name: Python tests and schema gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --python 3.11 --no-install-project
+
+      - name: Run Python unit tests
+        run: uv run --no-sync python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Run proxy targets schema gate
+        run: >
+          uv run --no-sync python tools/validate_proxy_targets_payload_schema.py
+          --input godot-android/fixtures/proxy_targets_sample.json
+          --input godot-android/fixtures/vst_proxy_targets_sample.json
