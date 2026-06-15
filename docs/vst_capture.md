@@ -5,9 +5,9 @@ capture, right-eye tracker polling, calibration diagnostics, and bbox-to-head
 math that used to live inside `AndroidMovingCard.gd`.
 
 The script is dependency-free and probe-loadable. It owns SDK interaction and
-calculation state; the card keeps scene-side work such as raw-image texture
-updates, debug bbox meshes, target registration, attachment, and final status
-snapshot composition.
+calculation state; the card keeps target registration, attachment, and final
+status snapshot composition. Scene-side VST debug visuals are delegated by the
+card to `VSTDebugUI` (`docs/vst_debug_ui.md`).
 
 ## Responsibilities
 
@@ -28,8 +28,8 @@ The card wires three callbacks:
 
 | Callback | Payload |
 |---|---|
-| `set_raw_image_callback(callable)` | `Image`, image size, and frame count for the raw debug sprite. |
-| `set_boxes_callback(callable)` | Tracker boxes plus image size for the raw-image bbox overlay. |
+| `set_raw_image_callback(callable)` | `Image`, image size, and frame count; the card forwards the visual update to `VSTDebugUI`. |
+| `set_boxes_callback(callable)` | Tracker boxes plus image size; the card forwards raw overlay updates to `VSTDebugUI`. |
 | `set_anchor_callback(callable)` | Bbox center/size/image, angular size, confidence, target transform, and update count for target-source update and diagnostics printing. |
 
 This keeps native polling and math in the subsystem while preserving the card's

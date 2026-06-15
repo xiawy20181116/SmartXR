@@ -24,6 +24,7 @@ class GDScriptProbesCITests(unittest.TestCase):
         self.assertIn("tools/run_godot_card_attachment_probe.ps1", workflow)
         self.assertIn("tools/run_godot_xr_bootstrap_probe.ps1", workflow)
         self.assertIn("tools/run_godot_target_source_probe.ps1", workflow)
+        self.assertIn("tools/run_godot_vst_debug_ui_probe.ps1", workflow)
         self.assertIn("tools/run_godot_bbox_math_probe.ps1", workflow)
         self.assertNotIn("--path godot-android", workflow)
         self.assertNotIn("--path ./godot-android", workflow)

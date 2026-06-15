@@ -123,6 +123,14 @@ side.
   snapshot composition. Runtime probe:
   `tools/run_godot_vst_capture_probe.ps1`; fixture math probe remains
   `tools/run_godot_bbox_math_probe.ps1`. Docs: `docs/vst_capture.md`.
+- [x] **M7 — VSTDebugUI scene/debug visuals** (YAN-100): VST world bbox
+  frame construction/update, raw right-image Sprite3D texture updates, raw
+  bbox overlay quads, and the raw debug label extracted from
+  `AndroidMovingCard.gd` into dependency-free
+  `godot-android/scripts/vst_debug_ui.gd` (`VSTDebugUI`). The card keeps
+  VSTCapture callbacks, bbox state, orientation policy, target updates,
+  public API, and status snapshots. Runtime probe:
+  `tools/run_godot_vst_debug_ui_probe.ps1`. Docs: `docs/vst_debug_ui.md`.
 - [x] **YAN-86 follow-up — PCMR overlay visual check runner**: added
   `tools/run_windows_pcmr_overlay_visual_check.ps1`, a hold-open manual
   headset runner that manages the fake proxy_targets publisher, Windows GXR
@@ -155,6 +163,7 @@ powershell -File tools\run_godot_card_attachment_probe.ps1
 powershell -File tools\run_godot_xr_bootstrap_probe.ps1
 powershell -File tools\run_godot_target_source_probe.ps1
 powershell -File tools\run_godot_vst_capture_probe.ps1
+powershell -File tools\run_godot_vst_debug_ui_probe.ps1
 powershell -File tools\run_godot_bbox_math_probe.ps1
 powershell -File tools\run_godot_script_only_websocket_probe.ps1
 # consumer-only needs a publisher on :8766 first (fake_proxy_targets_publisher.py)

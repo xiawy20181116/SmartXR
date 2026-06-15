@@ -30,6 +30,9 @@ TARGET_SOURCE = ROOT / "godot-android" / "scripts" / "target_source.gd"
 # VST capture/polling/calibration/bbox math moved to scripts/vst_capture.gd
 # in YAN-99; card-side assertions only cover scene callbacks and public API.
 VST_CAPTURE = ROOT / "godot-android" / "scripts" / "vst_capture.gd"
+# VST debug scene visuals moved to scripts/vst_debug_ui.gd in YAN-100; visual
+# node construction and overlay sizing assertions are pinned there.
+VST_DEBUG_UI = ROOT / "godot-android" / "scripts" / "vst_debug_ui.gd"
 # The XR startup path (_try_init_xr) and the camera/origin construction moved
 # to scripts/xr_bootstrap.gd in M3 step 5 (YAN-79); init/blend/camera
 # assertions are pinned there, the resolved _xr_* state and the status
@@ -278,31 +281,34 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_vst_tracker_boxes_draw_visible_3d_bbox_frame(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        debug_ui = VST_DEBUG_UI.read_text(encoding="utf-8")
 
-        self.assertIn("const VST_BBOX_FRAME_COLOR", source)
-        self.assertIn("const VST_BBOX_FRAME_LINE_M", source)
-        self.assertIn("const VST_BBOX_FRAME_Z_OFFSET_M", source)
-        self.assertIn("var _vst_bbox_frame_anchor: Node3D = null", source)
-        self.assertIn("var _vst_bbox_frame_parts: Array[MeshInstance3D] = []", source)
-        self.assertIn("_build_vst_bbox_frame()", source)
-        self.assertIn('VSTBBoxFrame"', source)
+        self.assertIn("const VST_BBOX_FRAME_COLOR", debug_ui)
+        self.assertIn("const VST_BBOX_FRAME_LINE_M", debug_ui)
+        self.assertIn("const VST_BBOX_FRAME_Z_OFFSET_M", debug_ui)
+        self.assertIn("var _world_bbox_frame_anchor: Node3D = null", debug_ui)
+        self.assertIn("var _world_bbox_frame_parts: Array[MeshInstance3D] = []", debug_ui)
+        self.assertIn("func build_world_bbox_frame(parent: Node3D) -> void:", debug_ui)
+        self.assertIn('VSTBBoxFrame"', debug_ui)
+        self.assertIn("var _vst_debug_ui = VSTDebugUIScript.new()", source)
         self.assertIn("_update_vst_bbox_frame()", source)
         self.assertIn("_set_vst_bbox_frame_visible(false)", source)
-        self.assertIn("_orient_node_for_3dof_reading(_vst_bbox_frame_anchor)", source)
+        self.assertIn("Callable(self, \"_orient_node_for_3dof_reading\")", source)
 
     def test_vst_tracker_debug_panel_draws_raw_right_image_bbox(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        debug_ui = VST_DEBUG_UI.read_text(encoding="utf-8")
 
-        self.assertIn("const VST_RAW_DEBUG_PIXEL_SIZE_M", source)
-        self.assertIn("var _vst_raw_debug_anchor: Node3D = null", source)
-        self.assertIn("var _vst_raw_right_sprite: Sprite3D = null", source)
-        self.assertIn("var _vst_raw_bbox_parts: Array[MeshInstance3D] = []", source)
-        self.assertIn("_build_vst_raw_debug_panel()", source)
-        self.assertIn('VSTRawDebugPanel"', source)
-        self.assertIn("_vst_raw_right_sprite.texture = ImageTexture.create_from_image(right_img)", source)
-        self.assertIn("_update_vst_raw_bbox_overlay(boxes)", source)
-        self.assertIn("(x + w * 0.5 - 0.5) * overlay_size.x", source)
-        self.assertIn("(0.5 - y - h * 0.5) * overlay_size.y", source)
+        self.assertIn("const VST_RAW_DEBUG_PIXEL_SIZE_M", debug_ui)
+        self.assertIn("var _raw_debug_anchor: Node3D = null", debug_ui)
+        self.assertIn("var _raw_right_sprite: Sprite3D = null", debug_ui)
+        self.assertIn("var _raw_bbox_parts: Array[MeshInstance3D] = []", debug_ui)
+        self.assertIn("func build_raw_debug_panel(camera: Node3D) -> void:", debug_ui)
+        self.assertIn('VSTRawDebugPanel"', debug_ui)
+        self.assertIn("_raw_right_sprite.texture = ImageTexture.create_from_image(right_img)", debug_ui)
+        self.assertIn("_vst_debug_ui.update_raw_bbox_overlay(boxes, image_size)", source)
+        self.assertIn("(x + w * 0.5 - 0.5) * overlay_size.x", debug_ui)
+        self.assertIn("(0.5 - y - h * 0.5) * overlay_size.y", debug_ui)
 
     def test_card_can_attach_to_registered_node3d_targets(self):
         source = SCRIPT.read_text(encoding="utf-8")

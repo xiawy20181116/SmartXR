@@ -126,3 +126,23 @@ this path while preserving public methods such as `update_vst_target`,
 VST snapshot keys through the card. `tools/run_godot_vst_capture_probe.ps1`
 validates the subsystem in no-project mode, and the existing bbox fixture probe
 continues to guard numeric drift.
+
+## ADR-7: VSTDebugUI owns VST debug scene visuals, card keeps state
+
+**Context.** After VSTCapture moved native polling and bbox math out of
+`AndroidMovingCard.gd`, the card still built and updated the VST world bbox
+frame, raw right-image `Sprite3D`, raw bbox overlay quads, and raw debug label.
+Those nodes are UI/debug visualization, not capture or target-source state.
+
+**Decision.** Extract that scene-node construction and visual update logic into
+`godot-android/scripts/vst_debug_ui.gd` (`VSTDebugUI`), a dependency-free
+`RefCounted` script. The card instantiates it, asks it to build the raw panel
+and world bbox frame, then delegates raw image texture updates, raw-image bbox
+overlay updates, and world-frame sizing/visibility. The card still owns
+VSTCapture callbacks, bbox state, target updates, attachment, orientation
+policy, and status snapshots.
+
+**Consequences.** The VST debug visuals now have one owner and a script-only
+probe (`tools/run_godot_vst_debug_ui_probe.ps1`). `AndroidMovingCard.gd` stays
+as orchestration and keeps public APIs unchanged while dropping below 1000
+lines for the YAN-100 UI extraction slice.
