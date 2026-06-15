@@ -1,9 +1,20 @@
 # HANDOFF
 
-## State (after VSTCapture extraction, YAN-99)
+## State (after VSTDebugUI extraction, YAN-100)
 
-- All 148 Python tests pass (`python -m unittest tests/test_*.py`).
+- All 190 Python tests pass (`python -m unittest discover -s tests -p "test_*.py"`).
 - Schema gate passes on both fixtures.
+- Full script-only Godot probe set passes on Godot 4.6.2, including the new
+  VSTDebugUI probe.
+- **YAN-100 done**: VST debug scene visuals moved out of
+  `AndroidMovingCard.gd` into `godot-android/scripts/vst_debug_ui.gd`
+  (`VSTDebugUI`). It owns the world bbox frame, raw right-image Sprite3D,
+  raw-image bbox overlay quads, and raw debug label. The card now delegates
+  texture/overlay/frame visual updates while keeping VSTCapture callbacks,
+  bbox state, target updates, public APIs, orientation policy, and status
+  snapshots. Docs: `docs/vst_debug_ui.md`. Probe:
+  `tools/run_godot_vst_debug_ui_probe.ps1` ->
+  `godot-android/tests/script_only_vst_debug_ui_probe.gd`.
 - **YAN-99 done**: VSTCapture extraction moved GXRDualVstCapture setup,
   ncnn tracker asset staging, right-frame polling, tracker boxes,
   calibration diagnostics, and bbox-to-head math into
