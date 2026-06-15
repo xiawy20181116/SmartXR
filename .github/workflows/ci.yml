@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   python:
@@ -32,3 +33,41 @@ jobs:
           uv run --no-sync python tools/validate_proxy_targets_payload_schema.py
           --input godot-android/fixtures/proxy_targets_sample.json
           --input godot-android/fixtures/vst_proxy_targets_sample.json
+
+  gdscript-probes:
+    name: GDScript probes
+    runs-on: self-hosted
+    if: github.event_name == 'workflow_dispatch'
+    env:
+      GODOT_BIN: E:\xia\Godot_v4.6.2-stable_win64.exe\Godot_v4.6.2-stable_win64.exe
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify Godot binary
+        shell: pwsh
+        run: |
+          if (-not (Test-Path $env:GODOT_BIN)) {
+            throw "GODOT_BIN does not exist: $env:GODOT_BIN"
+          }
+          & $env:GODOT_BIN --version
+
+      - name: Run script-only GDScript probes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $probes = @(
+            "tools/run_godot_smartxr_options_probe.ps1",
+            "tools/run_godot_status_hud_probe.ps1",
+            "tools/run_godot_target_registry_probe.ps1",
+            "tools/run_godot_ws_transport_probe.ps1",
+            "tools/run_godot_card_attachment_probe.ps1",
+            "tools/run_godot_xr_bootstrap_probe.ps1",
+            "tools/run_godot_target_source_probe.ps1",
+            "tools/run_godot_bbox_math_probe.ps1"
+          )
+          foreach ($probe in $probes) {
+            Write-Host "Running $probe"
+            powershell -ExecutionPolicy Bypass -File $probe -GodotExe $env:GODOT_BIN
+          }
