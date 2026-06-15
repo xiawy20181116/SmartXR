@@ -42,6 +42,8 @@ class GodotMRAssistantUpdatesTests(unittest.TestCase):
         self.assertIn('OS.get_environment("SMARTXR_ASSISTANT_CARD_VIEW_SCRIPT")', probe)
         self.assertIn('OS.get_environment("SMARTXR_WS_TRANSPORT_SCRIPT")', probe)
         self.assertIn('OS.get_environment("SMARTXR_ASSISTANT_UPDATES_LIVE_WS_URL")', probe)
+        self.assertIn("SMARTXR_ASSISTANT_UPDATES_EXPECTED_RESPONSE_TEXT", probe)
+        self.assertIn("SMARTXR_ASSISTANT_UPDATES_EXPECTED_STATUS_LINE", probe)
         self.assertIn("SMARTXR_ASSISTANT_UPDATES_PROBE_STATUS_PATH", probe)
         self.assertIn("invalid_payload_sets_error", probe)
         self.assertIn("live_payload_updates_snapshot", probe)

@@ -11,9 +11,13 @@ extends SceneTree
 ##   SMARTXR_WS_TRANSPORT_SCRIPT
 ##   SMARTXR_ASSISTANT_UPDATES_LIVE_WS_URL
 ##   SMARTXR_ASSISTANT_UPDATES_PROBE_STATUS_PATH
+##   SMARTXR_ASSISTANT_UPDATES_EXPECTED_RESPONSE_TEXT (optional)
+##   SMARTXR_ASSISTANT_UPDATES_EXPECTED_STATUS_LINE   (optional)
 
 const DEFAULT_STATUS_RES := "user://assistant_updates_probe_status.json"
 const DEFAULT_TIMEOUT_SECONDS := 8.0
+const DEFAULT_EXPECTED_RESPONSE_TEXT := "Ada is working on XR-42."
+const DEFAULT_EXPECTED_STATUS_LINE := "Ada Lovelace | XR-42 | In Progress"
 
 var _checks := {}
 var _error := "-"
@@ -31,6 +35,8 @@ var _view = null
 var _label: Label3D = null
 var _parent: Node3D = null
 var _subscribed_seen := false
+var _expected_response_text := DEFAULT_EXPECTED_RESPONSE_TEXT
+var _expected_status_line := DEFAULT_EXPECTED_STATUS_LINE
 
 
 func _process(delta: float) -> bool:
@@ -80,6 +86,12 @@ func _setup() -> String:
 	var timeout_env := OS.get_environment("SMARTXR_ASSISTANT_UPDATES_TIMEOUT_SEC")
 	if not timeout_env.is_empty():
 		_timeout_seconds = float(timeout_env)
+	var expected_response_env := OS.get_environment("SMARTXR_ASSISTANT_UPDATES_EXPECTED_RESPONSE_TEXT")
+	if not expected_response_env.is_empty():
+		_expected_response_text = expected_response_env
+	var expected_status_env := OS.get_environment("SMARTXR_ASSISTANT_UPDATES_EXPECTED_STATUS_LINE")
+	if not expected_status_env.is_empty():
+		_expected_status_line = expected_status_env
 
 	var receiver_script = load(receiver_script_path)
 	if receiver_script == null:
@@ -127,11 +139,11 @@ func _record_final_checks() -> void:
 	_checks["receiver_subscribed_once_open"] = _subscribed_seen
 	_checks["receiver_packets_applied"] = _receiver.packets_applied() >= 1
 	_checks["receiver_packets_received"] = _receiver.packets_received() >= _receiver.packets_applied()
-	_checks["live_payload_updates_snapshot"] = str(snapshot.get("response_text", "")) == "Ada is working on XR-42."
+	_checks["live_payload_updates_snapshot"] = str(snapshot.get("response_text", "")) == _expected_response_text
 	_checks["snapshot_card_id"] = str(snapshot.get("card_id", "")) == "CardAnchor"
 	_checks["snapshot_target_id"] = str(snapshot.get("target_id", "")) == "person-ada"
-	_checks["view_renders_live_response"] = label_text.contains("Ada is working on XR-42.")
-	_checks["view_renders_live_status"] = label_text.contains("Ada Lovelace | XR-42 | In Progress")
+	_checks["view_renders_live_response"] = label_text.contains(_expected_response_text)
+	_checks["view_renders_live_status"] = label_text.contains(_expected_status_line)
 	_checks["receiver_last_error_clear"] = _receiver.last_error() == "-"
 
 
@@ -163,6 +175,8 @@ func _write_status(exit_code: int) -> void:
 		"error": _error,
 		"exit_code": exit_code,
 		"live_ws_url": _live_ws_url,
+		"expected_response_text": _expected_response_text,
+		"expected_status_line": _expected_status_line,
 		"packets_received": _receiver.packets_received() if _receiver != null else 0,
 		"packets_applied": _receiver.packets_applied() if _receiver != null else 0,
 		"elapsed": _elapsed,
