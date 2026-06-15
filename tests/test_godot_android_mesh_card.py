@@ -23,6 +23,10 @@ WS_TRANSPORT = ROOT / "godot-android" / "scripts" / "ws_transport.gd"
 # assertions are pinned there, the public API, anchor-mode switching, and the
 # status snapshot stay on the card.
 CARD_ATTACHMENT = ROOT / "godot-android" / "scripts" / "card_attachment.gd"
+# Command parsing / state reduction moved to scripts/command_dispatcher.gd in
+# YAN-104; command alias assertions are pinned there, while the card keeps
+# node side effects and state copy-back.
+COMMAND_DISPATCHER = ROOT / "godot-android" / "scripts" / "command_dispatcher.gd"
 # TrackableTarget / VSTTargetAdapter moved to scripts/target_source.gd in M4
 # step 2 (YAN-84); state-machine assertions are pinned there, bbox math and
 # target-source wiring stay on the card.
@@ -140,6 +144,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_moving_card_uses_yaw_pitch_depth_anchor_model(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        dispatcher = COMMAND_DISPATCHER.read_text(encoding="utf-8")
         hud = STATUS_HUD.read_text(encoding="utf-8")
 
         self.assertIn("CARD_START_YAW_DEG", source)
@@ -149,12 +154,12 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("var _anchor_pitch_deg", source)
         self.assertIn("var _anchor_depth_m", source)
         self.assertIn("_apply_3dof_anchor_transform()", source)
-        self.assertIn('"yaw_left", "left", "move_left", "a":', source)
-        self.assertIn('"yaw_right", "right", "move_right", "d":', source)
-        self.assertIn('"pitch_up", "up", "move_up", "w":', source)
-        self.assertIn('"pitch_down", "down", "move_down", "s":', source)
-        self.assertIn('"depth_in", "closer":', source)
-        self.assertIn('"depth_out", "farther":', source)
+        self.assertIn('"yaw_left", "left", "move_left", "a":', dispatcher)
+        self.assertIn('"yaw_right", "right", "move_right", "d":', dispatcher)
+        self.assertIn('"pitch_up", "up", "move_up", "w":', dispatcher)
+        self.assertIn('"pitch_down", "down", "move_down", "s":', dispatcher)
+        self.assertIn('"depth_in", "closer":', dispatcher)
+        self.assertIn('"depth_out", "farther":', dispatcher)
         self.assertIn("3DoF Anchor", hud)
         self.assertIn("Yaw/Pitch/Depth", hud)
         self.assertNotIn("world anchor", source.lower())
@@ -171,6 +176,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_moving_card_supports_mock_bbox_anchor_mode(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        dispatcher = COMMAND_DISPATCHER.read_text(encoding="utf-8")
         hud = STATUS_HUD.read_text(encoding="utf-8")
 
         self.assertIn("BBOX_IMAGE_SIZE", source)
@@ -180,13 +186,13 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("var _bbox_depth_m", source)
         self.assertIn("_apply_bbox_anchor()", source)
         self.assertIn("_anchor_from_bbox(", source)
-        self.assertIn('"toggle_bbox_mode"', source)
-        self.assertIn('"bbox_left"', source)
-        self.assertIn('"bbox_right"', source)
-        self.assertIn('"bbox_up"', source)
-        self.assertIn('"bbox_down"', source)
-        self.assertIn('"bbox_depth_in"', source)
-        self.assertIn('"bbox_depth_out"', source)
+        self.assertIn('"toggle_bbox_mode"', dispatcher)
+        self.assertIn('"bbox_left"', dispatcher)
+        self.assertIn('"bbox_right"', dispatcher)
+        self.assertIn('"bbox_up"', dispatcher)
+        self.assertIn('"bbox_down"', dispatcher)
+        self.assertIn('"bbox_depth_in"', dispatcher)
+        self.assertIn('"bbox_depth_out"', dispatcher)
         self.assertIn("Mode: %s", hud)
         self.assertIn("BBox cx/cy/w/h", hud)
         self.assertIn("Angular W/H", hud)
@@ -353,6 +359,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_debug_marker_target_can_drive_real_device_validation(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        dispatcher = COMMAND_DISPATCHER.read_text(encoding="utf-8")
 
         self.assertIn("const DEBUG_NODE3D_TARGET_ENABLED := false", source)
         self.assertIn('const DEBUG_TARGET_ID := "debug_marker"', source)
@@ -365,8 +372,10 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("func _update_debug_target_marker(delta: float) -> void:", source)
         self.assertIn("_debug_target_marker.position = Vector3(", source)
         self.assertIn("sin(_debug_target_elapsed_seconds", source)
-        self.assertIn('"debug_target_free"', source)
-        self.assertIn('"debug_target_reset"', source)
+        self.assertIn('"debug_target_free"', dispatcher)
+        self.assertIn('"debug_target_reset"', dispatcher)
+        self.assertIn("CommandDispatcherScript.EFFECT_DEBUG_TARGET_FREE", source)
+        self.assertIn("CommandDispatcherScript.EFFECT_DEBUG_TARGET_RESET", source)
 
     def test_world_target_offset_ignores_target_rotation_for_card_position(self):
         source = SCRIPT.read_text(encoding="utf-8")
