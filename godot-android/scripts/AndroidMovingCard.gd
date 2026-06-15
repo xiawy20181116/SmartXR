@@ -46,6 +46,7 @@ const ProxyTargetsConsumerScript := preload("res://scripts/proxy_targets_consume
 const ProxyTargetsCardAdapterScript := preload("res://scripts/proxy_targets_card_adapter.gd")
 const SmartXROptionsScript := preload("res://scripts/smartxr_options.gd")
 const StatusHudScript := preload("res://scripts/status_hud.gd")
+const StatusSnapshotComposerScript := preload("res://scripts/status_snapshot_composer.gd")
 const TargetRegistryScript := preload("res://scripts/target_registry.gd")
 const TargetSourceScript := preload("res://scripts/target_source.gd")
 const VSTCaptureScript := preload("res://scripts/vst_capture.gd")
@@ -112,11 +113,8 @@ var _card_viewport: SubViewport = null
 var _card_anchor: Node3D = null
 var _card_mesh: MeshInstance3D = null
 var _xr_probe_mesh: MeshInstance3D = null
-# Status HUD subsystem (scripts/status_hud.gd): renders the diagnostics label
-# and writes the user:// status files from the snapshot this script assembles
-# per frame in _build_status_snapshot(). Untyped Node on purpose (no
-# class_name reference) so script-only probes can load both scripts.
 var _status_hud: Node = null
+var _status_snapshot_composer = StatusSnapshotComposerScript.new()
 var _speed_deg_per_second := CARD_DEFAULT_SPEED_DEG_PER_SECOND
 var _anchor_yaw_deg := CARD_START_YAW_DEG
 var _anchor_pitch_deg := CARD_START_PITCH_DEG
@@ -1030,10 +1028,10 @@ func _update_status_hud(delta: float) -> void:
 
 
 ## Per-frame status snapshot consumed by StatusHud (label rendering + the
-## user:// status file writers). This script resolves every value; StatusHud
-## only formats and writes.
+## user:// status file writers). This script resolves live values; the
+## dependency-free composer owns the stable dictionary shape.
 func _build_status_snapshot() -> Dictionary:
-	return {
+	return _status_snapshot_composer.build_status_snapshot({
 		"ws_connected": _control_ws.ws_connected(),
 		"last_command": _last_command,
 		"anchor_mode": _anchor_mode,
@@ -1057,16 +1055,16 @@ func _build_status_snapshot() -> Dictionary:
 		"vst": _build_vst_status_snapshot(),
 		"proxy_targets": _build_proxy_targets_status_snapshot(),
 		"passthrough_overlay": _build_passthrough_overlay_status_snapshot(),
-	}
+	})
 
 
 func _build_xr_status_snapshot() -> Dictionary:
-	return {
-		"interface_found": _xr_interface_found,
-		"initialize_ok": _xr_initialize_ok,
-		"active": _xr_active,
-		"init_error": _xr_init_error,
-	}
+	return _status_snapshot_composer.build_xr_status_snapshot(
+		_xr_interface_found,
+		_xr_initialize_ok,
+		_xr_active,
+		_xr_init_error
+	)
 
 
 func _build_vst_status_snapshot() -> Dictionary:
@@ -1074,12 +1072,11 @@ func _build_vst_status_snapshot() -> Dictionary:
 	if _vst_target_source != null:
 		target_state = _vst_target_source.target_state()
 	var snapshot: Dictionary = _vst_capture.status_snapshot()
-	snapshot["target_state"] = target_state
-	return snapshot
+	return _status_snapshot_composer.build_vst_status_snapshot(snapshot, target_state)
 
 
 func _build_proxy_targets_status_snapshot() -> Dictionary:
-	return {
+	return _status_snapshot_composer.build_proxy_targets_status_snapshot({
 		"ws_connected": _proxy_targets_ws.ws_connected(),
 		"ws_subscribed": _proxy_targets_ws.ws_subscribed(),
 		"ws_url": _proxy_targets_ws_url(),
@@ -1103,11 +1100,11 @@ func _build_proxy_targets_status_snapshot() -> Dictionary:
 		"local_position": _proxy_targets_last_local_position,
 		"world_position": _proxy_targets_last_world_position,
 		"error": _proxy_targets_last_error,
-	}
+	})
 
 
 func _build_passthrough_overlay_status_snapshot() -> Dictionary:
-	return {
+	return _status_snapshot_composer.build_passthrough_overlay_status_snapshot({
 		"enabled": _passthrough_overlay_enabled,
 		"requested_blend_mode": _passthrough_overlay_requested_blend_mode,
 		"blend_request_ok": _passthrough_overlay_blend_ok,
@@ -1115,7 +1112,7 @@ func _build_passthrough_overlay_status_snapshot() -> Dictionary:
 		"layer_visible": _passthrough_overlay_layer.visible if _passthrough_overlay_layer != null else false,
 		"layer_alpha_blend": _passthrough_overlay_layer_alpha_blend(),
 		"layer_position": _passthrough_overlay_layer_position(),
-	}
+	})
 
 
 func _exit_tree() -> void:

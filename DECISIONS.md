@@ -75,6 +75,14 @@ same pattern (resolve in card, format/act in subsystem node). The JSON shape
 of both status files is unchanged, so `validate_proxy_targets_live_status.py`
 and on-device pulls keep working.
 
+*Update (YAN-103 A3 first slice):* status snapshot composition itself is now
+split into `godot-android/scripts/status_snapshot_composer.gd`. The card still
+resolves every live value from nodes and subsystems, while the dependency-free
+composer owns only the top-level and nested Dictionary key layout. The new
+script-only probe locks that shape headless, so this refactor remains in the
+Windows / script-only verification tier and does not require real-device VST
+smoke testing.
+
 ## ADR-5: Shared JSON test vectors lock the duplicated bbox math (M4-1)
 
 **Context.** The bbox→head math exists twice on purpose until M4-2/M4-3:

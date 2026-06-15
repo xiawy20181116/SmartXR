@@ -131,6 +131,13 @@ side.
   VSTCapture callbacks, bbox state, orientation policy, target updates,
   public API, and status snapshots. Runtime probe:
   `tools/run_godot_vst_debug_ui_probe.ps1`. Docs: `docs/vst_debug_ui.md`.
+- [x] **A3 first slice — StatusSnapshotComposer** (YAN-103): status snapshot
+  Dictionary composition extracted from `AndroidMovingCard.gd` into
+  dependency-free `godot-android/scripts/status_snapshot_composer.gd`.
+  The card still resolves live values and delegates only the top-level,
+  `xr`, `vst`, `proxy_targets`, and `passthrough_overlay` Dictionary shapes.
+  Runtime probe: `tools/run_godot_status_snapshot_composer_probe.ps1`.
+  Docs: `docs/status_snapshot_composer.md`.
 - [x] **YAN-86 follow-up — PCMR overlay visual check runner**: added
   `tools/run_windows_pcmr_overlay_visual_check.ps1`, a hold-open manual
   headset runner that manages the fake proxy_targets publisher, Windows GXR
@@ -161,6 +168,7 @@ powershell -File tools\run_godot_target_registry_probe.ps1
 powershell -File tools\run_godot_ws_transport_probe.ps1
 powershell -File tools\run_godot_card_attachment_probe.ps1
 powershell -File tools\run_godot_xr_bootstrap_probe.ps1
+powershell -File tools\run_godot_status_snapshot_composer_probe.ps1
 powershell -File tools\run_godot_target_source_probe.ps1
 powershell -File tools\run_godot_vst_capture_probe.ps1
 powershell -File tools\run_godot_vst_debug_ui_probe.ps1
