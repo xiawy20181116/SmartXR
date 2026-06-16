@@ -277,10 +277,10 @@ Accepted risks (v1):
 Deferred hardening (post-v1): WS auth + TLS, on-device-only or encrypted PC-offload,
 audio redaction/consent, capture retention policy.
 
-## 15. Ownership (proposed, pending confirmation)
+## 15. Ownership (confirmed, YAN-96)
 
-Proposed module owners matched to agent specialties (not yet assigned; confirm before
-the issue tree assigns them):
+Module owners matched to agent specialties (confirmed; the issue tree assigns each
+module sub-issue to its owner):
 
 | Scope | Proposed owner | Support |
 |-------|----------------|---------|
