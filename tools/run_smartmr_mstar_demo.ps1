@@ -10,10 +10,10 @@ param(
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path (Join-Path -Path $PSScriptRoot -ChildPath "..")).ProviderPath
-$ProbeScript = Join-Path -Path $RepoRoot -ChildPath "apps\godot_mr\tests\script_only_assistant_updates_probe.gd"
-$ReceiverScript = Join-Path -Path $RepoRoot -ChildPath "apps\godot_mr\scripts\assistant_updates_receiver.gd"
-$StateScript = Join-Path -Path $RepoRoot -ChildPath "apps\godot_mr\scripts\assistant_card_state.gd"
-$ViewScript = Join-Path -Path $RepoRoot -ChildPath "apps\godot_mr\scripts\assistant_card_view.gd"
+$ProbeScript = Join-Path -Path $RepoRoot -ChildPath "godot-android\tests\script_only_assistant_updates_probe.gd"
+$ReceiverScript = Join-Path -Path $RepoRoot -ChildPath "godot-android\scripts\assistant\assistant_updates_receiver.gd"
+$StateScript = Join-Path -Path $RepoRoot -ChildPath "godot-android\scripts\assistant\assistant_card_state.gd"
+$ViewScript = Join-Path -Path $RepoRoot -ChildPath "godot-android\scripts\assistant\assistant_card_view.gd"
 $TransportScript = Join-Path -Path $RepoRoot -ChildPath "godot-android\scripts\ws_transport.gd"
 $Publisher = Join-Path -Path $RepoRoot -ChildPath "tools\smartmr_mstar_demo_publisher.py"
 $WorkDir = Join-Path -Path $RepoRoot -ChildPath ".tmp\smartmr_mstar_demo"

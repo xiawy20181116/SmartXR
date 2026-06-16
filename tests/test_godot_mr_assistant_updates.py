@@ -3,8 +3,8 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RECEIVER = ROOT / "apps" / "godot_mr" / "scripts" / "assistant_updates_receiver.gd"
-PROBE = ROOT / "apps" / "godot_mr" / "tests" / "script_only_assistant_updates_probe.gd"
+RECEIVER = ROOT / "godot-android" / "scripts" / "assistant" / "assistant_updates_receiver.gd"
+PROBE = ROOT / "godot-android" / "tests" / "script_only_assistant_updates_probe.gd"
 RUNNER = ROOT / "tools" / "run_godot_mr_assistant_updates_probe.ps1"
 PUBLISHER = ROOT / "tools" / "fake_assistant_updates_publisher.py"
 PUBLISHER_CLI = ROOT / "smartxr" / "cli" / "assistant_updates_publisher.py"

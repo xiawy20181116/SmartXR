@@ -3,9 +3,9 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-STATE = ROOT / "apps" / "godot_mr" / "scripts" / "assistant_card_state.gd"
-VIEW = ROOT / "apps" / "godot_mr" / "scripts" / "assistant_card_view.gd"
-PROBE = ROOT / "apps" / "godot_mr" / "tests" / "script_only_assistant_card_probe.gd"
+STATE = ROOT / "godot-android" / "scripts" / "assistant" / "assistant_card_state.gd"
+VIEW = ROOT / "godot-android" / "scripts" / "assistant" / "assistant_card_view.gd"
+PROBE = ROOT / "godot-android" / "tests" / "script_only_assistant_card_probe.gd"
 RUNNER = ROOT / "tools" / "run_godot_mr_assistant_card_probe.ps1"
 
 

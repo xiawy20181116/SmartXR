@@ -9,9 +9,9 @@ param(
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path (Join-Path -Path $PSScriptRoot -ChildPath "..")).ProviderPath
-$ProbeScript = Join-Path -Path $RepoRoot -ChildPath "apps\godot_mr\tests\script_only_assistant_card_probe.gd"
-$StateScript = Join-Path -Path $RepoRoot -ChildPath "apps\godot_mr\scripts\assistant_card_state.gd"
-$ViewScript = Join-Path -Path $RepoRoot -ChildPath "apps\godot_mr\scripts\assistant_card_view.gd"
+$ProbeScript = Join-Path -Path $RepoRoot -ChildPath "godot-android\tests\script_only_assistant_card_probe.gd"
+$StateScript = Join-Path -Path $RepoRoot -ChildPath "godot-android\scripts\assistant\assistant_card_state.gd"
+$ViewScript = Join-Path -Path $RepoRoot -ChildPath "godot-android\scripts\assistant\assistant_card_view.gd"
 $WorkDir = Join-Path -Path $RepoRoot -ChildPath ".tmp\assistant_card_probe"
 $StatusFile = Join-Path -Path $WorkDir -ChildPath "assistant_card_probe_status.json"
 $GodotLog = Join-Path -Path $WorkDir -ChildPath "godot_assistant_card_probe.log"
