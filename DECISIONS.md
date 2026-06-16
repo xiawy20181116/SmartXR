@@ -170,3 +170,50 @@ policy, and status snapshots.
 probe (`tools/run_godot_vst_debug_ui_probe.ps1`). `AndroidMovingCard.gd` stays
 as orchestration and keeps public APIs unchanged while dropping below 1000
 lines for the YAN-100 UI extraction slice.
+
+## ADR-8: C1 tracking-raw frozen as hand-written 3D-only schema (YAN-105)
+
+**Context.** Architecture §10 step 0 requires freezing C1 to the §5 bar. The
+repo has no `jsonschema` dependency (`pyproject` deps are empty); C2 is locked
+by a hand-written validator in `smartxr/schema.py`. C1's §4 field list places
+`source_frame` and `pose_quality` inside the per-detection object and offers
+`bbox_3d` as either 8 vertices **or** center+extent+rotation.
+
+**Decision.** Mirror the C2 pattern exactly: a hand-written validator
+(`smartxr/tracking_raw_schema.py`), fixtures + a `tools/` wrapper gate, Python
+fake producer/consumer, semantics doc. Follow §4 verbatim — `source_frame` and
+`pose_quality` are per-detection (self-describing; leaves room for a future
+hybrid producer that mixes sources). `bbox_3d` accepts exactly one of the two
+forms (both present is rejected), with two fixtures pinning both. C1 is
+**3D-only**: the 2D/image domain (`bbox`, `boxes`, `image`, `pixels`, `mask`,
+`depth_m`) is rejected anywhere in the message — the mirror of C2's raw-field
+ban, enforcing "depth is a pluggable scalar behind the boundary". An empty
+`detections` array is a valid state (§12 "no people"). v1 emits
+`pose_quality: fixed_depth`; `mono_metric`/`stereo` are swaps behind C1.
+
+**Consequences.** Module 1 (producer) and module 3 (consumer) build against the
+schema + fakes, not each other's code. Upgrading depth source is additive.
+Any shape change requires `schema_version++`.
+
+## ADR-9: C3 card-lifecycle = command verb x card_state, with a transition machine (YAN-105)
+
+**Context.** §4 describes C3 as "card commands + state machine: attach/detach
+plus appear/expand/contract/disappear (card_state enum + transitions),
+offset_rule, animation durations". The binding verbs (attach/detach) and the
+visual states (appear/expand/contract/disappear) are two distinct axes, and the
+expand/contract transitions happen while attached — neither attach nor detach.
+
+**Decision.** Model each command as a `command` verb x a `card_state`, coupled:
+`attach`→`appear`, `update`→`{expand, contract}`, `detach`→`disappear`. Adding
+`update` (beyond the literal attach/detach) is the minimal way to carry the
+mid-lifecycle transitions; documented in the semantics doc. The schema
+validates shape + the static verb/state coupling; the **fake consumer**
+(`CardLifecycleConsumer`) enforces the dynamic transition machine per card
+(`detached`→appear→expand⇄contract→disappear→`detached`) and rejects illegal
+transitions (e.g. update-before-attach, appear→contract). `offset_rule` reuses
+the C2 shape; per-state default animation durations are documented.
+
+**Consequences.** Module 2 (card) and the producer build against the schema +
+the documented machine. `detached` is an implicit null state, never on the
+wire. Adding a card_state or transition is a shape change (`schema_version++`),
+not an additive field change.

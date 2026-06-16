@@ -1,0 +1,74 @@
+{
+  "type": "tracking_raw",
+  "schema_version": 1,
+  "sequence": 0,
+  "source": "fake_tracking",
+  "timestamp_ms": 1000.0,
+  "detections": [
+    {
+      "id": "person-7",
+      "state": "confirmed",
+      "age_frames": 0,
+      "confidence": 0.94,
+      "timestamp_ms": 1000.0,
+      "bbox_3d": {
+        "vertices": [
+          [
+            -0.25,
+            -0.85,
+            -1.895
+          ],
+          [
+            -0.25,
+            -0.85,
+            -1.545
+          ],
+          [
+            -0.25,
+            0.85,
+            -1.895
+          ],
+          [
+            -0.25,
+            0.85,
+            -1.545
+          ],
+          [
+            0.25,
+            -0.85,
+            -1.895
+          ],
+          [
+            0.25,
+            -0.85,
+            -1.545
+          ],
+          [
+            0.25,
+            0.85,
+            -1.895
+          ],
+          [
+            0.25,
+            0.85,
+            -1.545
+          ]
+        ]
+      },
+      "landmark": {
+        "rule": "centroid",
+        "point": [
+          0.0,
+          0.0,
+          -1.72
+        ]
+      },
+      "source_frame": {
+        "coordinate_space": "vst_right_camera",
+        "units": "meters",
+        "depth_source": "constant_depth"
+      },
+      "pose_quality": "fixed_depth"
+    }
+  ]
+}

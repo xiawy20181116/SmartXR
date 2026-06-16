@@ -34,6 +34,17 @@ jobs:
           --input godot-android/fixtures/proxy_targets_sample.json
           --input godot-android/fixtures/vst_proxy_targets_sample.json
 
+      - name: Run tracking_raw (C1) schema gate
+        run: >
+          uv run --no-sync python tools/validate_tracking_raw_payload_schema.py
+          --input godot-android/fixtures/tracking_raw_sample.json
+          --input godot-android/fixtures/tracking_raw_obb_sample.json
+
+      - name: Run card_lifecycle (C3) schema gate
+        run: >
+          uv run --no-sync python tools/validate_card_lifecycle_payload_schema.py
+          --input godot-android/fixtures/card_lifecycle_sample.json
+
   gdscript-probes:
     name: GDScript probes
     runs-on: self-hosted

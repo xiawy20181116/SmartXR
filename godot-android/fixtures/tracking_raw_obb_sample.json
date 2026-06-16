@@ -1,0 +1,48 @@
+{
+  "type": "tracking_raw",
+  "schema_version": 1,
+  "sequence": 1,
+  "source": "fake_tracking",
+  "timestamp_ms": 1040.0,
+  "detections": [
+    {
+      "id": "person-7",
+      "state": "confirmed",
+      "age_frames": 1,
+      "confidence": 0.93,
+      "timestamp_ms": 1040.0,
+      "bbox_3d": {
+        "center": [
+          0.21,
+          0.0,
+          -1.72
+        ],
+        "extent": [
+          0.25,
+          0.85,
+          0.175
+        ],
+        "rotation_xyzw": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "landmark": {
+        "rule": "front_top_center",
+        "point": [
+          0.21,
+          0.85,
+          -1.545
+        ]
+      },
+      "source_frame": {
+        "coordinate_space": "vst_right_camera",
+        "units": "meters",
+        "depth_source": "constant_depth"
+      },
+      "pose_quality": "fixed_depth"
+    }
+  ]
+}

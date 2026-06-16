@@ -1,5 +1,35 @@
 # HANDOFF
 
+## State (after YAN-105 Step 0 — C1 + C3 contracts frozen)
+
+- **YAN-105 done**: C1 (tracking-raw) and C3 (card-lifecycle) are frozen to the
+  architecture §5 five-point bar. This was the "step 0" that unlocks Track B
+  (modules 1/2). New files:
+  - C1: `smartxr/tracking_raw_schema.py`, `smartxr/tracking_raw_fakes.py`,
+    `smartxr/cli/validate_tracking_raw.py`,
+    `tools/validate_tracking_raw_payload_schema.py`,
+    `godot-android/fixtures/tracking_raw_sample.json` +
+    `tracking_raw_obb_sample.json`, `docs/tracking_raw_payload_contract.md`,
+    `tests/test_tracking_raw_payload_schema.py`.
+  - C3: `smartxr/card_lifecycle_schema.py`, `smartxr/card_lifecycle_fakes.py`,
+    `smartxr/cli/validate_card_lifecycle.py`,
+    `tools/validate_card_lifecycle_payload_schema.py`,
+    `godot-android/fixtures/card_lifecycle_sample.json`,
+    `docs/card_lifecycle_payload_contract.md`,
+    `tests/test_card_lifecycle_payload_schema.py`.
+  - CI: two schema-gate steps added in `.github/workflows/ci.yml`.
+- **Verification**: L0 both gates green; L1 fake producer→consumer round-trip
+  green for both; full suite **216 tests OK**. No device, no engine (as scoped).
+- **Decisions**: see DECISIONS.md ADR-8 (C1) and ADR-9 (C3).
+- **Risks / open**: (1) C1 places `source_frame`/`pose_quality` per-detection
+  per §4 verbatim — in v1 all detections share one source_frame; revisit only if
+  a real hybrid producer needs mixed sources. (2) C3 adds an `update` verb beyond
+  the literal attach/detach to carry expand/contract; if the TL prefers a
+  different carrier this is a `schema_version` decision, not a silent change.
+  (3) Notify TL on parent issue YAN-96 to release Track B (per the issue spec).
+- **Next**: Track B can start — module 1 builds the C1 producer against the
+  schema+fakes; module 2 builds the card-lifecycle consumer against C3.
+
 ## State (after CardView extraction, YAN-103 final slice)
 
 - **YAN-103 final slice done**: main card viewport/mesh/UI ownership moved from
