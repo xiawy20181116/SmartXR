@@ -50,7 +50,7 @@ first, then 6 packages them to APK and runs the on-device smoke.
 | C4 | ToolCall (4 -> 5) | **frozen** | `{id, name, args, scheduling}`, provider-agnostic. See `assistant/dispatcher.py`. |
 | C5 | tool schema (5 -> capability) | **frozen** | per-tool input/output schema via `ToolRegistry.export_schemas()`. |
 | C6 | assistant_card v1 (5 -> display) | **frozen** | `{type, schema_version, card_id, target_id, assistant_state, response_text, tool_summary, person, issue}`. See `apps/godot_mr`. |
-| C7 | frame-uplink (device -> PC) | **new, optional** | device -> PC image stream for PC-offload detection: `{frame_id, timestamp_ms, codec (jpeg/h264/nv12), width, height, payload, optional pose}`. Only needed if the PC-offload detection backend is implemented; the on-device backend needs no uplink. PC returns detections as C1 over the existing WS. |
+| C7 | frame-uplink (device -> PC) | **new, optional** | device -> PC frame stream for PC-offload detection. Two layers: `transport` (mjpeg-ws / h264-ws / webrtc) separate from `codec`; raw NV12 is never sent. Every frame carries `frame_id` + `timestamp_ms` (+ width/height, optional pose). Only needed if the PC-offload backend is built; on-device needs no uplink. PC returns detections as C1 over WS. See "Uplink transport". |
 
 Frozen and schema-gated today: C2/C4/C5/C6. **C1** and **C3** are defined in
 "Step 0". **C7** is defined only if/when the PC-offload detection backend is built;
@@ -103,6 +103,29 @@ For v1 the backend is an interface with the on-device (or replay) backend wired
 first; PC-offload is a second backend implementation behind the same interface, so
 "preserve the option" means the interface is in place, not that PC-offload must
 ship in v1.
+
+### Uplink transport (C7)
+
+The uplink has two layers: **codec** (what the frame is compressed to) and
+**transport** (how it is shipped). Raw NV12 is never sent. C7 is transport-agnostic;
+every option carries `frame_id` + `timestamp_ms` so late detections associate to the
+right frame.
+
+| Option | Transport + codec | Trade-off |
+|--------|-------------------|-----------|
+| MJPEG over WS | per-frame JPEG over the existing WS | simplest; per-frame `frame_id`/`timestamp` trivial; reuses WS; fine on LAN. **v1 bring-up default.** |
+| H.264/H.265 | Android MediaCodec hardware encode -> NAL over WS/UDP, ffmpeg decode on PC | best bandwidth; hardware encode is power/heat friendly; you handle keyframes/sync/loss. |
+| WebRTC | hardware encode + congestion control + NACK/FEC + adaptive bitrate | best for lossy / cross-network links; heaviest integration (signaling/ICE, and feeding a custom NV12 camera source into a video track likely needs native libwebrtc — Godot's WebRTC is data-channel oriented). |
+
+Caveat for continuous codecs (H.264/WebRTC): the codec decouples frame identity from
+the bitstream, so `frame_id` must be carried out-of-band (RTP timestamp mapping or a
+parallel data channel). MJPEG keeps frame identity inline. Lossy compression mildly
+degrades detector input but is negligible at sane bitrate.
+
+Recommendation: start with MJPEG-over-WS to bring the path up, then upgrade to H.264
+(heat-friendly) or WebRTC after measuring real bandwidth/latency/heat. Do not adopt
+the heaviest option before measuring; on a stable LAN, WebRTC's congestion control
+adds limited value.
 
 ## 5. What "frozen" means
 
