@@ -58,6 +58,7 @@ PASSTHROUGH_OVERLAY_PRESENTER = (
 # Card viewport/mesh/UI construction moved to scripts/card_view.gd in YAN-103;
 # card-side assertions cover only owner wiring and retained handles.
 CARD_VIEW = ROOT / "godot-android" / "scripts" / "card_view.gd"
+VALIDATION_SCENE_BUILDER = ROOT / "godot-android" / "scripts" / "validation_scene_builder.gd"
 VALIDATOR = ROOT / "tests" / "validate_project.ps1"
 ANDROID_ACTIVITY = (
     ROOT
@@ -367,18 +368,20 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
     def test_debug_marker_target_can_drive_real_device_validation(self):
         source = SCRIPT.read_text(encoding="utf-8")
         dispatcher = COMMAND_DISPATCHER.read_text(encoding="utf-8")
+        builder = VALIDATION_SCENE_BUILDER.read_text(encoding="utf-8")
 
         self.assertIn("const DEBUG_NODE3D_TARGET_ENABLED := false", source)
         self.assertIn('const DEBUG_TARGET_ID := "debug_marker"', source)
         self.assertIn('var _debug_target_marker: MeshInstance3D = null', source)
         self.assertIn("func _build_debug_target_marker() -> void:", source)
-        self.assertIn('marker.name = "MovingTargetMarker"', source)
-        self.assertIn("BoxMesh.new()", source)
-        self.assertIn("register_node3d_target(DEBUG_TARGET_ID, _debug_target_marker)", source)
-        self.assertIn('attach_to_target(CARD_ANCHOR_NAME, DEBUG_TARGET_ID, {"mode": "right_top"', source)
+        self.assertIn('marker.name = str(config.get("marker_name", "MovingTargetMarker"))', builder)
+        self.assertIn("BoxMesh.new()", builder)
+        self.assertIn('register_target.call(target_id, marker)', builder)
+        self.assertIn('attach_card.call(card_id, target_id, offset_rule)', builder)
+        self.assertIn('"offset_rule": {"mode": "right_top"', source)
         self.assertIn("func _update_debug_target_marker(delta: float) -> void:", source)
-        self.assertIn("_debug_target_marker.position = Vector3(", source)
-        self.assertIn("sin(_debug_target_elapsed_seconds", source)
+        self.assertIn("marker.position = Vector3(", builder)
+        self.assertIn("sin(next_elapsed", builder)
         self.assertIn('"debug_target_free"', dispatcher)
         self.assertIn('"debug_target_reset"', dispatcher)
         self.assertIn("CommandDispatcherScript.EFFECT_DEBUG_TARGET_FREE", source)
@@ -401,13 +404,15 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_debug_marker_uses_world_offset_while_rotating_for_pcmr_validation(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        builder = VALIDATION_SCENE_BUILDER.read_text(encoding="utf-8")
 
         self.assertIn('"offset_space": "world"', source)
-        self.assertIn("_debug_target_marker.rotation_degrees", source)
-        self.assertIn("_debug_target_marker.position = Vector3(", source)
+        self.assertIn("marker.rotation_degrees", builder)
+        self.assertIn("marker.position = Vector3(", builder)
 
     def test_proxy_targets_validation_mode_drives_real_card_wrapper(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        builder = VALIDATION_SCENE_BUILDER.read_text(encoding="utf-8")
 
         self.assertIn("const PROXY_TARGETS_VALIDATION_ENABLED := true", source)
         self.assertIn('const PROXY_TARGETS_SAMPLE_RES := "res://fixtures/proxy_targets_sample.json"', source)
@@ -418,10 +423,10 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertNotIn("var _proxy_targets_consumer: ProxyTargetsConsumer = null", source)
         self.assertNotIn("var _proxy_targets_card_adapter: ProxyTargetsCardAdapter = null", source)
         self.assertIn("func _build_proxy_targets_validation() -> void:", source)
-        self.assertIn("func _apply_proxy_targets_sample() -> void:", source)
-        self.assertIn("_proxy_targets_card_adapter.bind(_proxy_targets_consumer, self)", source)
-        self.assertIn("TargetSourceScript.ProxyTargetsTargetSource.new(_proxy_targets_card_adapter)", source)
-        self.assertIn("_proxy_targets_target_source.apply_proxy_targets_json(sample)", source)
+        self.assertIn("func apply_proxy_targets_sample(target_source, sample_res: String) -> String:", builder)
+        self.assertIn("adapter.bind(consumer, wrapper)", builder)
+        self.assertIn("target_source_factory.call(adapter)", builder)
+        self.assertIn("target_source.apply_proxy_targets_json(sample)", builder)
         self.assertIn("_build_proxy_targets_validation()", source)
 
     def test_proxy_targets_card_adapter_uses_offset_rule_contract(self):
@@ -587,8 +592,10 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         source = SCRIPT.read_text(encoding="utf-8")
         hud = STATUS_HUD.read_text(encoding="utf-8")
         fragment = PROXY_TARGETS_STATUS_FRAGMENT.read_text(encoding="utf-8")
+        builder = VALIDATION_SCENE_BUILDER.read_text(encoding="utf-8")
 
-        self.assertIn("_proxy_targets_consumer.set_head_reference(_camera)", source)
+        self.assertIn("camera", source)
+        self.assertIn("consumer.set_head_reference(camera)", builder)
         self.assertIn("var _last_world_from_head_applied := false", fragment)
         self.assertIn("var _last_local_position := Vector3.ZERO", fragment)
         self.assertIn("var _last_world_position := Vector3.ZERO", fragment)

@@ -53,6 +53,7 @@ const StatusHudScript := preload("res://scripts/status_hud.gd")
 const StatusSnapshotComposerScript := preload("res://scripts/status_snapshot_composer.gd")
 const TargetRegistryScript := preload("res://scripts/target_registry.gd")
 const TargetSourceScript := preload("res://scripts/target_source.gd")
+const ValidationSceneBuilderScript := preload("res://scripts/validation_scene_builder.gd")
 const VSTCaptureScript := preload("res://scripts/vst_capture.gd")
 const VSTDebugUIScript := preload("res://scripts/vst_debug_ui.gd")
 const WSTransportScript := preload("res://scripts/ws_transport.gd")
@@ -151,6 +152,7 @@ var _target_registry = TargetRegistryScript.new()
 # _target_registry in _setup_card_attachment(). Untyped `=` on purpose (no
 # class_name reference) so script-only probes can load both scripts.
 var _card_attachment = CardAttachmentScript.new()
+var _validation_scene_builder = ValidationSceneBuilderScript.new()
 var _debug_target_marker: MeshInstance3D = null
 var _debug_target_elapsed_seconds := 0.0
 var _vst_target_source = null
@@ -312,57 +314,45 @@ func _build_status_hud() -> void:
 func _build_debug_target_marker() -> void:
 	if not DEBUG_NODE3D_TARGET_ENABLED:
 		return
-	if _debug_target_marker != null and is_instance_valid(_debug_target_marker):
-		_debug_target_marker.queue_free()
-	var marker := MeshInstance3D.new()
-	marker.name = "MovingTargetMarker"
-	var mesh := BoxMesh.new()
-	mesh.size = DEBUG_TARGET_SIZE_M
-	marker.mesh = mesh
-	var material := StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.albedo_color = Color(1.0, 0.92, 0.1, 1.0)
-	material.no_depth_test = true
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	marker.set_surface_override_material(0, material)
-	marker.position = DEBUG_TARGET_BASE_POSITION
-	add_child(marker)
-	_debug_target_marker = marker
-	_debug_target_elapsed_seconds = 0.0
-	register_node3d_target(DEBUG_TARGET_ID, _debug_target_marker)
-	attach_to_target(CARD_ANCHOR_NAME, DEBUG_TARGET_ID, {"mode": "right_top", "offset_space": "world", "right_m": 0.35, "up_m": 0.25, "fallback": "hold_last_pose"})
-	print("Debug Node3D target attached: %s marker=%s" % [DEBUG_TARGET_ID, marker.name])
+	var result: Dictionary = _validation_scene_builder.build_debug_target_marker(
+		self,
+		_debug_target_marker,
+		{"target_id": DEBUG_TARGET_ID, "card_id": CARD_ANCHOR_NAME, "marker_name": "MovingTargetMarker", "size_m": DEBUG_TARGET_SIZE_M, "base_position": DEBUG_TARGET_BASE_POSITION, "radius_m": DEBUG_TARGET_RADIUS_M, "offset_rule": {"mode": "right_top", "offset_space": "world", "right_m": 0.35, "up_m": 0.25, "fallback": "hold_last_pose"}},
+		Callable(self, "register_node3d_target"),
+		Callable(self, "attach_to_target")
+	)
+	_debug_target_marker = result.get("marker", null)
+	_debug_target_elapsed_seconds = float(result.get("elapsed_seconds", 0.0))
+	if _debug_target_marker != null:
+		print("Debug Node3D target attached: %s marker=%s" % [DEBUG_TARGET_ID, _debug_target_marker.name])
 
 
 func _build_proxy_targets_validation() -> void:
 	if not PROXY_TARGETS_VALIDATION_ENABLED:
 		return
-	_proxy_targets_consumer = ProxyTargetsConsumerScript.new()
-	_proxy_targets_consumer.name = "ProxyTargetsConsumer"
-	if _camera != null and _proxy_targets_consumer.has_method("set_head_reference"):
-		_proxy_targets_consumer.set_head_reference(_camera)
-	add_child(_proxy_targets_consumer)
-	_proxy_targets_card_adapter = ProxyTargetsCardAdapterScript.new()
-	_proxy_targets_card_adapter.name = "ProxyTargetsCardAdapter"
-	add_child(_proxy_targets_card_adapter)
-	_proxy_targets_card_adapter.bind(_proxy_targets_consumer, self)
-	_proxy_targets_target_source = TargetSourceScript.ProxyTargetsTargetSource.new(_proxy_targets_card_adapter)
-	_apply_proxy_targets_sample()
-	_proxy_targets_target_source.set_on_message_parsed(_on_proxy_targets_message_parsed)
-
-
-func _apply_proxy_targets_sample() -> void:
-	if _proxy_targets_target_source == null:
-		return
-	if not FileAccess.file_exists(PROXY_TARGETS_SAMPLE_RES):
-		_last_command = "proxy_sample_missing"
-		return
-	var sample := FileAccess.get_file_as_string(PROXY_TARGETS_SAMPLE_RES)
-	if sample.is_empty():
-		_last_command = "proxy_sample_empty"
-		return
-	var applied: bool = bool(_proxy_targets_target_source.apply_proxy_targets_json(sample))
-	_last_command = "proxy_sample" if applied else "proxy_sample_failed"
+	var consumer_factory := func():
+		return ProxyTargetsConsumerScript.new()
+	var adapter_factory := func():
+		return ProxyTargetsCardAdapterScript.new()
+	var target_source_factory := func(adapter):
+		return TargetSourceScript.ProxyTargetsTargetSource.new(adapter)
+	var result: Dictionary = _validation_scene_builder.build_proxy_targets_validation(
+		self,
+		self,
+		_camera,
+		consumer_factory,
+		adapter_factory,
+		target_source_factory,
+		PROXY_TARGETS_SAMPLE_RES
+	)
+	_proxy_targets_consumer = result.get("consumer", null)
+	_proxy_targets_card_adapter = result.get("card_adapter", null)
+	_proxy_targets_target_source = result.get("target_source", null)
+	var sample_command := str(result.get("sample_command", ""))
+	if not sample_command.is_empty():
+		_last_command = sample_command
+	if _proxy_targets_target_source != null:
+		_proxy_targets_target_source.set_on_message_parsed(_on_proxy_targets_message_parsed)
 
 
 func _connect_proxy_targets_ws() -> void:
@@ -464,13 +454,12 @@ func _proxy_targets_card_node_position():
 func _update_debug_target_marker(delta: float) -> void:
 	if _debug_target_marker == null or not is_instance_valid(_debug_target_marker):
 		return
-	_debug_target_elapsed_seconds += delta
-	_debug_target_marker.position = Vector3(
-		DEBUG_TARGET_BASE_POSITION.x + sin(_debug_target_elapsed_seconds * 0.9) * DEBUG_TARGET_RADIUS_M,
-		DEBUG_TARGET_BASE_POSITION.y + sin(_debug_target_elapsed_seconds * 1.7) * 0.08,
-		DEBUG_TARGET_BASE_POSITION.z + cos(_debug_target_elapsed_seconds * 0.9) * 0.12
+	_debug_target_elapsed_seconds = _validation_scene_builder.update_debug_target_marker(
+		_debug_target_marker,
+		_debug_target_elapsed_seconds,
+		delta,
+		{"base_position": DEBUG_TARGET_BASE_POSITION, "radius_m": DEBUG_TARGET_RADIUS_M}
 	)
-	_debug_target_marker.rotation_degrees = Vector3(0.0, _debug_target_elapsed_seconds * 35.0, 0.0)
 
 
 ## Wires the two WSTransport instances (control + proxy_targets). The card
