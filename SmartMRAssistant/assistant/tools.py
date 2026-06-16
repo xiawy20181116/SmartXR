@@ -9,10 +9,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .card_payload import build_assistant_card_payload
+
 
 ToolArgs = Mapping[str, Any]
 ToolResult = dict[str, Any]
 ToolHandler = Callable[[ToolArgs], ToolResult | Awaitable[ToolResult]]
+CardSink = Callable[[dict[str, Any]], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,14 +110,18 @@ class ToolRegistry:
             trace_file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 
-def echo_tool(args: ToolArgs) -> ToolResult:
-    return {"text": str(args.get("text", ""))}
+def scene_status_tool(args: ToolArgs) -> ToolResult:
+    scene_snapshot = args.get("scene_snapshot") or {}
+    scene = dict(scene_snapshot) if isinstance(scene_snapshot, Mapping) else {}
+    scene.setdefault("last_user_text", None)
+    scene.setdefault("facts", {})
+    return {"status": "ok", "scene": scene}
 
 
 def identity_lookup_tool(args: ToolArgs) -> ToolResult:
     person_ref = str(args["person_ref"])
-    snapshot = args.get("snapshot") or {}
-    people = snapshot.get("people", []) if isinstance(snapshot, Mapping) else []
+    identity_source = args.get("identity_source") or args.get("snapshot") or {}
+    people = identity_source.get("people", []) if isinstance(identity_source, Mapping) else []
     for person in people:
         if not isinstance(person, Mapping):
             continue
@@ -123,33 +130,63 @@ def identity_lookup_tool(args: ToolArgs) -> ToolResult:
     return {"status": "not_found", "person": None}
 
 
-def jira_lookup_tool(args: ToolArgs) -> ToolResult:
+def work_item_lookup_tool(args: ToolArgs) -> ToolResult:
     issue_key = str(args["issue_key"])
-    cache = args.get("cache") or {}
-    issues = cache.get("issues", []) if isinstance(cache, Mapping) else []
+    work_item_source = args.get("work_item_source") or args.get("cache") or {}
+    issues = work_item_source.get("issues", []) if isinstance(work_item_source, Mapping) else []
     for issue in issues:
         if not isinstance(issue, Mapping):
             continue
         if issue.get("key") == issue_key:
-            return {"status": "found", "issue": dict(issue)}
-    return {"status": "not_found", "issue": None}
+            return {"status": "found", "work_item": dict(issue)}
+    return {"status": "not_found", "work_item": None}
 
 
-def create_default_registry(trace_path: str | Path | None = None) -> ToolRegistry:
+def card_command_tool(args: ToolArgs) -> ToolResult:
+    control = {
+        "type": "control",
+        "command": str(args["command"]),
+    }
+    if "card_id" in args:
+        control["card_id"] = str(args["card_id"])
+    if "target_id" in args:
+        control["target_id"] = str(args["target_id"])
+    return {"status": "accepted", "control": control}
+
+
+def assistant_card_push_tool(args: ToolArgs, card_sink: CardSink | None = None) -> ToolResult:
+    assistant_card = build_assistant_card_payload(
+        card_id=str(args["card_id"]),
+        target_id=str(args["target_id"]),
+        assistant_state=str(args.get("assistant_state", "responding")),
+        response_text=str(args.get("response_text", "")),
+        tool_summary=_optional_mapping(args.get("tool_summary")),
+        person=_optional_mapping(args.get("person")),
+        issue=_optional_mapping(args.get("issue")),
+    )
+    if card_sink is not None:
+        card_sink(assistant_card)
+    return {"status": "published", "assistant_card": assistant_card}
+
+
+def create_default_registry(trace_path: str | Path | None = None, card_sink: CardSink | None = None) -> ToolRegistry:
     registry = ToolRegistry(trace_path=trace_path)
     registry.register(
-        "echo",
-        echo_tool,
+        "scene_status",
+        scene_status_tool,
         input_schema={
             "type": "object",
-            "properties": {"text": {"type": "string"}},
+            "properties": {"scene_snapshot": {"type": "object"}},
         },
         output_schema={
             "type": "object",
-            "properties": {"text": {"type": "string"}},
-            "required": ["text"],
+            "properties": {
+                "status": {"type": "string", "enum": ["ok"]},
+                "scene": {"type": "object"},
+            },
+            "required": ["status", "scene"],
         },
-        latency_budget_ms=50,
+        latency_budget_ms=75,
         scheduling="NON_BLOCKING",
     )
     registry.register(
@@ -159,7 +196,7 @@ def create_default_registry(trace_path: str | Path | None = None) -> ToolRegistr
             "type": "object",
             "properties": {
                 "person_ref": {"type": "string"},
-                "snapshot": {"type": "object"},
+                "identity_source": {"type": "object"},
             },
             "required": ["person_ref"],
         },
@@ -175,13 +212,13 @@ def create_default_registry(trace_path: str | Path | None = None) -> ToolRegistr
         scheduling="NON_BLOCKING",
     )
     registry.register(
-        "jira_lookup",
-        jira_lookup_tool,
+        "work_item_lookup",
+        work_item_lookup_tool,
         input_schema={
             "type": "object",
             "properties": {
                 "issue_key": {"type": "string"},
-                "cache": {"type": "object"},
+                "work_item_source": {"type": "object"},
             },
             "required": ["issue_key"],
         },
@@ -189,11 +226,61 @@ def create_default_registry(trace_path: str | Path | None = None) -> ToolRegistr
             "type": "object",
             "properties": {
                 "status": {"type": "string", "enum": ["found", "not_found"]},
-                "issue": {"type": ["object", "null"]},
+                "work_item": {"type": ["object", "null"]},
             },
-            "required": ["status", "issue"],
+            "required": ["status", "work_item"],
         },
         latency_budget_ms=200,
+        scheduling="NON_BLOCKING",
+    )
+    registry.register(
+        "card_command",
+        card_command_tool,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "command": {"type": "string"},
+                "card_id": {"type": "string"},
+                "target_id": {"type": "string"},
+            },
+            "required": ["command"],
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["accepted"]},
+                "control": {"type": "object"},
+            },
+            "required": ["status", "control"],
+        },
+        latency_budget_ms=75,
+        scheduling="NON_BLOCKING",
+    )
+    registry.register(
+        "assistant_card_push",
+        lambda args: assistant_card_push_tool(args, card_sink),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "card_id": {"type": "string"},
+                "target_id": {"type": "string"},
+                "assistant_state": {"type": "string"},
+                "response_text": {"type": "string"},
+                "tool_summary": {"type": "object"},
+                "person": {"type": ["object", "null"]},
+                "issue": {"type": ["object", "null"]},
+            },
+            "required": ["card_id", "target_id", "response_text"],
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["published"]},
+                "assistant_card": {"type": "object"},
+            },
+            "required": ["status", "assistant_card"],
+        },
+        latency_budget_ms=150,
         scheduling="NON_BLOCKING",
     )
     return registry
@@ -206,7 +293,20 @@ def _validate_required_args(name: str, args: ToolArgs, schema: Mapping[str, Any]
 
 
 def _summarize_args(args: ToolArgs) -> dict[str, Any]:
-    sensitive_or_large = {"snapshot", "cache", "secret", "token", "password", "api_key"}
+    sensitive_or_large = {
+        "snapshot",
+        "cache",
+        "identity_source",
+        "work_item_source",
+        "scene_snapshot",
+        "person",
+        "issue",
+        "tool_summary",
+        "secret",
+        "token",
+        "password",
+        "api_key",
+    }
     summary: dict[str, Any] = {}
     for key, value in args.items():
         lowered = str(key).lower()
@@ -215,3 +315,11 @@ def _summarize_args(args: ToolArgs) -> dict[str, Any]:
         if isinstance(value, str | int | float | bool) or value is None:
             summary[str(key)] = value
     return summary
+
+
+def _optional_mapping(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise ValueError("assistant_card_push optional object fields must be objects or null")

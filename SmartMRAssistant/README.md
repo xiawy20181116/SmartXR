@@ -9,8 +9,9 @@ Godot MR assistant. It keeps the audio transport boundary separate from tool dis
 
 - `assistant/context.py` keeps the scene-context interface. S1 stores only the
   latest text turn and a generic facts map.
-- `assistant/tools.py` owns the async-aware schema registry, local demo tools,
-  and optional JSONL tool-call tracing.
+- `assistant/tools.py` owns the async-aware schema registry, fixture-backed
+  capability tools, C3/C6 payload builders, and optional JSONL tool-call
+  tracing.
 - `assistant/dispatcher.py` executes a `ToolCall` through the registry and
   returns a tool response payload.
 - `assistant/session.py` contains `LiveVoiceSession` for Live tool-call payloads
@@ -19,16 +20,23 @@ Godot MR assistant. It keeps the audio transport boundary separate from tool dis
 
 ## Tools
 
-The default registry exports schema metadata for all assistant tools:
+The default registry exports schema metadata for real assistant capabilities:
 
-- `echo` returns the supplied text and keeps the S1 smoke path intact.
-- `identity_lookup` searches a perception snapshot shaped like
+- `scene_status` returns the latest scene context snapshot passed by the
+  session or Live tool-call adapter.
+- `identity_lookup` searches an identity source shaped like
   `{"people": [{"id": "...", "display_name": "..."}]}`.
-- `jira_lookup` searches a warm cache shaped like
+- `work_item_lookup` searches a Jira/work-item source shaped like
   `{"issues": [{"key": "...", "summary": "..."}]}`.
+- `card_command` builds a C3-style control payload such as
+  `{"type": "control", "command": "expand", "card_id": "..."}`.
+- `assistant_card_push` builds and optionally publishes a C6 `assistant_card`
+  payload for the Godot `assistant_updates` path.
 
-Both S2 tools are local fixture/cache lookups. They do not call network services,
-read credentials, or require a live Jira connection.
+The lookup tools are fixture-backed by default. They do not call network
+services, read credentials, or require a live Jira/identity connection; real
+sources can be injected later at the session boundary without changing the
+dispatcher contract.
 
 Pass `trace_path` to `create_default_registry()` to append one JSON object per
 tool call. Trace records include the tool name, summarized non-sensitive args,
@@ -42,10 +50,11 @@ From the repository root:
 python -m SmartMRAssistant.assistant --text "hello assistant"
 ```
 
-Expected output is a JSON object with one echo tool response:
+Expected output is a JSON object with scene, lookup, work-item, and card-push
+tool responses:
 
 ```json
-{"tool_responses": [{"tool_call_id": "simulated-echo-1", "name": "echo", "response": {"text": "hello assistant"}}]}
+{"tool_responses": [{"tool_call_id": "simulated-scene-status-1", "name": "scene_status", "response": {"status": "ok", "scene": {"last_user_text": "hello assistant", "facts": {}}}}, {"tool_call_id": "simulated-identity-1", "name": "identity_lookup", "response": {"status": "found", "person": {"id": "person-ada", "display_name": "Ada Lovelace", "role": "Demo Lead", "confidence": 0.93}}}, {"tool_call_id": "simulated-work-item-1", "name": "work_item_lookup", "response": {"status": "found", "work_item": {"key": "XR-42", "summary": "Prepare MR assistant demo", "status": "In Progress", "assignee": "Ada"}}}, {"tool_call_id": "simulated-card-push-1", "name": "assistant_card_push", "response": {"status": "published", "assistant_card": {"type": "assistant_card", "schema_version": 1, "card_id": "CardAnchor", "target_id": "person-ada", "assistant_state": "responding", "response_text": "Ada Lovelace is working on XR-42: Prepare MR assistant demo.", "tool_summary": {"identity_status": "found", "jira_status": "found", "person_label": "Ada Lovelace", "issue_label": "XR-42: Prepare MR assistant demo", "status_line": "Ada Lovelace | XR-42 | In Progress"}, "person": {"id": "person-ada", "display_name": "Ada Lovelace", "role": "Demo Lead", "confidence": 0.93}, "issue": {"key": "XR-42", "summary": "Prepare MR assistant demo", "status": "In Progress", "assignee": "Ada"}}}}]}
 ```
 
 Headless tests and text debug code can also call a named tool without audio:
@@ -54,7 +63,7 @@ Headless tests and text debug code can also call a named tool without audio:
 session = SimulatedVoiceSession()
 response = await session.run_tool_call(
     "identity_lookup",
-    {"person_ref": "person-1", "snapshot": {"people": [{"id": "person-1"}]}},
+    {"person_ref": "person-1", "identity_source": {"people": [{"id": "person-1"}]}},
 )
 ```
 
