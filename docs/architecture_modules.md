@@ -29,7 +29,7 @@ Single-direction dependency. Lower layers do not know upper layers exist.
 
 | # | Module | Deliverable | Consumes | Produces | Maps to | Device-gated? |
 |---|--------|-------------|----------|----------|---------|---------------|
-| 1 | human tracking | detection + tracking producer: per target `{id, 3D bbox (8 vertices), 3D landmark, confidence, ts}` | camera/VST frames | C1 (tracking-raw) | `godot-android/ncnn/yolov8n` (2D), `smartxr/frames.py` | no (contract verifiable headless; model accuracy needs eval data) |
+| 1 | human tracking | detection + tracking producer: per target `{id, 3D bbox (8 vertices), 3D landmark, confidence, ts}`; detection backend is pluggable (on-device / PC-offload / hybrid) | camera/VST frames | C1 (tracking-raw) | `godot-android/ncnn/yolov8n` (2D), `smartxr/frames.py` | no (contract verifiable headless; model accuracy needs eval data) |
 | 2 | godot card | scene + card subsystem: attach to dynamic/static targets, appear/expand/contract/disappear lifecycle | C2 (proxy_targets), C3 (card-lifecycle) | card status snapshot | `card_attachment.gd`, `card_view.gd`, `apps/godot_mr` | no |
 | 3 | MR integration | publisher-side bbox->head/world conversion + VST alignment + display wiring | C1, calibration | C2 (proxy_targets) | `vst_capture.gd`, `smartxr/geometry.py`, bbox-math fixture | **yes** (alignment correctness) |
 | 4 | voice | provider-agnostic `VoiceSession`, backends: Gemini Live + Qwen Omni Realtime | audio, tool responses | C4 (ToolCall) | `SmartMRAssistant/assistant/session.py` | no |
@@ -50,9 +50,11 @@ first, then 6 packages them to APK and runs the on-device smoke.
 | C4 | ToolCall (4 -> 5) | **frozen** | `{id, name, args, scheduling}`, provider-agnostic. See `assistant/dispatcher.py`. |
 | C5 | tool schema (5 -> capability) | **frozen** | per-tool input/output schema via `ToolRegistry.export_schemas()`. |
 | C6 | assistant_card v1 (5 -> display) | **frozen** | `{type, schema_version, card_id, target_id, assistant_state, response_text, tool_summary, person, issue}`. See `apps/godot_mr`. |
+| C7 | frame-uplink (device -> PC) | **new, optional** | device -> PC image stream for PC-offload detection: `{frame_id, timestamp_ms, codec (jpeg/h264/nv12), width, height, payload, optional pose}`. Only needed if the PC-offload detection backend is implemented; the on-device backend needs no uplink. PC returns detections as C1 over the existing WS. |
 
-4 of 6 seams are already frozen and schema-gated (C2/C4/C5/C6). Only **C1** and
-**C3** remain to be defined to the same bar; that is "Step 0".
+Frozen and schema-gated today: C2/C4/C5/C6. **C1** and **C3** are defined in
+"Step 0". **C7** is defined only if/when the PC-offload detection backend is built;
+it does not block the on-device path.
 
 ### Landmark (C1 detail)
 
@@ -75,6 +77,32 @@ Depth rate is decoupled from detection/tracking rate: detection/tracking runs at
 full rate while depth may update slowly; the producer holds the last depth per
 track between depth updates. Given the high alignment tolerance (card only needs
 to sit near the person), holding/smoothing stale depth is acceptable.
+
+### Detection backend topology (C1 producer)
+
+Where detection runs is a deployment-topology choice **behind the C1 boundary**;
+the consumer (modules 2/3) never sees it. Module 1 exposes a pluggable detection
+backend; all backends emit the same C1. On-device compute is thermally/perf
+limited, so the PC-offload option must be preserved from the start.
+
+- **on-device**: capture + detection (ncnn yolov8n) + tracking on the headset.
+  Lowest latency, no network, but thermally/perf limited.
+- **PC-offload**: headset streams frames over WiFi (C7) to a PC that runs a
+  larger/better detector; PC returns detections as C1 over WS. Unlocks heavier
+  models (and is the natural home for the `mono_metric` depth / 3D-pose upgrades).
+- **hybrid**: PC detects at a low rate; the headset tracks on-device at full rate
+  between PC detections — same rate-decoupling pattern as depth above.
+
+Engineering constraints to design for (PC-offload): the uplink must be compressed
+(raw 880x660 NV12 at ~40 fps is ~280 Mbps; use jpeg/h264); PC detection runs at a
+lower rate with on-device tracking bridging the gap; WiFi loss falls back to the
+on-device backend or last-known tracks; results are associated to frames by
+`frame_id` + `timestamp_ms` since they arrive late.
+
+For v1 the backend is an interface with the on-device (or replay) backend wired
+first; PC-offload is a second backend implementation behind the same interface, so
+"preserve the option" means the interface is in place, not that PC-offload must
+ship in v1.
 
 ## 5. What "frozen" means
 
