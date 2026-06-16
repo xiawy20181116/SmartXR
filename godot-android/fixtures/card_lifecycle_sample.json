@@ -1,0 +1,65 @@
+{
+  "type": "card_lifecycle",
+  "schema_version": 1,
+  "sequence": 0,
+  "timestamp_ms": 2000.0,
+  "commands": [
+    {
+      "card_id": "CardAnchor",
+      "target_id": "person-7",
+      "command": "attach",
+      "card_state": "appear",
+      "animation": {
+        "duration_ms": 250,
+        "easing": "ease_in_out"
+      },
+      "offset_rule": {
+        "mode": "right_top",
+        "offset_space": "world",
+        "right_m": 0.35,
+        "up_m": 0.25,
+        "fallback": "hold_last_pose"
+      }
+    },
+    {
+      "card_id": "CardAnchor",
+      "target_id": "person-7",
+      "command": "update",
+      "card_state": "expand",
+      "animation": {
+        "duration_ms": 200,
+        "easing": "ease_in_out"
+      }
+    },
+    {
+      "card_id": "CardAnchor",
+      "target_id": "person-7",
+      "command": "update",
+      "card_state": "contract",
+      "animation": {
+        "duration_ms": 200,
+        "easing": "ease_in_out"
+      }
+    },
+    {
+      "card_id": "CardAnchor",
+      "target_id": "person-7",
+      "command": "update",
+      "card_state": "expand",
+      "animation": {
+        "duration_ms": 200,
+        "easing": "ease_in_out"
+      }
+    },
+    {
+      "card_id": "CardAnchor",
+      "target_id": "person-7",
+      "command": "detach",
+      "card_state": "disappear",
+      "animation": {
+        "duration_ms": 300,
+        "easing": "ease_in_out"
+      }
+    }
+  ]
+}

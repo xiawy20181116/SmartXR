@@ -6,6 +6,26 @@ side.
 
 ## Completed
 
+- [x] **YAN-105 Step 0 — freeze C1 + C3 contracts** (architecture_modules.md
+  §10 "step 0", unlocks Track B). Both contracts taken to the §5 five-point
+  freeze bar:
+  - **C1 tracking-raw**: `smartxr/tracking_raw_schema.py` (`schema_version: 1`),
+    fixtures `tracking_raw_sample.json` (8-vertex) + `tracking_raw_obb_sample.json`
+    (center+extent+rotation), fakes `smartxr/tracking_raw_fakes.py`
+    (`build_fake_tracking_raw_message` + `TrackingRawConsumer`), semantics
+    `docs/tracking_raw_payload_contract.md`, gate
+    `tools/validate_tracking_raw_payload_schema.py`, tests
+    `tests/test_tracking_raw_payload_schema.py`.
+  - **C3 card-lifecycle**: `smartxr/card_lifecycle_schema.py`
+    (`schema_version: 1`), fixture `card_lifecycle_sample.json`, fakes
+    `smartxr/card_lifecycle_fakes.py` (`build_fake_card_lifecycle_message` +
+    `CardLifecycleConsumer` state machine), semantics
+    `docs/card_lifecycle_payload_contract.md`, gate
+    `tools/validate_card_lifecycle_payload_schema.py`, tests
+    `tests/test_card_lifecycle_payload_schema.py`.
+  - CI: two new schema-gate steps in `.github/workflows/ci.yml`. Full suite
+    216 tests green; both gates green. See ADR-8/ADR-9 below.
+
 - [x] **M1 — Configuration**: `SmartXROptions` (`godot-android/scripts/smartxr_options.gd`)
   with env → `user://smartxr_options.json` → const-default resolution.
   Control WS URL (previously a hardcoded LAN IP at the call site),
