@@ -2,7 +2,14 @@
 
 from .context import SceneContext
 from .dispatcher import ToolCall, dispatch_tool_call
-from .session import LiveVoiceSession, SimulatedVoiceSession
+from .session import (
+    GeminiLiveVoiceSession,
+    LiveVoiceSession,
+    QwenOmniRealtimeVoiceSession,
+    SimulatedVoiceSession,
+    VoiceSession,
+    VoiceSessionConfig,
+)
 from .tools import (
     ToolRegistry,
     assistant_card_push_tool,
@@ -15,10 +22,14 @@ from .tools import (
 
 __all__ = [
     "SceneContext",
+    "GeminiLiveVoiceSession",
     "LiveVoiceSession",
+    "QwenOmniRealtimeVoiceSession",
     "SimulatedVoiceSession",
     "ToolCall",
     "ToolRegistry",
+    "VoiceSession",
+    "VoiceSessionConfig",
     "assistant_card_push_tool",
     "card_command_tool",
     "create_default_registry",

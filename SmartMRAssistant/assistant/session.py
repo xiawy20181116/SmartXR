@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import os
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -34,21 +37,160 @@ DEFAULT_WORK_ITEM_SOURCE = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class VoiceSessionConfig:
+    provider: str
+    model_id: str
+    api_key_env: str
+    has_api_key: bool = False
+
+    @classmethod
+    def from_env(cls, provider: str) -> "VoiceSessionConfig":
+        normalized = provider.lower()
+        if normalized == "gemini":
+            model_env = "SMARTMR_VOICE_GEMINI_MODEL"
+            api_key_env = "GEMINI_API_KEY"
+        elif normalized == "qwen":
+            model_env = "SMARTMR_VOICE_QWEN_MODEL"
+            api_key_env = "DASHSCOPE_API_KEY"
+        else:
+            raise ValueError(f"Unsupported voice provider: {provider}")
+
+        model_id = os.environ.get(model_env)
+        if not model_id:
+            raise ValueError(f"Missing required model id env var: {model_env}")
+
+        return cls(
+            provider=normalized,
+            model_id=model_id,
+            api_key_env=api_key_env,
+            has_api_key=bool(os.environ.get(api_key_env)),
+        )
+
+
+class VoiceSession(ABC):
+    """Provider session boundary that emits C4 tool calls.
+
+    Audio capture, codecs, and provider transport stay outside this interface.
+    Tests can replay audio bytes as inert timing/input markers and feed recorded
+    provider events through the same C4 normalizer.
+    """
+
+    @abstractmethod
+    def extract_tool_calls(self, event: dict[str, Any]) -> list[ToolCall]:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def replay_recorded_audio(
+        self,
+        audio_chunks: list[bytes],
+        provider_events: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+
+def _tool_call_from_c4(payload: dict[str, Any]) -> ToolCall:
+    return ToolCall(
+        id=str(payload["id"]),
+        name=str(payload["name"]),
+        args=dict(payload.get("args", {})),
+        scheduling=str(payload.get("scheduling", "NON_BLOCKING")),
+    )
+
+
 @dataclass(slots=True)
-class LiveVoiceSession:
-    """Tool-call side of a future Gemini Live voice session."""
+class LiveVoiceSession(VoiceSession):
+    """Provider-neutral tool-call side of a live voice session."""
 
     registry: ToolRegistry = field(default_factory=create_default_registry)
     context: SceneContext = field(default_factory=SceneContext)
+    config: VoiceSessionConfig | None = None
 
     async def handle_tool_call_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
-        call = ToolCall(
-            id=str(payload["id"]),
-            name=str(payload["name"]),
-            args=dict(payload.get("args", {})),
-            scheduling=str(payload.get("scheduling", "NON_BLOCKING")),
-        )
+        call = _tool_call_from_c4(payload)
         return await dispatch_tool_call(call, self.registry)
+
+    def extract_tool_calls(self, event: dict[str, Any]) -> list[ToolCall]:
+        return [_tool_call_from_c4(event)]
+
+    async def replay_recorded_audio(
+        self,
+        audio_chunks: list[bytes],
+        provider_events: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        _ = audio_chunks
+        responses: list[dict[str, Any]] = []
+        for event in provider_events:
+            for call in self.extract_tool_calls(event):
+                responses.append(await dispatch_tool_call(call, self.registry))
+        return responses
+
+
+@dataclass(slots=True)
+class GeminiLiveVoiceSession(LiveVoiceSession):
+    """Gemini Live event adapter that emits frozen C4 tool calls."""
+
+    config: VoiceSessionConfig = field(default_factory=lambda: VoiceSessionConfig.from_env("gemini"))
+
+    def extract_tool_calls(self, event: dict[str, Any]) -> list[ToolCall]:
+        tool_call = event.get("toolCall", {})
+        function_calls = tool_call.get("functionCalls", event.get("functionCalls", []))
+        calls: list[ToolCall] = []
+        for function_call in function_calls:
+            calls.append(
+                _tool_call_from_c4(
+                    {
+                        "id": function_call.get("id", function_call.get("callId")),
+                        "name": function_call["name"],
+                        "args": function_call.get("args", {}),
+                        "scheduling": function_call.get("scheduling", "NON_BLOCKING"),
+                    }
+                )
+            )
+        return calls
+
+
+@dataclass(slots=True)
+class QwenOmniRealtimeVoiceSession(LiveVoiceSession):
+    """Qwen Omni Realtime event adapter that emits frozen C4 tool calls."""
+
+    config: VoiceSessionConfig = field(default_factory=lambda: VoiceSessionConfig.from_env("qwen"))
+
+    def extract_tool_calls(self, event: dict[str, Any]) -> list[ToolCall]:
+        if event.get("type") == "response.function_call_arguments.done":
+            return [
+                _tool_call_from_c4(
+                    {
+                        "id": event.get("call_id", event.get("id")),
+                        "name": event["name"],
+                        "args": _parse_qwen_arguments(event.get("arguments", {})),
+                        "scheduling": event.get("scheduling", "NON_BLOCKING"),
+                    }
+                )
+            ]
+
+        calls: list[ToolCall] = []
+        for choice in event.get("choices", []):
+            delta = choice.get("delta", {})
+            for tool_call in delta.get("tool_calls", []):
+                function = tool_call.get("function", {})
+                calls.append(
+                    _tool_call_from_c4(
+                        {
+                            "id": tool_call.get("id"),
+                            "name": function["name"],
+                            "args": _parse_qwen_arguments(function.get("arguments", {})),
+                            "scheduling": tool_call.get("scheduling", "NON_BLOCKING"),
+                        }
+                    )
+                )
+        return calls
+
+
+def _parse_qwen_arguments(arguments: Any) -> dict[str, Any]:
+    if isinstance(arguments, str):
+        return dict(json.loads(arguments or "{}"))
+    return dict(arguments or {})
 
 
 @dataclass(slots=True)
