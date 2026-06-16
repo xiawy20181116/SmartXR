@@ -61,6 +61,21 @@ point carrying a `rule` (e.g. `centroid`, `front_top_center`, `bottom_center`)
 computed from the 8 vertices. Choosing a different landmark later changes the
 `rule` value, not the contract shape.
 
+Depth is a single **pluggable scalar** input to the 2.5D box builder (the 8
+vertices are extruded around the projected anchor using nominal human dimensions).
+`smartxr/publisher.py` already treats depth this way (`depth_m` per detection +
+`depth_source` tag). The depth source can therefore be swapped without changing
+C1's shape; `pose_quality` records the fidelity:
+
+- `fixed_depth` — constant given depth (current).
+- `mono_metric` — monocular metric depth estimate (low frame rate; see rate note).
+- `stereo` — stereo VST triangulation (arrives with the dual-eye iteration).
+
+Depth rate is decoupled from detection/tracking rate: detection/tracking runs at
+full rate while depth may update slowly; the producer holds the last depth per
+track between depth updates. Given the high alignment tolerance (card only needs
+to sit near the person), holding/smoothing stale depth is acceptable.
+
 ## 5. What "frozen" means
 
 A contract is frozen when all five hold:
@@ -97,7 +112,7 @@ Every deliverable declares the highest rung it must pass.
 
 ## 8. Data needs (consolidated, prioritized)
 
-1. **[blocks 1+3, highest] 3D depth source direction.** Current pipeline is projected-2D single anchor (`pose_quality: "projected_2d"` in `smartxr/frames.py`). A true 8-vertex 3D bbox needs real depth. Options: (a) stereo VST triangulation; (b) monocular depth / 3D-pose model; (c) external HumanTrackor (Antman) if it already emits 3D. This decision shapes module 1.
+1. **[RESOLVED] 3D depth source direction.** Decision: ship a 2.5D approximate box now (high alignment tolerance justifies it), with depth as a pluggable scalar. v1 uses the current fixed depth (`pose_quality: fixed_depth`). Upgrades — monocular metric depth (`mono_metric`, low fps, run asynchronously with per-track last-depth hold) then stereo triangulation (`stereo`, with the dual-eye iteration) — are swapped in behind C1 without a contract change. This no longer blocks module 1 or the issue tree.
 2. **[blocks 3] Headset calibration**: camera intrinsics + `right_eye_to_head` extrinsic (device-specific; can be captured on device).
 3. **[1/3 verification] Footage with people**: calibrated (ideally stereo) VST sequences; clips with people at known distance/position enable quantitative alignment error; optional 3D bbox / id labels enable quantitative tracking metrics.
 4. **[blocks 4] Voice API credentials**: Gemini Live + Qwen Realtime keys (secrets — never in repo/metadata; via env / custom_env).
@@ -106,7 +121,7 @@ Every deliverable declares the highest rung it must pass.
 
 ## 9. Open decisions
 
-- **D1 — 3D depth source** (data need #1): blocks the final shape of modules 1 and 3.
+- **D1 — 3D depth source** (data need #1): RESOLVED. 2.5D approximate box now (fixed depth), depth as a pluggable scalar; roadmap mono-metric -> stereo behind C1, no contract change. VST is currently monocular; stereo iteration in progress.
 - **Voice model ids**: kept as `VoiceSession` config (env/config), not hard-coded. Confirm the current Gemini Live / Qwen Omni Realtime model strings at module-4 kickoff; changing them does not change any contract.
 - **Landmark rule**: configurable `rule` over the 8 vertices; default selectable later without a contract change.
 
