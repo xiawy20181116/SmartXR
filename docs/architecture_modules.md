@@ -63,6 +63,18 @@ point carrying a `rule` (e.g. `centroid`, `front_top_center`, `bottom_center`)
 computed from the 8 vertices. Choosing a different landmark later changes the
 `rule` value, not the contract shape.
 
+### Track lifecycle and id (C1 detail)
+
+C1 `id` is a track id with a defined lifecycle, so id-stability is testable:
+
+- states: `tentative` (newly seen, unconfirmed) -> `confirmed` (stable across N
+  frames) -> `lost` (missed M frames, pose predicted) -> `deleted` (after K lost frames).
+- id stability: a `confirmed` track keeps its id across brief occlusion/exit; ids are
+  not reused within a session. Re-entry after `deleted` gets a new id
+  (cross-session / true re-identification is out of scope for v1).
+- C1 carries the current `state` and age; data-grading T1 (enter/leave, 2-person)
+  measures id-switch rate against this definition.
+
 Depth is a single **pluggable scalar** input to the 2.5D box builder (the 8
 vertices are extruded around the projected anchor using nominal human dimensions).
 `smartxr/publisher.py` already treats depth this way (`depth_m` per detection +
@@ -141,6 +153,12 @@ Frozen does not mean final. It means both sides can build in parallel and CI
 prevents silent drift; changing a contract becomes an explicit, gated, versioned event.
 `proxy_targets` (C2) is the living example that meets all five.
 
+Version negotiation: a consumer accepts `schema_version` within its supported range
+and ignores unknown additive fields; a producer that bumped a major (shape) version
+must not assume an older consumer understands it. For distributed seams (C7 /
+PC-offload) the two sides exchange supported `schema_version` at connect and use the
+lower common version.
+
 ## 6. Verification ladder
 
 Every deliverable declares the highest rung it must pass.
@@ -175,6 +193,10 @@ Every deliverable declares the highest rung it must pass.
 - **D1 — 3D depth source** (data need #1): RESOLVED. 2.5D approximate box now (fixed depth), depth as a pluggable scalar; roadmap mono-metric -> stereo behind C1, no contract change. VST is currently monocular; stereo iteration in progress.
 - **Voice model ids**: kept as `VoiceSession` config (env/config), not hard-coded. Confirm the current Gemini Live / Qwen Omni Realtime model strings at module-4 kickoff; changing them does not change any contract.
 - **Landmark rule**: configurable `rule` over the 8 vertices; default selectable later without a contract change.
+- **Latency target**: DECIDED = 150 ms end-to-end camera->card (see section 13).
+- **Security posture**: DECIDED = LAN-trusted demo, risks documented (see section 14); harden post-v1.
+- **D2 - Godot stack convergence** (`godot-android` vs `apps/godot_mr`): OPEN. `godot-android` is the original vendored device runtime (YAN-56; owns native VST/XR/ncnn); `apps/godot_mr` is the newer clean assistant-card layer (YAN-95) built not to extend the god-object. Recommendation: single runtime - `godot-android` stays the device host, module 2 adopts `apps/godot_mr`'s clean state/view/receiver pattern, and the assistant-card folds in; do not maintain two Godot projects long-term and do not port the native pipeline. Pending user confirmation.
+- **Module ownership**: proposed mapping pending confirmation (see section 15).
 
 ## 10. Parallelization plan
 
@@ -183,3 +205,92 @@ Every deliverable declares the highest rung it must pass.
 - **Track B (against fakes)**: module 1 (producer against C1), module 2 (card lifecycle against C2/C3).
 - **Track C (convergence)**: module 3 alignment + VST display after C1/C2 are frozen; device-gated.
 - **Gate axis**: module 6 packages 1/2/3 to APK and runs on-device smoke (continues YAN-102).
+
+## 11. Coordinate frames, units, and clock base
+
+All seams use these conventions; a payload that does not state otherwise is in head
+space, meters, right-handed.
+
+- **Frames**: `vst_right_camera` (raw VST right-eye optical), `head` (OpenXR view),
+  `world` (XR reference space). C1 `source_frame.coordinate_space` names the frame;
+  C2 transforms are in `world`/`head`. The camera->head conversion is defined in
+  `proxy_targets_payload_contract.md` (camera +X right / +Y down / +Z forward;
+  default Godot `[x, -y, -z]`; optional `right_eye_to_head` 4x4).
+- **Units**: meters and radians; quaternions `[x, y, z, w]`.
+- **Clock base**: one monotonic `timestamp_ms` per producer with a documented epoch.
+  Across phone<->PC (C7 / PC-offload) the two sides exchange a clock offset at
+  handshake so late detections associate to the right capture frame by `frame_id` +
+  `timestamp_ms`. (The capture `timeline.json` uses session-relative monotonic ms;
+  deltas are authoritative, the absolute offset is informational.)
+
+## 12. Error and degraded-state semantics
+
+Every consumer handles the non-happy path explicitly; "no data" is a state, not a crash.
+
+- **Target lifecycle (C2)**: `tracked` / `predicted` / `stale` / `lost`. Card fallback
+  on non-tracked: `hold_last_pose` / `detach` / `fade_out` (per `offset_rule`; default
+  in `card_attachment.gd`).
+- **Stale depth (C1)**: producer holds last per-track depth; consumer weighs
+  `pose_quality` + age as confidence and never blocks.
+- **Link loss (C7 / PC-offload)**: fall back to the on-device backend or last-known
+  tracks; never black-screen.
+- **Malformed payload**: reject at the schema boundary (L0), log, drop the frame; never
+  partially apply.
+- **Empty result (no targets / no people)**: a valid state; cards idle/hide, assistant
+  stays silent.
+- **Tool / voice-provider error (C4/C5)**: dispatcher returns a structured error
+  response (not an exception); assistant shows an `assistant_state=error` card (C6);
+  voice falls back to the other provider or a spoken error.
+
+## 13. Latency and rate budget
+
+End-to-end target: **<= 150 ms** from camera frame to card pose update (person-follow).
+
+Indicative per-stage split (to be measured, not assumed):
+
+- capture + on-device detection/tracking: ~60-80 ms
+- C1 -> C2 conversion + alignment: ~10-20 ms
+- transport + card update/render: ~20-40 ms
+- PC-offload adds a WiFi round-trip; mitigate with on-device tracking bridging
+  low-rate PC detection (hybrid) so the *display* stays in budget even when detection lags.
+
+Rates: detection/tracking target the full capture rate (~40-50 fps); depth and
+PC-offload detection may run lower with per-track hold. Each module reports its measured
+stage latency; modules 3 and 6 own the end-to-end (device) measurement.
+
+## 14. Security and privacy posture (v1)
+
+v1 is a **LAN-trusted demo**: no authentication, no TLS, camera/audio stay on the
+intranet. This is an explicit, accepted v1 scope, recorded here with its risks; harden later.
+
+Accepted risks (v1):
+
+- WS / C7 / proxy_targets links are unauthenticated and unencrypted on the LAN; anyone
+  on the network can read frames/detections or inject targets.
+- Camera frames contain real people (captures include recorded faces); they must stay on
+  the intranet and out of git.
+- Voice audio is sent to cloud providers (Gemini / Qwen) at the session/transport layer;
+  provider terms apply.
+- Secrets (voice API keys, future Jira creds) live only in runtime env / custom_env,
+  never in repo, metadata, or payloads.
+
+Deferred hardening (post-v1): WS auth + TLS, on-device-only or encrypted PC-offload,
+audio redaction/consent, capture retention policy.
+
+## 15. Ownership (proposed, pending confirmation)
+
+Proposed module owners matched to agent specialties (not yet assigned; confirm before
+the issue tree assigns them):
+
+| Scope | Proposed owner | Support |
+|-------|----------------|---------|
+| Module 1 human tracking | pd-XR (MR/XR, detection) | hard_work_4080-CV (depth/3D), xiami-DSP (on-device perf) |
+| Module 2 godot card | pd-XR (Godot/XR) | ui-designer (card UX/visual) |
+| Module 3 MR integration | pd-XR (XR/VST) | hard_work_4080-CV (3D/disparity), 2Dto3D架构师 (algorithm route) |
+| Module 4 voice | pop-VA (ASR/TTS/LLM/VAD) | laufe-后端 (provider/session plumbing) |
+| Module 5 agent assistant | laufe-后端 (tool calling, API integration) | pop-VA (intent) |
+| Module 6 Android deploy | 小安开发第二 (win->android) | 小安开发第一 (Android), QA (device/latency/power) |
+| Data grading / metrics | yang-QA | QA |
+| Contracts C1/C3 freeze (Step 0) | pd-XR + laufe-后端 | TL (Orion-TL) coordinates |
+
+TL (Orion-TL) owns the cross-cutting contracts and this baseline.
