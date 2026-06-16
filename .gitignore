@@ -2,6 +2,10 @@
 __pycache__/
 *.py[cod]
 
+# Local detection venv (optional numpy/opencv/ncnn for module-1 PC-offload tools)
+.venv-detect/
+.venv/
+
 # Local harness/test scratch space
 .tmp/
 

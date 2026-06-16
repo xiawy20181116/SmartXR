@@ -217,3 +217,44 @@ the C2 shape; per-state default animation durations are documented.
 the documented machine. `detached` is an implicit null state, never on the
 wire. Adding a card_state or transition is a shape change (`schema_version++`),
 not an additive field change.
+
+## ADR-10: Module 1 C1 producer = 2.5D builder + IOU tracker + pluggable detection backend (YAN-108)
+
+**Context.** YAN-108 builds the real C1 (`tracking_raw`) producer against the
+frozen contract (ADR-8). v1 is yolov8n 2D detection → 2.5D 8-vertex box +
+landmark + track lifecycle, depth a pluggable scalar, detection backend a
+pluggable topology. No device; validation is L0 schema + L1 math + L2 replay.
+
+**Decision.**
+- **C1 lives in `vst_right_camera` native axes** (+X right, +Y down, +Z forward,
+  positive z), matching `smartxr/geometry.py`. Module 3 owns the camera→head
+  flip when it builds C2; module 1 never converts. (The frozen C1 *fake* used a
+  negative-z synthetic anchor; the contract does not pin the sign, and the real
+  producer uses the geometry.py convention so module 3's existing
+  `vst_camera_point_to_head` consumes it correctly.)
+- **2.5D box** (`smartxr/box_builder_2_5d.py`): project the bbox center to the
+  scalar depth (reusing `geometry.project_bbox_center_to_camera_point`), size
+  X/Y from the 2D bbox extent projected to metric at that depth
+  (`extent_mode=projected_bbox`, default; `nominal_human` available), Z from a
+  nominal human thickness. `pose_quality=fixed_depth`. `landmark` is derived from
+  a rule over the 8 vertices (centroid default).
+- **Depth is a `DepthSource`** (`tracking_raw_producer.py`): v1
+  `ConstantDepthSource` → `constant_depth`/`fixed_depth`. Swapping to
+  mono_metric/stereo changes the value + tags only, never the C1 shape (ADR-8).
+- **Detection backend is pluggable** (`smartxr/detection_backend.py`):
+  on_device / pc_offload / hybrid all emit normalized 2D boxes; tracker +
+  producer are topology-independent. ncnn detector + verification tooling live
+  in `tools/` behind optional numpy/opencv/ncnn; `smartxr/` stays dependency-free
+  for the CI gate. `ReplayDetectionBackend` runs the contract with no model.
+- **Lifecycle** (`smartxr/tracker.py`): greedy IOU,
+  `tentative→confirmed→lost→deleted`, monotonic non-reused ids.
+- **L2 fixture is built from REAL capture**: yolov8n detections on a 200-frame
+  window are recorded to `tracking_raw_replay_detections.jsonl` and replayed
+  through the producer into the golden `tracking_raw_replay_c1.jsonl`; the L2
+  test reproduces it within a numeric tolerance (libm differs across OS) rather
+  than by exact string match.
+
+**Consequences.** Module 3 can build C1→C2 against this producer or the fake.
+yolov8n recall on real VST imagery is adequate for v1 (see
+`docs/yolov8n_vst_verification.md`), so no T3 frame annotation is needed for v1.
+Stereo/mono depth and the on-device ncnn backend are additive swaps behind C1.

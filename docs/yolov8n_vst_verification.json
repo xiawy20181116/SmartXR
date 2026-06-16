@@ -1,0 +1,101 @@
+{
+  "capture_root": "E:\\xia\\antman-smart-source\\capture_packages\\fixed_replay_captures-20260429-194546",
+  "conf_threshold": 0.25,
+  "step": 15,
+  "sessions": [
+    {
+      "session": "capture_20260415T055846Z",
+      "frames_total": 1565,
+      "frames_sampled": 105,
+      "frames_with_person": 48,
+      "person_recall_pct": 45.7,
+      "person_count_histogram": {
+        "0": 57,
+        "1": 39,
+        "2": 9
+      },
+      "max_confidence": 0.825,
+      "mean_confidence": 0.5352
+    },
+    {
+      "session": "capture_20260415T062913Z",
+      "frames_total": 421,
+      "frames_sampled": 29,
+      "frames_with_person": 6,
+      "person_recall_pct": 20.7,
+      "person_count_histogram": {
+        "0": 23,
+        "1": 4,
+        "2": 1,
+        "3": 1
+      },
+      "max_confidence": 0.8257,
+      "mean_confidence": 0.526
+    },
+    {
+      "session": "capture_20260415T063047Z",
+      "frames_total": 1801,
+      "frames_sampled": 121,
+      "frames_with_person": 78,
+      "person_recall_pct": 64.5,
+      "person_count_histogram": {
+        "0": 43,
+        "1": 29,
+        "2": 21,
+        "3": 22,
+        "4": 3,
+        "5": 3
+      },
+      "max_confidence": 0.8997,
+      "mean_confidence": 0.5966
+    },
+    {
+      "session": "capture_20260415T063848Z",
+      "frames_total": 1564,
+      "frames_sampled": 105,
+      "frames_with_person": 82,
+      "person_recall_pct": 78.1,
+      "person_count_histogram": {
+        "0": 23,
+        "1": 38,
+        "2": 16,
+        "3": 17,
+        "4": 11
+      },
+      "max_confidence": 0.837,
+      "mean_confidence": 0.5013
+    },
+    {
+      "session": "capture_20260415T065340Z",
+      "frames_total": 2641,
+      "frames_sampled": 177,
+      "frames_with_person": 92,
+      "person_recall_pct": 52.0,
+      "person_count_histogram": {
+        "0": 85,
+        "1": 36,
+        "2": 28,
+        "3": 10,
+        "4": 9,
+        "5": 6,
+        "6": 3
+      },
+      "max_confidence": 0.9459,
+      "mean_confidence": 0.5747
+    },
+    {
+      "session": "capture_20260417T073836Z",
+      "frames_total": 3391,
+      "frames_sampled": 227,
+      "frames_with_person": 224,
+      "person_recall_pct": 98.7,
+      "person_count_histogram": {
+        "0": 3,
+        "1": 219,
+        "2": 5
+      },
+      "max_confidence": 0.8527,
+      "mean_confidence": 0.783
+    }
+  ]
+}
