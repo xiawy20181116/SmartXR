@@ -195,14 +195,14 @@ Every deliverable declares the highest rung it must pass.
 - **Landmark rule**: configurable `rule` over the 8 vertices; default selectable later without a contract change.
 - **Latency target**: DECIDED = 150 ms end-to-end camera->card (see section 13).
 - **Security posture**: DECIDED = LAN-trusted demo, risks documented (see section 14); harden post-v1.
-- **D2 - Godot stack convergence** (`godot-android` vs `apps/godot_mr`): OPEN. `godot-android` is the original vendored device runtime (YAN-56; owns native VST/XR/ncnn); `apps/godot_mr` is the newer clean assistant-card layer (YAN-95) built not to extend the god-object. Recommendation: single runtime - `godot-android` stays the device host, module 2 adopts `apps/godot_mr`'s clean state/view/receiver pattern, and the assistant-card folds in; do not maintain two Godot projects long-term and do not port the native pipeline. Pending user confirmation.
+- **D2 - Godot stack convergence** (`godot-android` vs `apps/godot_mr`): DECIDED = single runtime + adopt the State/View/Receiver pattern. There is no second Godot project (`apps/godot_mr` has no `project.godot`); `godot-android` stays the device host and owns the native VST/XR/ncnn pipeline. See section 16 for the pattern and the Phase A-D operational plan.
 - **Module ownership**: proposed mapping pending confirmation (see section 15).
 
 ## 10. Parallelization plan
 
 - **Step 0 (unlocks parallelism, highest priority, no data dependency)**: freeze C1 and C3 to the section-5 bar (schema + fake producer/consumer + validator in gate + semantics doc). C2/C4/C5/C6 are already frozen.
 - **Track A (device-free, start immediately)**: modules 4 + 5, fully headless.
-- **Track B (against fakes)**: module 1 (producer against C1), module 2 (card lifecycle against C2/C3).
+- **Track B (against fakes)**: module 1 (producer against C1), module 2 (card lifecycle against C2/C3, plus the D2 State/View/Receiver convergence Phase B->C->D, section 16).
 - **Track C (convergence)**: module 3 alignment + VST display after C1/C2 are frozen; device-gated.
 - **Gate axis**: module 6 packages 1/2/3 to APK and runs on-device smoke (continues YAN-102).
 
@@ -294,3 +294,44 @@ the issue tree assigns them):
 | Contracts C1/C3 freeze (Step 0) | pd-XR + laufe-后端 | TL (Orion-TL) coordinates |
 
 TL (Orion-TL) owns the cross-cutting contracts and this baseline.
+
+## 16. Card/scene convergence and the State/View/Receiver pattern (D2)
+
+D2 decision: **single runtime**. There is in fact no second Godot project -
+`apps/godot_mr` has no `project.godot`; it is three scripts (`assistant_card_state`
+/ `assistant_card_view` / `assistant_updates_receiver`) plus two script-only probes,
+already reusing godot-android's `WSTransport` by injection. The device runtime is and
+stays `godot-android`. "Convergence" therefore means adopting the layering pattern and
+retrofitting the existing card onto it - not merging projects.
+
+Module-2 standard pattern: **State / View / Receiver**.
+
+- **State**: parse / validate / own a snapshot (pure data, script-only testable).
+- **View**: render state to nodes (presentation only).
+- **Receiver**: wire transport -> state -> view (boundary glue).
+
+godot-android already has the ingredients from A3/A4: State-like
+(`status_snapshot_composer`, `proxy_targets_status_fragment`), View-like (`card_view`,
+`passthrough_overlay_presenter`), Receiver-like (`proxy_targets_consumer` +
+`proxy_targets_card_adapter` + `ws_transport`), orchestrated by `AndroidMovingCard`.
+
+Operational steps (module 2; each a small PR + script-only probe, under existing CI):
+
+- **Phase A (this section)**: codify State/View/Receiver as the module-2 standard and
+  record the D2 decision. No code change.
+- **Phase B**: relocate the `apps/godot_mr` scripts + probes into the runtime tree
+  (`godot-android/scripts/assistant/`, `tests/`); retire `apps/godot_mr` (leave a
+  pointer); verify the two probes stay green. Low risk (script-only, already uses the
+  runtime transport).
+- **Phase C**: re-express the existing card as `CardState` (data snapshot) / `CardView`
+  (`card_view` + overlay presenter) / `CardReceiver` (proxy_targets consumer/adapter +
+  ws_transport), shrinking `AndroidMovingCard` to a host that instantiates the trio and
+  owns the XR lifecycle. Incremental.
+- **Phase D**: unify card types - the assistant-card and the tracked-target card share
+  one CardState/CardView base, differing only by data source (assistant_updates vs
+  proxy_targets). End state: one runtime, one card pattern, two data sources.
+
+Guardrails: do not port native VST/XR/ncnn toward `apps/godot_mr` (reverse direction =
+high risk); no big-bang merge; keep the two `apps/godot_mr` probes as regression
+anchors. Phase A/B can run early/independently; Phase C/D run after C1/C3 are frozen
+(the card's data contracts settle first).
