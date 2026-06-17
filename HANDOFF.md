@@ -1,5 +1,37 @@
 # HANDOFF
 
+## State (after YAN-110 — module 3 MR integration, C1→C2 alignment + display wiring)
+
+- **YAN-110 done** (Track C, module 3). The publisher-side C1→C2 alignment seam.
+  Headless core; the L3 real-device alignment smoke is documented and pending a
+  headset (lands with module 6 / YAN-102). New files:
+  - `smartxr/mr_integration.py` — `convert_tracking_raw_message` +
+    `TrackingRawToProxyTargetsConverter` + `Calibration`. Converts each C1
+    detection's `landmark.point` (camera frame) to a C2 `transform.position`
+    (head/world) via `smartxr.geometry` (monocular default flip, or a held
+    `right_eye_to_head` 4x4 — calibration ownership). Dedicated C1→C2 state map,
+    optional staleness downgrade, empty frame → `None`, primary-target card.
+  - `smartxr/cli/convert_tracking_raw.py` + thin wrapper
+    `tools/convert_tracking_raw_to_proxy_targets.py` — display wiring: C1
+    `.json`/`.jsonl` → validated C2 (both ends schema-checked, empty frames
+    skipped) for the existing proxy_targets WS/Godot path.
+  - `godot-android/fixtures/proxy_targets_from_c1_sample.json` — C2 output of
+    converting `tracking_raw_sample.json`; added to the proxy_targets CI gate.
+  - `tests/test_mr_integration.py` — L0/L1/L2 incl. the bbox-math dual-lock
+    tie-in. Decision: DECISIONS.md ADR-11. Doc: `docs/mr_integration.md`.
+- **Verification**: full suite **310 tests OK**; proxy_targets gate (now 3
+  fixtures) + tracking_raw gate green. Python-only, so it runs in the standard
+  GitHub `python` CI job; no self-hosted Godot needed. The Godot/Card consumer is
+  unchanged (it already consumes C2).
+- **Risks / open**: (1) **L3 device alignment smoke is NOT yet run** — the card
+  is proven shape/contract-correct headless, but "card sits near the real person"
+  needs a headset (procedure in `docs/mr_integration.md`; gate with YAN-102).
+  (2) v1 is monocular default flip; the `right_eye_to_head` extrinsic path is
+  implemented and unit-tested but no real calibration matrix has been captured
+  yet (waits for the dual-eye iteration). (3) The converter binds one card to the
+  primary target; multi-card per-target lifecycle is module 2 / C3, not wired
+  here. (4) Rotation/scale are identity in v1 (axis-aligned box, no orientation).
+
 ## State (after YAN-108 follow-up — live C1 PC chain)
 
 - **Live C1 WebSocket chain done** (on top of the merged module-1 producer). The

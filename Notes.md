@@ -1,5 +1,55 @@
 # Notes — change log
 
+## YAN-110 — module 3 MR integration (C1→C2 alignment + VST display wiring)
+
+### Files added
+
+- `smartxr/mr_integration.py` — module-3 converter. `convert_tracking_raw_message`
+  (one-shot) and `TrackingRawToProxyTargetsConverter` (stateful, re-stamps a
+  monotonic C2 sequence, advances only on emitted frames). For each C1 detection
+  it takes `landmark.point` (the contract's derived anchor) in the camera frame
+  and converts it to a C2 `transform.position` via `smartxr.geometry`
+  (`vst_camera_point_to_head`) — so module 3 inherits the bbox-math dual-lock
+  (ADR-5) for free. Owns `Calibration`: `monocular()` = default flip `[x,-y,-z]`;
+  `with_right_eye_to_head(4x4)` applies the extrinsic instead (short/invalid
+  matrix degrades to the flip). FOV is held but unused (intrinsics belong to
+  module 1's projection because C1 is already 3D). Dedicated C1→C2 state map
+  (`tentative/confirmed→tracked`, `lost→predicted`, `deleted→lost`, unknown→`lost`)
+  because `schema.canonical_state` mis-maps C1 `lost`. Optional `stale_after_ms`
+  downgrades a lagging `tracked` pose to `stale`. Empty detections → `None` (the
+  valid "no people" state; C2 requires non-empty targets/cards). `head`/`world`
+  source frames pass through unconverted. Optional `mr_alignment` diagnostics use
+  only gate-safe key names (no bbox/depth_m/image).
+- `smartxr/cli/convert_tracking_raw.py` + `tools/convert_tracking_raw_to_proxy_targets.py`
+  — display wiring. Reads C1 `.json`/`.jsonl`, validates each C1 message, converts,
+  validates each C2 message, writes `.json`/`.jsonl` or stdout. Empty frames are
+  skipped (reported), invalid C1/C2 is a hard error. Optional
+  `--right-eye-to-head` calibration file, `--card-id`, `--min-confidence`,
+  `--stale-after-ms`, `--diagnostics`.
+- `godot-android/fixtures/proxy_targets_from_c1_sample.json` — the C2 output of
+  converting `tracking_raw_sample.json`; regenerate with the wiring tool. Added to
+  the proxy_targets schema gate in `.github/workflows/ci.yml`.
+- `tests/test_mr_integration.py` — 32 tests: C1-sample→C2-fixture lock; the
+  **bbox-math fixture dual-lock tie-in** (every `head_conversion_cases` /
+  `full_chain_cases` head point is reproduced by the converter); calibration
+  (flip / matrix / short-matrix fallback / head-world passthrough); state map;
+  staleness; confidence + filtering; empty→None / non-dict→None; multi-target +
+  primary-card binding; id shaping; diagnostics gate-safety; L2
+  fake-producer→converter→C2-consumer moving sequence with stable ids; CLI
+  round-trip + invalid-input rejection + empty-frame skip.
+
+### Notes / decisions
+
+- Reuses the already-frozen C1/C2 contracts and the dual-locked geometry; the
+  Godot/Card consumer is untouched (it already consumes C2). Python-only → runs in
+  the standard `python` CI job, no self-hosted Godot.
+- The C1 *fake* fixture uses a negative-z synthetic camera anchor (ADR-10), so the
+  C2 fixture's position is `[0,-0,1.72]`; the real producer emits positive-z camera
+  points (geometry.py convention) which flip to negative-z head (in front). The
+  converter applies the documented transform either way.
+- Full suite **310 tests OK**; proxy_targets gate (3 fixtures) + tracking_raw gate
+  green. DECISIONS.md ADR-11, docs `docs/mr_integration.md`.
+
 ## YAN-109 module 2 收尾 — card_lifecycle probe fix + real-runner verification
 
 Wrap-up of module 2: its delivered GDScript probes had never actually run (no

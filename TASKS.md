@@ -6,6 +6,31 @@ side.
 
 ## Completed
 
+- [x] **YAN-110 — module 3 MR integration: C1→C2 alignment + VST display wiring**
+  (Track C, against the frozen C1/C2 contracts; ADR-11). Headless core; L3
+  device alignment smoke documented and pending a headset. Built:
+  - Converter `smartxr/mr_integration.py`: C1 `tracking_raw` (camera-frame 3D)
+    → C2 `proxy_targets` (head/world). `landmark.point` → `transform.position`
+    via the owned `Calibration` (v1 monocular default flip `[x,-y,-z]`; binocular
+    `right_eye_to_head` 4x4 swap, short matrix degrades to the flip), reusing
+    `smartxr.geometry` (so it is pinned to the bbox-math dual-lock, ADR-5).
+    Dedicated C1→C2 state map (`tentative/confirmed→tracked`, `lost→predicted`,
+    `deleted→lost`), optional `stale_after_ms` downgrade, empty frame → `None`
+    (valid "no people" state; C2 needs non-empty targets/cards), one card bound
+    to the primary target. `head`/`world` source frames pass through unconverted.
+  - Display wiring `tools/convert_tracking_raw_to_proxy_targets.py`
+    (+ `smartxr/cli/convert_tracking_raw.py`): C1 `.json`/`.jsonl` → validated
+    C2; both ends schema-checked; empty frames skipped.
+  - Fixture `godot-android/fixtures/proxy_targets_from_c1_sample.json` (C2 output
+    of converting `tracking_raw_sample.json`) added to the proxy_targets CI gate.
+  - Tests `tests/test_mr_integration.py` (32): L0/L1 incl. the bbox-math fixture
+    dual-lock tie-in (every head-conversion / full-chain head point reproduced),
+    C1-sample→C2-fixture lock, state/calibration/staleness/confidence/empty/
+    multi-target/diagnostics, L2 fake-producer→converter→C2-consumer sequence,
+    and the CLI round-trip. Full suite **310 tests** green; both schema gates ok.
+  - Docs `docs/mr_integration.md` (C1→C2 table, calibration ownership, state map,
+    §13 latency note, L3 device smoke procedure); DECISIONS.md ADR-11.
+
 - [x] **YAN-108 follow-up — live C1 PC chain** (WS publisher + consumer harness).
   Runs the whole module-1 chain end to end on PC, no device:
   `NV12 session -> PC-offload yolov8n -> producer -> live C1 WS -> harness`.

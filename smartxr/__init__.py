@@ -7,6 +7,7 @@ Layered like the pi monorepo, with strictly one-way dependencies:
 - ``smartxr.transport`` WebSocket server primitives (handshake, frames, serve loop)
 - ``smartxr.frames``    tracker frame normalization (detections -> source payload)
 - ``smartxr.publisher`` proxy_targets builders / normalization / replay
+- ``smartxr.mr_integration`` module 3: C1 tracking_raw -> C2 proxy_targets (align)
 - ``smartxr.cli``       thin entry points used by the ``tools/`` wrappers
 
 ``tools/*.py`` remain as thin compatibility wrappers so existing runners,
