@@ -37,6 +37,7 @@ powershell -ExecutionPolicy Bypass -File tools/run_godot_xr_bootstrap_probe.ps1 
 powershell -ExecutionPolicy Bypass -File tools/run_godot_status_snapshot_composer_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_passthrough_overlay_presenter_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_card_view_probe.ps1 -GodotExe $env:GODOT_BIN
+powershell -ExecutionPolicy Bypass -File tools/run_godot_card_lifecycle_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_target_source_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_vst_capture_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_vst_debug_ui_probe.ps1 -GodotExe $env:GODOT_BIN
@@ -65,3 +66,12 @@ viewport/layer/UI construction and camera-relative transform update.
 
 The CardView probe guards the dependency-free main card viewport, UI, card
 panel mesh/material, and XR render probe construction.
+
+The CardLifecycle probe guards the dependency-free C3 card-lifecycle state
+machine in `godot-android/scripts/card_lifecycle.gd`: the canonical
+attach/appear -> expand -> contract -> expand -> detach/disappear round-trip,
+illegal-transition rejection (e.g. `update` before `attach`, `appear -> contract`),
+schema command/card_state coupling, and the default per-state animation
+durations. It is the runtime mirror of `tests/test_card_lifecycle_payload_schema.py`
+(the Python `CardLifecycleConsumer`), keeping both sides of the C3 seam in
+lock-step.

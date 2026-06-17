@@ -20,7 +20,7 @@ Single-direction dependency. Lower layers do not know upper layers exist.
 ```
 [ Android / native plugins ]      <- device-only final gate
 [ OpenXR / GXR ]                  <- isolated behind xr_bootstrap + extension toggle
-[ Godot presentation: Scene/Card ]<- apps/godot_mr pattern, script-only probes
+[ Godot presentation: Scene/Card ]<- State/View/Receiver pattern, script-only probes
 [ Business / capability bus ]     <- smartxr/ (pure Python, fully unit-tested)
 [ Assistant: ToolRegistry/dispatcher/session ] <- function-call, hot-pluggable tools
 ```
@@ -30,7 +30,7 @@ Single-direction dependency. Lower layers do not know upper layers exist.
 | # | Module | Deliverable | Consumes | Produces | Maps to | Device-gated? |
 |---|--------|-------------|----------|----------|---------|---------------|
 | 1 | human tracking | detection + tracking producer: per target `{id, 3D bbox (8 vertices), 3D landmark, confidence, ts}`; detection backend is pluggable (on-device / PC-offload / hybrid) | camera/VST frames | C1 (tracking-raw) | `godot-android/ncnn/yolov8n` (2D), `smartxr/frames.py` | no (contract verifiable headless; model accuracy needs eval data) |
-| 2 | godot card | scene + card subsystem: attach to dynamic/static targets, appear/expand/contract/disappear lifecycle | C2 (proxy_targets), C3 (card-lifecycle) | card status snapshot | `card_attachment.gd`, `card_view.gd`, `apps/godot_mr` | no |
+| 2 | godot card | scene + card subsystem: attach to dynamic/static targets, appear/expand/contract/disappear lifecycle | C2 (proxy_targets), C3 (card-lifecycle) | card status snapshot | `card_attachment.gd`, `card_view.gd`, `card_lifecycle.gd`, `godot-android/scripts/assistant/` | no |
 | 3 | MR integration | publisher-side bbox->head/world conversion + VST alignment + display wiring | C1, calibration | C2 (proxy_targets) | `vst_capture.gd`, `smartxr/geometry.py`, bbox-math fixture | **yes** (alignment correctness) |
 | 4 | voice | provider-agnostic `VoiceSession`, backends: Gemini Live + Qwen Omni Realtime | audio, tool responses | C4 (ToolCall) | `SmartMRAssistant/assistant/session.py` | no |
 | 5 | agent assistant | real capability tools + dispatcher, real-time tool invocation | C4 | C5 (tool schema), C6 (assistant_card) | `assistant/tools.py`, `assistant/dispatcher.py`, `assistant/card_payload.py` | no |
@@ -49,7 +49,7 @@ first, then 6 packages them to APK and runs the on-device smoke.
 | C3 | card-lifecycle ((3/5) -> 2) | **new** | card commands + state machine: `attach`/`detach` plus `appear`/`expand`/`contract`/`disappear` (`card_state` enum + transitions), offset_rule, animation durations. |
 | C4 | ToolCall (4 -> 5) | **frozen** | `{id, name, args, scheduling}`, provider-agnostic. See `assistant/dispatcher.py`. |
 | C5 | tool schema (5 -> capability) | **frozen** | per-tool input/output schema via `ToolRegistry.export_schemas()`. |
-| C6 | assistant_card v1 (5 -> display) | **frozen** | `{type, schema_version, card_id, target_id, assistant_state, response_text, tool_summary, person, issue}`. See `apps/godot_mr`. |
+| C6 | assistant_card v1 (5 -> display) | **frozen** | `{type, schema_version, card_id, target_id, assistant_state, response_text, tool_summary, person, issue}`. See `godot-android/scripts/assistant/`. |
 | C7 | frame-uplink (device -> PC) | **new, optional** | device -> PC frame stream for PC-offload detection. Two layers: `transport` (mjpeg-ws / h264-ws / webrtc) separate from `codec`; raw NV12 is never sent. Every frame carries `frame_id` + `timestamp_ms` (+ width/height, optional pose). Only needed if the PC-offload backend is built; on-device needs no uplink. PC returns detections as C1 over WS. See "Uplink transport". |
 
 Frozen and schema-gated today: C2/C4/C5/C6. **C1** and **C3** are defined in
@@ -297,11 +297,13 @@ TL (Orion-TL) owns the cross-cutting contracts and this baseline.
 
 ## 16. Card/scene convergence and the State/View/Receiver pattern (D2)
 
-D2 decision: **single runtime**. There is in fact no second Godot project -
-`apps/godot_mr` has no `project.godot`; it is three scripts (`assistant_card_state`
+D2 decision: **single runtime**. There was in fact never a second Godot project -
+`apps/godot_mr` had no `project.godot`; it was three scripts (`assistant_card_state`
 / `assistant_card_view` / `assistant_updates_receiver`) plus two script-only probes,
-already reusing godot-android's `WSTransport` by injection. The device runtime is and
-stays `godot-android`. "Convergence" therefore means adopting the layering pattern and
+already reusing godot-android's `WSTransport` by injection. Phase B (YAN-109) moved
+those into the device runtime (`godot-android/scripts/assistant/` + `godot-android/tests/`)
+and retired `apps/godot_mr/` to a pointer. The device runtime is and stays
+`godot-android`. "Convergence" therefore means adopting the layering pattern and
 retrofitting the existing card onto it - not merging projects.
 
 Module-2 standard pattern: **State / View / Receiver**.
@@ -317,21 +319,30 @@ godot-android already has the ingredients from A3/A4: State-like
 
 Operational steps (module 2; each a small PR + script-only probe, under existing CI):
 
-- **Phase A (this section)**: codify State/View/Receiver as the module-2 standard and
+- **Phase A (DONE)**: codify State/View/Receiver as the module-2 standard and
   record the D2 decision. No code change.
-- **Phase B**: relocate the `apps/godot_mr` scripts + probes into the runtime tree
-  (`godot-android/scripts/assistant/`, `tests/`); retire `apps/godot_mr` (leave a
-  pointer); verify the two probes stay green. Low risk (script-only, already uses the
-  runtime transport).
-- **Phase C**: re-express the existing card as `CardState` (data snapshot) / `CardView`
-  (`card_view` + overlay presenter) / `CardReceiver` (proxy_targets consumer/adapter +
-  ws_transport), shrinking `AndroidMovingCard` to a host that instantiates the trio and
-  owns the XR lifecycle. Incremental.
-- **Phase D**: unify card types - the assistant-card and the tracked-target card share
-  one CardState/CardView base, differing only by data source (assistant_updates vs
+- **Phase B (DONE, YAN-109)**: relocated the `apps/godot_mr` scripts + probes into the
+  runtime tree — the State/View/Receiver trio now lives in
+  `godot-android/scripts/assistant/` (`assistant_card_state.gd` /
+  `assistant_card_view.gd` / `assistant_updates_receiver.gd`) and the two probes in
+  `godot-android/tests/`. `apps/godot_mr/` is retired to a pointer README. The runners
+  (`tools/run_godot_mr_assistant_card_probe.ps1`,
+  `tools/run_godot_mr_assistant_updates_probe.ps1`, `tools/run_smartmr_mstar_demo.ps1`)
+  and the `tests/test_godot_mr_assistant_*` guards now reference the relocated paths;
+  the two probes stay as regression anchors. Also under YAN-109: the C3 state machine
+  landed as a standalone `godot-android/scripts/card_lifecycle.gd` (the
+  appear/expand/contract/disappear lifecycle + attach/detach), with
+  `script_only_card_lifecycle_probe.gd` in the gdscript-probes CI list.
+- **Phase C (TODO)**: re-express the existing card as `CardState` (data snapshot) /
+  `CardView` (`card_view` + overlay presenter) / `CardReceiver` (proxy_targets
+  consumer/adapter + ws_transport), shrinking `AndroidMovingCard` to a host that
+  instantiates the trio and owns the XR lifecycle. Incremental; needs device/Godot
+  verification of the 954-line `AndroidMovingCard` host.
+- **Phase D (TODO)**: unify card types - the assistant-card and the tracked-target card
+  share one CardState/CardView base, differing only by data source (assistant_updates vs
   proxy_targets). End state: one runtime, one card pattern, two data sources.
 
-Guardrails: do not port native VST/XR/ncnn toward `apps/godot_mr` (reverse direction =
-high risk); no big-bang merge; keep the two `apps/godot_mr` probes as regression
-anchors. Phase A/B can run early/independently; Phase C/D run after C1/C3 are frozen
+Guardrails: do not port native VST/XR/ncnn toward the assistant card layer (reverse
+direction = high risk); no big-bang merge; keep the two relocated assistant probes as
+regression anchors. Phase A/B can run early/independently; Phase C/D run after C1/C3 are frozen
 (the card's data contracts settle first).
