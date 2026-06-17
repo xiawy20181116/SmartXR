@@ -16,9 +16,13 @@ class SmartMRMStarDemoTests(unittest.TestCase):
         result = asyncio.run(build_mstar_demo_result())
 
         self.assertEqual(result["question"], "他手上有什么任务")
-        self.assertEqual([item["name"] for item in result["tool_responses"]], ["identity_lookup", "jira_lookup"])
-        self.assertEqual(result["tool_responses"][0]["tool_call_id"], "mstar-identity-1")
-        self.assertEqual(result["tool_responses"][1]["tool_call_id"], "mstar-jira-1")
+        self.assertEqual(
+            [item["name"] for item in result["tool_responses"]],
+            ["scene_status", "identity_lookup", "work_item_lookup", "assistant_card_push"],
+        )
+        self.assertEqual(result["tool_responses"][1]["tool_call_id"], "mstar-identity-1")
+        self.assertEqual(result["tool_responses"][2]["tool_call_id"], "mstar-work-item-1")
+        self.assertEqual(result["tool_responses"][3]["tool_call_id"], "mstar-card-push-1")
 
         payload = result["assistant_card"]
         self.assertEqual(validate_assistant_card_payload(payload), [])

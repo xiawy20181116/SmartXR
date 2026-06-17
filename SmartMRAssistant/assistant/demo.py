@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from .card_payload import build_assistant_card_payload, summarize_tool_results
+from .card_payload import summarize_tool_results
 from .session import SimulatedVoiceSession
 
 
@@ -53,38 +53,56 @@ async def build_mstar_demo_result(
         "identity_lookup",
         {
             "person_ref": person_ref,
-            "snapshot": scene_snapshot,
+            "identity_source": scene_snapshot,
         },
         call_id="mstar-identity-1",
     )
-    jira_response = await session.run_tool_call(
-        "jira_lookup",
+    work_item_response = await session.run_tool_call(
+        "work_item_lookup",
         {
             "issue_key": issue_key,
-            "cache": jira_cache,
+            "work_item_source": jira_cache,
         },
-        call_id="mstar-jira-1",
+        call_id="mstar-work-item-1",
+    )
+    scene_response = await session.run_tool_call(
+        "scene_status",
+        {
+            "scene_snapshot": {
+                "last_user_text": question,
+                "facts": {"card_id": card_id, "target_id": person_ref},
+            }
+        },
+        call_id="mstar-scene-status-1",
     )
     identity_result = identity_response["response"]
-    jira_result = jira_response["response"]
+    work_item_result = work_item_response["response"]
+    issue = work_item_result.get("work_item") if isinstance(work_item_result.get("work_item"), Mapping) else None
     tool_summary = summarize_tool_results(
         identity_result=identity_result,
-        jira_result=jira_result,
+        jira_result={
+            "status": work_item_result.get("status"),
+            "issue": issue,
+        },
     )
-    issue = jira_result.get("issue") if isinstance(jira_result.get("issue"), Mapping) else None
     person = identity_result.get("person") if isinstance(identity_result.get("person"), Mapping) else None
-    payload = build_assistant_card_payload(
-        card_id=card_id,
-        target_id=person_ref,
-        assistant_state="responding",
-        response_text=_response_text(tool_summary, issue),
-        tool_summary=tool_summary,
-        person=person,
-        issue=issue,
+    card_response = await session.run_tool_call(
+        "assistant_card_push",
+        {
+            "card_id": card_id,
+            "target_id": person_ref,
+            "assistant_state": "responding",
+            "response_text": _response_text(tool_summary, issue),
+            "tool_summary": tool_summary,
+            "person": person,
+            "issue": issue,
+        },
+        call_id="mstar-card-push-1",
     )
+    payload = card_response["response"]["assistant_card"]
     return {
         "question": question,
-        "tool_responses": [identity_response, jira_response],
+        "tool_responses": [scene_response, identity_response, work_item_response, card_response],
         "assistant_card": payload,
     }
 
