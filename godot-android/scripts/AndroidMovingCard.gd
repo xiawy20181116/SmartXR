@@ -58,6 +58,13 @@ const VSTCaptureScript := preload("res://scripts/vst_capture.gd")
 const VSTDebugUIScript := preload("res://scripts/vst_debug_ui.gd")
 const WSTransportScript := preload("res://scripts/ws_transport.gd")
 const XRBootstrapScript := preload("res://scripts/xr_bootstrap.gd")
+# Module-2 State/View/Receiver trio for the tracked-target card (D2 Phase C,
+# §16). The host owns the res:// preloads and the XR/VST native pipeline; it
+# news the underlying helpers below and injects them into these preload-free
+# seams (mirrors scripts/assistant/).
+const TrackedTargetCardStateScript := preload("res://scripts/tracked_target_card_state.gd")
+const TrackedTargetCardViewScript := preload("res://scripts/tracked_target_card_view.gd")
+const TrackedTargetCardReceiverScript := preload("res://scripts/tracked_target_card_receiver.gd")
 
 # Centralized runtime configuration (env var -> user://smartxr_options.json
 # -> script const default). The consts below stay as the defaults; deployment
@@ -118,11 +125,9 @@ var _card_viewport: SubViewport = null
 var _card_anchor: Node3D = null
 var _card_mesh: MeshInstance3D = null
 var _xr_probe_mesh: MeshInstance3D = null
-var _card_view = CardViewScript.new({
-	"viewport_size": CARD_VIEWPORT_SIZE,
-	"card_size_m": CARD_SIZE_M,
-	"xr_probe_size_m": XR_PROBE_SIZE_M,
-})
+# View seam: composes card_view + passthrough_overlay_presenter. The host news
+# both helpers in _setup_card_trio() and binds them in (see preloads above).
+var _card_view_facade = TrackedTargetCardViewScript.new()
 var _status_hud: Node = null
 var _status_snapshot_composer = StatusSnapshotComposerScript.new()
 var _speed_deg_per_second := CARD_DEFAULT_SPEED_DEG_PER_SECOND
@@ -157,23 +162,16 @@ var _debug_target_marker: MeshInstance3D = null
 var _debug_target_elapsed_seconds := 0.0
 var _vst_target_source = null
 var _vst_target_proxy: Node3D = null
-var _proxy_targets_consumer: Node = null
-var _proxy_targets_card_adapter: Node = null
-var _proxy_targets_target_source = null
-# Second WSTransport instance (see _control_ws above): the proxy_targets
-# stream adds the subscribe-once-on-open payload on top of the same loop.
-var _proxy_targets_ws = WSTransportScript.new()
-var _proxy_targets_live_messages := 0
-var _proxy_targets_status_fragment = ProxyTargetsStatusFragmentScript.new()
-var _proxy_targets_card_apply_count := 0
+# State seam: the proxy_targets diagnostic snapshot + live/apply counters. The
+# host binds in a ProxyTargetsStatusFragment in _setup_card_trio().
+var _card_state = TrackedTargetCardStateScript.new()
+# Receiver seam: composes the proxy_targets consumer/adapter/target_source + a
+# dedicated WSTransport (see _control_ws above for the control stream). The host
+# builds the scene pipeline via _validation_scene_builder and injects it.
+var _card_receiver = TrackedTargetCardReceiverScript.new()
 var _passthrough_overlay_enabled := false
 var _passthrough_overlay_blend_ok := false
 var _passthrough_overlay_requested_blend_mode := "alpha_blend"
-var _passthrough_overlay_presenter = PassthroughOverlayPresenterScript.new({
-	"viewport_size": PASSTHROUGH_OVERLAY_VIEWPORT_SIZE,
-	"quad_size_m": PASSTHROUGH_OVERLAY_QUAD_SIZE_M,
-	"depth_m": PASSTHROUGH_OVERLAY_DEPTH_M,
-})
 
 # VSTCapture subsystem (scripts/vst_capture.gd): owns GXRDualVstCapture setup,
 # right-frame polling, tracker boxes, calibration diagnostics, and bbox->head
@@ -212,6 +210,7 @@ var _vst_debug_ui = VSTDebugUIScript.new()
 
 
 func _ready() -> void:
+	_setup_card_trio()
 	_passthrough_overlay_enabled = _use_passthrough_overlay()
 	_setup_card_attachment()
 	_setup_xr_bootstrap()
@@ -231,6 +230,27 @@ func _ready() -> void:
 	_connect_proxy_targets_ws()
 	_setup_vst_capture()
 	set_process(true)
+
+
+## News the underlying card helpers (the host owns the res:// preloads) and
+## binds them into the preload-free State/View/Receiver seams. Runs first in
+## _ready() so _use_passthrough_overlay() resolves through the view facade. The
+## proxy_targets consumer/adapter/target_source scene pipeline is injected later
+## in _build_proxy_targets_validation() once the camera exists.
+func _setup_card_trio() -> void:
+	var card_view = CardViewScript.new({
+		"viewport_size": CARD_VIEWPORT_SIZE,
+		"card_size_m": CARD_SIZE_M,
+		"xr_probe_size_m": XR_PROBE_SIZE_M,
+	})
+	var overlay_presenter = PassthroughOverlayPresenterScript.new({
+		"viewport_size": PASSTHROUGH_OVERLAY_VIEWPORT_SIZE,
+		"quad_size_m": PASSTHROUGH_OVERLAY_QUAD_SIZE_M,
+		"depth_m": PASSTHROUGH_OVERLAY_DEPTH_M,
+	})
+	_card_view_facade.bind(card_view, overlay_presenter)
+	_card_state.bind(ProxyTargetsStatusFragmentScript.new())
+	_card_receiver.bind(WSTransportScript.new(), _card_state)
 
 
 ## Wires the XRBootstrap subsystem: the fallback camera's look_at target
@@ -256,11 +276,11 @@ func _try_init_xr() -> void:
 
 
 func _use_passthrough_overlay() -> bool:
-	return _passthrough_overlay_presenter.overlay_enabled_from_env(PASSTHROUGH_OVERLAY_ENV)
+	return _card_view_facade.overlay_enabled_from_env(PASSTHROUGH_OVERLAY_ENV)
 
 
 func _build_passthrough_overlay_layer() -> void:
-	_passthrough_overlay_presenter.build_layer(self, _xr_active, _passthrough_overlay_enabled)
+	_card_view_facade.build_overlay_layer(self, _xr_active, _passthrough_overlay_enabled)
 	_update_passthrough_overlay_layer()
 
 
@@ -287,15 +307,15 @@ func _setup_light() -> void:
 
 
 func _build_card_anchor() -> void:
-	_card_view.build(self, CARD_ANCHOR_NAME)
-	_card_viewport = _card_view.viewport()
-	_card_anchor = _card_view.anchor()
-	_card_mesh = _card_view.card_mesh()
+	_card_view_facade.build_card(self, CARD_ANCHOR_NAME)
+	_card_viewport = _card_view_facade.viewport()
+	_card_anchor = _card_view_facade.anchor()
+	_card_mesh = _card_view_facade.card_mesh()
 	_apply_3dof_anchor_transform()
 
 
 func _build_xr_render_probe() -> void:
-	_xr_probe_mesh = _card_view.build_xr_render_probe()
+	_xr_probe_mesh = _card_view_facade.build_xr_render_probe()
 
 
 func _build_vst_debug_ui() -> void:
@@ -345,20 +365,22 @@ func _build_proxy_targets_validation() -> void:
 		target_source_factory,
 		PROXY_TARGETS_SAMPLE_RES
 	)
-	_proxy_targets_consumer = result.get("consumer", null)
-	_proxy_targets_card_adapter = result.get("card_adapter", null)
-	_proxy_targets_target_source = result.get("target_source", null)
+	# Inject the freshly built scene pipeline into the Receiver seam, which owns
+	# the live-payload apply path and wires its own on_message_parsed handler.
+	_card_receiver.set_proxy_pipeline(
+		result.get("consumer", null),
+		result.get("card_adapter", null),
+		result.get("target_source", null)
+	)
 	var sample_command := str(result.get("sample_command", ""))
 	if not sample_command.is_empty():
 		_last_command = sample_command
-	if _proxy_targets_target_source != null:
-		_proxy_targets_target_source.set_on_message_parsed(_on_proxy_targets_message_parsed)
 
 
 func _connect_proxy_targets_ws() -> void:
 	if not _proxy_targets_ws_enabled():
 		return
-	_proxy_targets_ws.connect_to(_proxy_targets_ws_url())
+	_card_receiver.connect_to(_proxy_targets_ws_url())
 
 
 func _proxy_targets_ws_enabled() -> bool:
@@ -376,47 +398,19 @@ func _control_ws_url() -> String:
 func _poll_proxy_targets_ws(delta: float) -> void:
 	if not _proxy_targets_ws_enabled():
 		return
-	_proxy_targets_ws.poll(delta)
+	_card_receiver.poll(delta)
 
 
-func _on_proxy_targets_ws_packet(payload: String) -> void:
-	_proxy_targets_status_fragment.set_packet_preview(StatusHudScript.sanitize_status_text(payload))
-	_apply_proxy_targets_live_payload(payload)
+## Bridges the Receiver's reported command strings into the host-owned
+## _last_command (ADR-4: last_command resolution stays where the state lives).
+func _on_proxy_targets_command(command: String) -> void:
+	_last_command = command
 
 
-func _apply_proxy_targets_live_payload(payload: String) -> void:
-	if _proxy_targets_target_source == null:
-		_proxy_targets_status_fragment.set_error("adapter_null")
-		return
-	var applied: bool = bool(_proxy_targets_target_source.apply_proxy_targets_json(payload))
-	var source_error := str(_proxy_targets_target_source.last_error())
-	if source_error == "json_invalid":
-		_proxy_targets_status_fragment.set_message_type("invalid")
-		_proxy_targets_status_fragment.set_error("json_invalid")
-		_last_command = "proxy_live_invalid"
-		return
-	if applied:
-		_proxy_targets_live_messages += 1
-		_proxy_targets_status_fragment.set_error("-")
-		_last_command = "proxy_live"
-	else:
-		_proxy_targets_status_fragment.set_error(source_error)
-		_last_command = "proxy_live_failed"
-
-
-func _on_proxy_targets_message_parsed(message: Dictionary) -> void:
-	_proxy_targets_status_fragment.record_parsed_message(message, _proxy_targets_head_to_world_info())
-
-
-func _proxy_targets_head_to_world_info() -> Dictionary:
-	if _proxy_targets_consumer == null:
-		return {}
-	if not _proxy_targets_consumer.has_method("get_last_applied_target_info"):
-		return {}
-	var info = _proxy_targets_consumer.get_last_applied_target_info()
-	if typeof(info) != TYPE_DICTIONARY:
-		return {}
-	return info
+## Injected into the Receiver so the proxy_targets packet preview keeps using
+## StatusHud's sanitizer without the seam preloading status_hud.gd.
+func _sanitize_proxy_targets_packet(payload: String) -> String:
+	return StatusHudScript.sanitize_status_text(payload)
 
 
 func _proxy_targets_card_target_id() -> String:
@@ -424,19 +418,11 @@ func _proxy_targets_card_target_id() -> String:
 
 
 func _proxy_targets_proxy_count() -> int:
-	return ProxyTargetsStatusFragmentScript.proxy_target_count(_proxy_targets_proxy_dictionary())
+	return ProxyTargetsStatusFragmentScript.proxy_target_count(_card_receiver.proxy_targets_dictionary())
 
 
 func _proxy_targets_proxy_ids() -> Array:
-	return ProxyTargetsStatusFragmentScript.proxy_target_ids(_proxy_targets_proxy_dictionary())
-
-
-func _proxy_targets_proxy_dictionary():
-	if _proxy_targets_consumer == null:
-		return {}
-	if not _proxy_targets_consumer.has_method("get_proxy_targets"):
-		return {}
-	return _proxy_targets_consumer.get_proxy_targets()
+	return ProxyTargetsStatusFragmentScript.proxy_target_ids(_card_receiver.proxy_targets_dictionary())
 
 
 # Untyped returns: Vector3 when resolvable, null otherwise. StatusHud formats
@@ -471,18 +457,16 @@ func _setup_ws_transports() -> void:
 	_control_ws.set_on_packet(_handle_packet)
 	_control_ws.set_on_connect_error(_on_control_ws_connect_error)
 	_control_ws.set_url_provider(_control_ws_url)
-	_proxy_targets_ws.set_on_packet(_on_proxy_targets_ws_packet)
-	_proxy_targets_ws.set_subscribe_payload(JSON.stringify({"type": "subscribe", "stream": "proxy_targets"}))
-	_proxy_targets_ws.set_on_connect_error(_on_proxy_targets_ws_connect_error)
-	_proxy_targets_ws.set_url_provider(_proxy_targets_ws_url)
+	# The proxy_targets transport lives inside the Receiver seam; it owns the
+	# subscribe payload and its own connect-error command string. The host only
+	# injects last_command bridging, the StatusHud sanitizer, and url resolution.
+	_card_receiver.set_on_command(_on_proxy_targets_command)
+	_card_receiver.set_packet_sanitizer(_sanitize_proxy_targets_packet)
+	_card_receiver.setup_transport(Callable(), _proxy_targets_ws_url)
 
 
 func _on_control_ws_connect_error(result: int) -> void:
 	_last_command = "ws connect err " + str(result)
-
-
-func _on_proxy_targets_ws_connect_error(result: int) -> void:
-	_last_command = "proxy_ws_connect_err_" + str(result)
 
 
 func _connect_ws() -> void:
@@ -510,17 +494,17 @@ func _process(delta: float) -> void:
 
 
 func _update_passthrough_overlay_layer() -> void:
-	_passthrough_overlay_presenter.update_layer(_camera)
+	_card_view_facade.update_overlay_layer(_camera)
 
 
 func _passthrough_overlay_layer_alpha_blend() -> bool:
-	return _passthrough_overlay_presenter.layer_alpha_blend()
+	return _card_view_facade.overlay_layer_alpha_blend()
 
 
 # Untyped return: Vector3 when the layer exists, null otherwise (StatusHud
 # formats null as "n/a").
 func _passthrough_overlay_layer_position():
-	return _passthrough_overlay_presenter.layer_position()
+	return _card_view_facade.overlay_layer_position()
 
 
 func _build_vst_target_proxy() -> void:
@@ -600,7 +584,7 @@ func _setup_card_attachment() -> void:
 
 
 func _on_card_attachment_applied() -> void:
-	_proxy_targets_card_apply_count += 1
+	_card_state.record_apply()
 
 
 func attach_to_target(card_id: String, target_id: String, offset_rule = {}) -> bool:
@@ -871,9 +855,13 @@ func _build_vst_status_snapshot() -> Dictionary:
 
 
 func _build_proxy_targets_status_snapshot() -> Dictionary:
-	return _status_snapshot_composer.build_proxy_targets_status_snapshot(_proxy_targets_status_fragment.status_values({
-		"ws_connected": _proxy_targets_ws.ws_connected(),
-		"ws_subscribed": _proxy_targets_ws.ws_subscribed(),
+	# The State seam owns the diagnostic fragment + the live/apply counters; the
+	# host supplies the runtime values it still owns (transport state from the
+	# Receiver, attachment lookup, node positions). CardState injects the
+	# counters and delegates to the fragment for the ordered layout.
+	return _status_snapshot_composer.build_proxy_targets_status_snapshot(_card_state.status_values({
+		"ws_connected": _card_receiver.ws_connected(),
+		"ws_subscribed": _card_receiver.ws_subscribed(),
 		"ws_url": _proxy_targets_ws_url(),
 		"attachments": _card_attachment.size(),
 		"card_target_id": _proxy_targets_card_target_id(),
@@ -881,15 +869,13 @@ func _build_proxy_targets_status_snapshot() -> Dictionary:
 		"proxy_target_ids": _proxy_targets_proxy_ids(),
 		"card_resolved_position": _proxy_targets_card_resolved_position(),
 		"card_node_position": _proxy_targets_card_node_position(),
-		"card_apply_count": _proxy_targets_card_apply_count,
-		"packets": _proxy_targets_ws.packets_seen(),
-		"live": _proxy_targets_live_messages,
-		"packet_bytes": _proxy_targets_ws.last_packet_bytes(),
+		"packets": _card_receiver.packets_seen(),
+		"packet_bytes": _card_receiver.last_packet_bytes(),
 	}))
 
 
 func _build_passthrough_overlay_status_snapshot() -> Dictionary:
-	return _status_snapshot_composer.build_passthrough_overlay_status_snapshot(_passthrough_overlay_presenter.status_values(
+	return _status_snapshot_composer.build_passthrough_overlay_status_snapshot(_card_view_facade.overlay_status_values(
 		_passthrough_overlay_enabled,
 		_passthrough_overlay_requested_blend_mode,
 		_passthrough_overlay_blend_ok

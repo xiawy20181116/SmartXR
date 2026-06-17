@@ -333,11 +333,20 @@ Operational steps (module 2; each a small PR + script-only probe, under existing
   landed as a standalone `godot-android/scripts/card_lifecycle.gd` (the
   appear/expand/contract/disappear lifecycle + attach/detach), with
   `script_only_card_lifecycle_probe.gd` in the gdscript-probes CI list.
-- **Phase C (TODO)**: re-express the existing card as `CardState` (data snapshot) /
-  `CardView` (`card_view` + overlay presenter) / `CardReceiver` (proxy_targets
-  consumer/adapter + ws_transport), shrinking `AndroidMovingCard` to a host that
-  instantiates the trio and owns the XR lifecycle. Incremental; needs device/Godot
-  verification of the 954-line `AndroidMovingCard` host.
+- **Phase C (DONE script-only, YAN-112)**: the tracked-target (proxy_targets)
+  card is re-expressed as the trio in `godot-android/scripts/`:
+  `tracked_target_card_state.gd` (data snapshot + live/apply counters + envelope
+  validation), `tracked_target_card_view.gd` (`card_view` + overlay presenter),
+  `tracked_target_card_receiver.gd` (proxy_targets consumer/adapter/target_source
+  + ws_transport, owning the live-payload apply path). `AndroidMovingCard`
+  instantiates and binds the trio in `_setup_card_trio()` and routes the
+  card/presentation seams through it while still owning the XR lifecycle and the
+  native VST/ncnn pipeline (guardrail: native VST/XR is *not* ported into the
+  card layer, so that bulk stays in the host). One script-only probe per seam in
+  the `gdscript-probes` CI list; the pre-existing card_view / card_attachment /
+  status_snapshot / passthrough / proxy_targets_status_fragment probes stay green.
+  See `docs/tracked_target_card_trio.md`. On-device verification of the host
+  still pending (full-project headless startup hangs on GXR/OpenXR).
 - **Phase D (TODO)**: unify card types - the assistant-card and the tracked-target card
   share one CardState/CardView base, differing only by data source (assistant_updates vs
   proxy_targets). End state: one runtime, one card pattern, two data sources.

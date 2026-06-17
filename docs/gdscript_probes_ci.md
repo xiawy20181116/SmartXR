@@ -42,6 +42,9 @@ powershell -ExecutionPolicy Bypass -File tools/run_godot_target_source_probe.ps1
 powershell -ExecutionPolicy Bypass -File tools/run_godot_vst_capture_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_vst_debug_ui_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_bbox_math_probe.ps1 -GodotExe $env:GODOT_BIN
+powershell -ExecutionPolicy Bypass -File tools/run_godot_tracked_target_card_state_probe.ps1 -GodotExe $env:GODOT_BIN
+powershell -ExecutionPolicy Bypass -File tools/run_godot_tracked_target_card_view_probe.ps1 -GodotExe $env:GODOT_BIN
+powershell -ExecutionPolicy Bypass -File tools/run_godot_tracked_target_card_receiver_probe.ps1 -GodotExe $env:GODOT_BIN
 ```
 
 Each wrapper owns its no-project staging behavior. The CI job must not launch
@@ -66,6 +69,17 @@ viewport/layer/UI construction and camera-relative transform update.
 
 The CardView probe guards the dependency-free main card viewport, UI, card
 panel mesh/material, and XR render probe construction.
+
+The TrackedTargetCardState / TrackedTargetCardView / TrackedTargetCardReceiver
+probes guard the module-2 State/View/Receiver trio for the tracked-target
+(proxy_targets) card (D2 Phase C, §16; see `docs/tracked_target_card_trio.md`).
+State guards the diagnostic snapshot + live/apply counters + envelope
+validation; View guards the forwarding to `card_view` + the passthrough overlay
+presenter; Receiver guards the live-payload apply path (records into State,
+emits the host's `last_command` strings) against a fake proxy_targets pipeline.
+They are the per-seam regression net for the `AndroidMovingCard.gd` host
+refactor, alongside the pre-existing card_view / card_attachment /
+status_snapshot / passthrough / proxy_targets_status_fragment probes.
 
 The CardLifecycle probe guards the dependency-free C3 card-lifecycle state
 machine in `godot-android/scripts/card_lifecycle.gd`: the canonical

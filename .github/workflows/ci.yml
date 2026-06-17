@@ -85,7 +85,10 @@ jobs:
             "tools/run_godot_target_source_probe.ps1",
             "tools/run_godot_vst_capture_probe.ps1",
             "tools/run_godot_vst_debug_ui_probe.ps1",
-            "tools/run_godot_bbox_math_probe.ps1"
+            "tools/run_godot_bbox_math_probe.ps1",
+            "tools/run_godot_tracked_target_card_state_probe.ps1",
+            "tools/run_godot_tracked_target_card_view_probe.ps1",
+            "tools/run_godot_tracked_target_card_receiver_probe.ps1"
           )
           foreach ($probe in $probes) {
             Write-Host "Running $probe"

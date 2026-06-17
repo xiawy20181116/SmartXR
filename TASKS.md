@@ -207,6 +207,41 @@ side.
   if it becomes important; it is outside the completed M1-M5 encapsulation
   docs path.
 
+## In progress
+
+- [x] **YAN-112 — module 2 godot card Phase C: CardState/View/Receiver**
+  DONE (script-only). Trio landed: `tracked_target_card_state.gd` /
+  `..._view.gd` / `..._receiver.gd`; `AndroidMovingCard.gd` binds + routes through
+  the trio in `_setup_card_trio()` (XR/VST native pipeline stays in the host per
+  §16 guardrail). 3 per-seam probes added to the `gdscript-probes` CI list, all
+  PASS; named regression net + passthrough + status_fragment probes green; host
+  compile-checked. Docs: `docs/tracked_target_card_trio.md`. On-device run still
+  pending (full-project headless hangs on GXR/OpenXR). Original plan:
+  (D2 §16, depends on C1/C3 frozen). Re-express the tracked-target
+  (proxy_targets) card as the module-2 State/View/Receiver trio, mirroring
+  `scripts/assistant/`, and route `AndroidMovingCard.gd` through it. Plan:
+  - **TrackedTargetCardState** (`scripts/tracked_target_card_state.gd`, pure
+    data): owns the proxy_targets diagnostic snapshot (wraps the injected
+    `ProxyTargetsStatusFragment`) + the `live`/`apply` counters + envelope
+    validation. No preloads -> script-only loadable.
+  - **TrackedTargetCardView** (`scripts/tracked_target_card_view.gd`,
+    presentation): composes the injected `card_view` + `passthrough_overlay
+    _presenter`. No preloads.
+  - **TrackedTargetCardReceiver** (`scripts/tracked_target_card_receiver.gd`,
+    boundary glue): composes the injected proxy_targets `consumer`/`adapter`/
+    `target_source` + the proxy_targets `WSTransport`; owns the live-payload
+    apply path, records into CardState, emits last_command via callback. No
+    preloads.
+  - Host keeps the XR/VST native pipeline, control WS, command dispatcher,
+    card_attachment, target_registry, status_hud (guardrail: never port native
+    VST/XR toward the card layer). It news the underlying helpers (it owns the
+    `res://` preloads) and injects them into the trio.
+  - One probe per seam + ps1 wrappers; existing card_view / card_attachment /
+    status_snapshot / passthrough / proxy_targets_status_fragment probes stay
+    green.
+  - Verification: script-only probes (Godot 4.6.2 headless, no-project) + a
+    headless GDScript parse-check of `AndroidMovingCard.gd`. No device this PR.
+
 ## Verification
 
 ```powershell

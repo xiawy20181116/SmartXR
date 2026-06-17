@@ -1,5 +1,38 @@
 # HANDOFF
 
+## State (after YAN-112 — module 2 godot card Phase C: State/View/Receiver)
+
+- **YAN-112 done (script-only)**: the tracked-target (proxy_targets) card is
+  re-expressed as the module-2 trio and `AndroidMovingCard.gd` routes through it.
+  New files:
+  - Seams (RefCounted, no `res://` preloads, injected deps):
+    `godot-android/scripts/tracked_target_card_state.gd`,
+    `..._view.gd`, `..._receiver.gd`.
+  - Probes: `godot-android/tests/script_only_tracked_target_card_{state,view,
+    receiver}_probe.gd` + `tools/run_godot_tracked_target_card_{state,view,
+    receiver}_probe.ps1`, all three added to the `gdscript-probes` CI list.
+  - Docs: `docs/tracked_target_card_trio.md`; §16 Phase C marked done
+    (script-only) in `docs/architecture_modules.md`; `docs/gdscript_probes_ci.md`
+    updated.
+  - Host: `AndroidMovingCard.gd` news the underlying card helpers and binds them
+    into the trio in `_setup_card_trio()`; the proxy_targets + view/overlay
+    methods now delegate to the seams. The XR/VST native pipeline, control WS,
+    command dispatcher, card_attachment, target_registry, status_hud stay in the
+    host (§16 guardrail).
+- **Verification**: all 3 new probes PASS; the named regression net (card_view,
+  card_attachment, status_snapshot_composer) + passthrough +
+  proxy_targets_status_fragment probes stay green; `AndroidMovingCard.gd` + the 3
+  seams compile cleanly (loaded under `--path godot-android` with
+  `openxr/enabled` temporarily off — restored after; `project.godot` is clean).
+- **Risks / open**: (1) **No on-device run** — full-project headless startup
+  hangs on GXR/OpenXR, so the host is compile-verified only; the live
+  proxy_targets->card path and the passthrough overlay need a headset pass before
+  this is considered device-green. (2) Behaviour is intended byte-for-byte
+  identical (delegation only, exact `last_command` strings preserved), but the
+  `on_message_parsed` ordering quirk (head->world info reflects the *previous*
+  applied target) is deliberately preserved, not fixed. (3) Phase D (unify the
+  assistant-card and tracked-target card onto a shared base) is the next step.
+
 ## State (after YAN-108 — module 1 C1 producer, 2.5D + yolov8n)
 
 - **YAN-108 done** (Track B, module 1): the real C1 (`tracking_raw`) producer
