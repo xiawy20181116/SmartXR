@@ -58,6 +58,9 @@ PASSTHROUGH_OVERLAY_PRESENTER = (
 # Card viewport/mesh/UI construction moved to scripts/card_view.gd in YAN-103;
 # card-side assertions cover only owner wiring and retained handles.
 CARD_VIEW = ROOT / "godot-android" / "scripts" / "card_view.gd"
+TRACKED_TARGET_CARD_STATE = ROOT / "godot-android" / "scripts" / "tracked_target_card_state.gd"
+TRACKED_TARGET_CARD_VIEW = ROOT / "godot-android" / "scripts" / "tracked_target_card_view.gd"
+TRACKED_TARGET_CARD_RECEIVER = ROOT / "godot-android" / "scripts" / "tracked_target_card_receiver.gd"
 VALIDATION_SCENE_BUILDER = ROOT / "godot-android" / "scripts" / "validation_scene_builder.gd"
 VALIDATOR = ROOT / "tests" / "validate_project.ps1"
 ANDROID_ACTIVITY = (
@@ -88,13 +91,18 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
     def test_moving_card_uses_regular_mesh_card_anchor(self):
         source = SCRIPT.read_text(encoding="utf-8")
         card_view = CARD_VIEW.read_text(encoding="utf-8")
+        facade = TRACKED_TARGET_CARD_VIEW.read_text(encoding="utf-8")
 
         self.assertIn('CARD_ANCHOR_NAME := "CardAnchor"', source)
-        self.assertIn("var _card_view = CardViewScript.new(", source)
-        self.assertIn("_card_view.build(self, CARD_ANCHOR_NAME)", source)
-        self.assertIn("_card_viewport = _card_view.viewport()", source)
-        self.assertIn("_card_anchor = _card_view.anchor()", source)
-        self.assertIn("_card_mesh = _card_view.card_mesh()", source)
+        self.assertIn("var _card_view_facade = TrackedTargetCardViewScript.new()", source)
+        self.assertIn("var card_view = CardViewScript.new(", source)
+        self.assertIn("_card_view_facade.bind(card_view, overlay_presenter)", source)
+        self.assertIn("_card_view_facade.build_card(self, CARD_ANCHOR_NAME)", source)
+        self.assertIn("_card_viewport = _card_view_facade.viewport()", source)
+        self.assertIn("_card_anchor = _card_view_facade.anchor()", source)
+        self.assertIn("_card_mesh = _card_view_facade.card_mesh()", source)
+        self.assertIn("func build_card(parent: Node, anchor_name: String) -> void:", facade)
+        self.assertIn("_card_view.build(parent, anchor_name)", facade)
         self.assertIn("MeshInstance3D.new()", card_view)
         self.assertIn("QuadMesh.new()", card_view)
         self.assertIn("StandardMaterial3D.new()", card_view)
@@ -104,6 +112,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         source = SCRIPT.read_text(encoding="utf-8")
         hud = STATUS_HUD.read_text(encoding="utf-8")
         presenter = PASSTHROUGH_OVERLAY_PRESENTER.read_text(encoding="utf-8")
+        facade = TRACKED_TARGET_CARD_VIEW.read_text(encoding="utf-8")
 
         self.assertIn('const PASSTHROUGH_OVERLAY_ENV := "SMARTXR_USE_PASSTHROUGH_OVERLAY"', source)
         self.assertIn('const PASSTHROUGH_OVERLAY_STATUS_RES := "user://passthrough_overlay_status.json"', hud)
@@ -112,7 +121,9 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("overlay_enabled_from_env(PASSTHROUGH_OVERLAY_ENV)", source)
         self.assertIn("OS.get_environment(env_name)", presenter)
         self.assertIn("func _build_passthrough_overlay_layer() -> void:", source)
-        self.assertIn("build_layer(self, _xr_active, _passthrough_overlay_enabled)", source)
+        self.assertIn("_card_view_facade.build_overlay_layer(self, _xr_active, _passthrough_overlay_enabled)", source)
+        self.assertIn("func build_overlay_layer(parent: Node, xr_active: bool, enabled: bool) -> void:", facade)
+        self.assertIn("_overlay_presenter.build_layer(parent, xr_active, enabled)", facade)
         self.assertIn("OpenXRCompositionLayerQuad.new()", presenter)
         self.assertIn("_layer.layer_viewport = _viewport", presenter)
         self.assertIn("_layer.alpha_blend = true", presenter)
@@ -413,13 +424,13 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
     def test_proxy_targets_validation_mode_drives_real_card_wrapper(self):
         source = SCRIPT.read_text(encoding="utf-8")
         builder = VALIDATION_SCENE_BUILDER.read_text(encoding="utf-8")
+        receiver = TRACKED_TARGET_CARD_RECEIVER.read_text(encoding="utf-8")
 
         self.assertIn("const PROXY_TARGETS_VALIDATION_ENABLED := true", source)
         self.assertIn('const PROXY_TARGETS_SAMPLE_RES := "res://fixtures/proxy_targets_sample.json"', source)
         self.assertIn('preload("res://scripts/proxy_targets_consumer.gd")', source)
         self.assertIn('preload("res://scripts/proxy_targets_card_adapter.gd")', source)
-        self.assertIn("var _proxy_targets_consumer: Node = null", source)
-        self.assertIn("var _proxy_targets_card_adapter: Node = null", source)
+        self.assertIn("var _card_receiver = TrackedTargetCardReceiverScript.new()", source)
         self.assertNotIn("var _proxy_targets_consumer: ProxyTargetsConsumer = null", source)
         self.assertNotIn("var _proxy_targets_card_adapter: ProxyTargetsCardAdapter = null", source)
         self.assertIn("func _build_proxy_targets_validation() -> void:", source)
@@ -427,6 +438,8 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("adapter.bind(consumer, wrapper)", builder)
         self.assertIn("target_source_factory.call(adapter)", builder)
         self.assertIn("target_source.apply_proxy_targets_json(sample)", builder)
+        self.assertIn("_card_receiver.set_proxy_pipeline(", source)
+        self.assertIn("func set_proxy_pipeline(consumer, adapter, target_source) -> void:", receiver)
         self.assertIn("_build_proxy_targets_validation()", source)
 
     def test_proxy_targets_card_adapter_uses_offset_rule_contract(self):
@@ -469,12 +482,15 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         # transport contract.
         transport = WS_TRANSPORT.read_text(encoding="utf-8")
         fragment = PROXY_TARGETS_STATUS_FRAGMENT.read_text(encoding="utf-8")
+        state = TRACKED_TARGET_CARD_STATE.read_text(encoding="utf-8")
+        receiver = TRACKED_TARGET_CARD_RECEIVER.read_text(encoding="utf-8")
 
         self.assertIn("const PROXY_TARGETS_WS_ENABLED := true", source)
         self.assertIn('const PROXY_TARGETS_WS_URL := "ws://127.0.0.1:8766/proxy_targets"', source)
         self.assertIn('const PROXY_TARGETS_STATUS_RES := "user://proxy_targets_live_status.json"', hud)
-        self.assertIn("var _proxy_targets_ws = WSTransportScript.new()", source)
-        self.assertIn("var _proxy_targets_live_messages := 0", source)
+        self.assertIn("var _card_state = TrackedTargetCardStateScript.new()", source)
+        self.assertIn("var _card_receiver = TrackedTargetCardReceiverScript.new()", source)
+        self.assertIn("var _live_messages := 0", state)
         self.assertIn("var _subscribed := false", transport)
         self.assertIn("var _packets_seen := 0", transport)
         self.assertIn("var _parsed_messages := 0", fragment)
@@ -489,7 +505,8 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("func _connect_proxy_targets_ws() -> void:", source)
         self.assertIn("func _poll_proxy_targets_ws(delta: float) -> void:", source)
         self.assertIn("func _send_subscribe_once() -> void:", transport)
-        self.assertIn("func _apply_proxy_targets_live_payload(payload: String) -> void:", source)
+        self.assertIn("func apply_live_payload(payload: String) -> void:", receiver)
+        self.assertIn("func _apply_live_payload(payload: String) -> void:", receiver)
         self.assertIn("func record_parsed_message(message: Dictionary, head_info: Dictionary = {}) -> void:", fragment)
         self.assertIn("func _write_proxy_targets_status_file(snapshot: Dictionary, delta: float) -> void:", hud)
         self.assertIn("func _format_proxy_targets_status_line(proxy: Dictionary) -> String:", hud)
@@ -503,15 +520,15 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_options.proxy_targets_ws_url(PROXY_TARGETS_WS_URL)", source)
         self.assertIn("_options.proxy_targets_ws_enabled(PROXY_TARGETS_WS_ENABLED)", source)
         self.assertIn("_options.control_ws_url(WS_URL)", source)
-        self.assertIn("connect_to(_proxy_targets_ws_url())", source)
+        self.assertIn("_card_receiver.connect_to(_proxy_targets_ws_url())", source)
         self.assertIn("connect_to(_control_ws_url())", source)
         self.assertIn("connect_to_url(url)", transport)
         self.assertIn("_packets_seen += 1", transport)
         self.assertIn("_last_packet_bytes = packet.size()", transport)
-        self.assertIn("_proxy_targets_status_fragment.set_packet_preview(StatusHudScript.sanitize_status_text(payload))", source)
-        self.assertIn("_proxy_targets_target_source.apply_proxy_targets_json(payload)", source)
-        self.assertIn("func _on_proxy_targets_message_parsed(message: Dictionary) -> void:", source)
-        self.assertIn("_proxy_targets_status_fragment.record_parsed_message(message, _proxy_targets_head_to_world_info())", source)
+        self.assertIn("_card_state.set_packet_preview(_sanitize(payload))", receiver)
+        self.assertIn("_target_source.apply_proxy_targets_json(payload)", receiver)
+        self.assertIn("func _on_message_parsed(message: Dictionary) -> void:", receiver)
+        self.assertIn("_card_state.record_parsed_message(message, head_to_world_info())", receiver)
         # Per-frame seam: the card assembles the snapshot, StatusHud writes the files.
         self.assertIn("_update_status_hud(delta)", source)
         self.assertIn("_status_hud.write_status_files(snapshot, delta)", source)
@@ -526,21 +543,22 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('"card_attach_target_id": str(proxy.get("card_target_id", ""))', hud)
         self.assertIn('"card_resolved_position": _proxy_targets_card_resolved_position()', source)
         self.assertIn('"card_node_position": _proxy_targets_card_node_position()', source)
-        self.assertIn('"card_apply_count": _proxy_targets_card_apply_count', source)
-        self.assertIn("var _proxy_targets_card_apply_count := 0", source)
+        self.assertIn('merged["card_apply_count"] = _apply_count', state)
+        self.assertIn("var _apply_count := 0", state)
         self.assertIn("func _proxy_targets_proxy_count() -> int:", source)
         self.assertIn("func _proxy_targets_proxy_ids() -> Array:", source)
         # Untyped returns (Vector3 or null); StatusHud formats null as "n/a".
         self.assertIn("func _proxy_targets_card_resolved_position():", source)
         self.assertIn("func _proxy_targets_card_node_position():", source)
-        self.assertIn("_proxy_targets_card_apply_count += 1", source)
+        self.assertIn("_card_state.record_apply()", source)
+        self.assertIn("_apply_count += 1", state)
         self.assertIn('"packet_preview": _last_packet_preview', fragment)
         self.assertIn('"source_coordinate": _last_source_coordinate', fragment)
         self.assertIn('"source_coordinate_summary": _source_coordinate_summary(proxy.get("source_coordinate", {}))', hud)
         self.assertIn("func _source_coordinate_summary(source_coordinate: Dictionary) -> String:", hud)
-        self.assertLess(source.index("_proxy_targets_target_source.apply_proxy_targets_json(payload)"), source.index('_last_command = "proxy_live"'))
+        self.assertLess(receiver.index("_target_source.apply_proxy_targets_json(payload)"), receiver.index('_emit_command("proxy_live")'))
         self.assertIn("ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s src=%s err=%s", hud)
-        self.assertIn('_last_command = "proxy_live"', source)
+        self.assertIn('_emit_command("proxy_live")', receiver)
 
     def test_fake_proxy_targets_publisher_exists_and_uses_stdlib_websocket(self):
         # The tools file is a compatibility wrapper; implementation lives in
@@ -593,13 +611,15 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         hud = STATUS_HUD.read_text(encoding="utf-8")
         fragment = PROXY_TARGETS_STATUS_FRAGMENT.read_text(encoding="utf-8")
         builder = VALIDATION_SCENE_BUILDER.read_text(encoding="utf-8")
+        receiver = TRACKED_TARGET_CARD_RECEIVER.read_text(encoding="utf-8")
 
         self.assertIn("camera", source)
         self.assertIn("consumer.set_head_reference(camera)", builder)
         self.assertIn("var _last_world_from_head_applied := false", fragment)
         self.assertIn("var _last_local_position := Vector3.ZERO", fragment)
         self.assertIn("var _last_world_position := Vector3.ZERO", fragment)
-        self.assertIn("get_last_applied_target_info", source)
+        self.assertIn("get_last_applied_target_info", receiver)
+        self.assertIn("_card_receiver.set_proxy_pipeline(", source)
         self.assertIn('"world_from_head_applied": _last_world_from_head_applied', fragment)
         self.assertIn('"local_position": _last_local_position', fragment)
         self.assertIn('"world_position": _last_world_position', fragment)

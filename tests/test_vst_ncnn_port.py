@@ -167,7 +167,7 @@ class AndroidMovingCardVstScaffoldTests(unittest.TestCase):
 
     def test_script_has_simple_xr_render_probe(self):
         self.assertIn("_build_xr_render_probe()", self.source)
-        self.assertIn("_card_view.build_xr_render_probe()", self.source)
+        self.assertIn("_card_view_facade.build_xr_render_probe()", self.source)
         self.assertIn("XR_PROBE_SIZE_M", self.source)
         self.assertIn('"XRRenderProbe"', self.card_view)
         self.assertIn("Color(1.0, 0.05, 0.05, 1.0)", self.card_view)

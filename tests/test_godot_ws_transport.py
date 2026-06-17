@@ -5,6 +5,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 TRANSPORT = ROOT / "godot-android" / "scripts" / "ws_transport.gd"
 SCRIPT = ROOT / "godot-android" / "scripts" / "AndroidMovingCard.gd"
+TRACKED_TARGET_CARD_RECEIVER = ROOT / "godot-android" / "scripts" / "tracked_target_card_receiver.gd"
 PROBE = ROOT / "godot-android" / "tests" / "script_only_ws_transport_probe.gd"
 RUNNER = ROOT / "tools" / "run_godot_ws_transport_probe.ps1"
 
@@ -69,35 +70,37 @@ class GodotWSTransportTests(unittest.TestCase):
 
     def test_moving_card_delegates_both_ws_loops(self):
         card = SCRIPT.read_text(encoding="utf-8")
+        receiver = TRACKED_TARGET_CARD_RECEIVER.read_text(encoding="utf-8")
 
         self.assertIn('const WSTransportScript := preload("res://scripts/ws_transport.gd")', card)
-        # Two transports, untyped `=` (no class_name reference) like _options.
+        # Control stays on the host; proxy_targets transport lives inside Receiver.
         self.assertIn("var _control_ws = WSTransportScript.new()", card)
-        self.assertIn("var _proxy_targets_ws = WSTransportScript.new()", card)
+        self.assertIn("_card_receiver.bind(WSTransportScript.new(), _card_state)", card)
         # The card wires callbacks and keeps URL/enable resolution + packet
         # handling + error formatting (ADR-4).
         self.assertIn("func _setup_ws_transports() -> void:", card)
         self.assertIn("_control_ws.set_on_packet(_handle_packet)", card)
         self.assertIn("_control_ws.set_url_provider(_control_ws_url)", card)
-        self.assertIn("_proxy_targets_ws.set_on_packet(_on_proxy_targets_ws_packet)", card)
+        self.assertIn("_card_receiver.setup_transport(Callable(), _proxy_targets_ws_url)", card)
+        self.assertIn("_transport.set_on_packet(_on_ws_packet)", receiver)
         self.assertIn(
-            '_proxy_targets_ws.set_subscribe_payload(JSON.stringify({"type": "subscribe", "stream": "proxy_targets"}))',
-            card,
+            '_transport.set_subscribe_payload(JSON.stringify({"type": "subscribe", "stream": STREAM_NAME}))',
+            receiver,
         )
-        self.assertIn("_proxy_targets_ws.set_url_provider(_proxy_targets_ws_url)", card)
+        self.assertIn("_transport.set_url_provider(url_provider)", receiver)
         self.assertIn('_last_command = "ws connect err " + str(result)', card)
-        self.assertIn('_last_command = "proxy_ws_connect_err_" + str(result)', card)
+        self.assertIn('_emit_command("proxy_ws_connect_err_" + str(result))', receiver)
         self.assertIn("_control_ws.connect_to(_control_ws_url())", card)
-        self.assertIn("_proxy_targets_ws.connect_to(_proxy_targets_ws_url())", card)
+        self.assertIn("_card_receiver.connect_to(_proxy_targets_ws_url())", card)
         self.assertIn("_control_ws.poll(delta)", card)
-        self.assertIn("_proxy_targets_ws.poll(delta)", card)
+        self.assertIn("_card_receiver.poll(delta)", card)
         # The card reads connection state from the transports for the
         # status snapshot (same keys and values as before the extraction).
         self.assertIn('"ws_connected": _control_ws.ws_connected()', card)
-        self.assertIn('"ws_connected": _proxy_targets_ws.ws_connected()', card)
-        self.assertIn('"ws_subscribed": _proxy_targets_ws.ws_subscribed()', card)
-        self.assertIn('"packets": _proxy_targets_ws.packets_seen()', card)
-        self.assertIn('"packet_bytes": _proxy_targets_ws.last_packet_bytes()', card)
+        self.assertIn('"ws_connected": _card_receiver.ws_connected()', card)
+        self.assertIn('"ws_subscribed": _card_receiver.ws_subscribed()', card)
+        self.assertIn('"packets": _card_receiver.packets_seen()', card)
+        self.assertIn('"packet_bytes": _card_receiver.last_packet_bytes()', card)
         # The duplicated WebSocketPeer loops moved out of the card: no peer
         # is constructed or driven there anymore.
         self.assertNotIn("WebSocketPeer.new()", card)

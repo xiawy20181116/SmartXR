@@ -5,6 +5,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "godot-android" / "scripts" / "validation_scene_builder.gd"
 SCRIPT = ROOT / "godot-android" / "scripts" / "AndroidMovingCard.gd"
+TRACKED_TARGET_CARD_RECEIVER = ROOT / "godot-android" / "scripts" / "tracked_target_card_receiver.gd"
 PROBE = ROOT / "godot-android" / "tests" / "script_only_validation_scene_builder_probe.gd"
 RUNNER = ROOT / "tools" / "run_godot_validation_scene_builder_probe.ps1"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
@@ -35,6 +36,7 @@ class GodotValidationSceneBuilderTests(unittest.TestCase):
 
     def test_moving_card_delegates_validation_scene_construction(self):
         card = SCRIPT.read_text(encoding="utf-8")
+        receiver = TRACKED_TARGET_CARD_RECEIVER.read_text(encoding="utf-8")
 
         self.assertIn('const ValidationSceneBuilderScript := preload("res://scripts/validation_scene_builder.gd")', card)
         self.assertIn("var _validation_scene_builder = ValidationSceneBuilderScript.new()", card)
@@ -44,7 +46,8 @@ class GodotValidationSceneBuilderTests(unittest.TestCase):
         self.assertIn("var consumer_factory := func():", card)
         self.assertIn("var adapter_factory := func():", card)
         self.assertIn("var target_source_factory := func(adapter):", card)
-        self.assertIn("_proxy_targets_target_source.set_on_message_parsed(_on_proxy_targets_message_parsed)", card)
+        self.assertIn("_card_receiver.set_proxy_pipeline(", card)
+        self.assertIn("_target_source.set_on_message_parsed(_on_message_parsed)", receiver)
         self.assertNotIn("BoxMesh.new()", card)
         self.assertNotIn('marker.name = "MovingTargetMarker"', card)
         self.assertNotIn("_proxy_targets_card_adapter.bind(_proxy_targets_consumer, self)", card)
