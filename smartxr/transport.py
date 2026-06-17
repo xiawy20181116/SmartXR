@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import select
 import socket
 import struct
@@ -148,6 +149,100 @@ def handshake(conn: socket.socket, allow_request: Callable[[str], bool] | None =
     )
     conn.sendall(response.encode("ascii"))
     return True, first_line
+
+
+# --- Client-side primitives (one home for the masked-frame client used by the
+# live monitors and the module-3 bridge; previously copied per monitor). ---
+
+
+def read_exact(conn: socket.socket, size: int) -> bytes:
+    """Read exactly ``size`` bytes or raise ``ConnectionError`` on close."""
+    chunks = []
+    remaining = size
+    while remaining > 0:
+        chunk = conn.recv(remaining)
+        if not chunk:
+            raise ConnectionError("connection closed while reading websocket frame")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def encode_masked_text_frame(payload: str) -> bytes:
+    """Client->server masked text frame (RFC 6455 requires client masking)."""
+    data = payload.encode("utf-8")
+    length = len(data)
+    if length < 126:
+        header = struct.pack("!BB", 0x81, 0x80 | length)
+    elif length <= 0xFFFF:
+        header = struct.pack("!BBH", 0x81, 0x80 | 126, length)
+    else:
+        header = struct.pack("!BBQ", 0x81, 0x80 | 127, length)
+    mask = os.urandom(4)
+    masked = bytes(value ^ mask[index % 4] for index, value in enumerate(data))
+    return header + mask + masked
+
+
+def encode_masked_control_frame(opcode: int, payload: bytes = b"") -> bytes:
+    """Client->server masked control frame (close/ping/pong)."""
+    if len(payload) >= 126:
+        raise ValueError("control frame payload too large")
+    mask = os.urandom(4)
+    masked = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+    return struct.pack("!BB", 0x80 | opcode, 0x80 | len(payload)) + mask + masked
+
+
+def client_handshake(conn: socket.socket, host: str, port: int, path: str) -> None:
+    """Perform the client side of the WebSocket upgrade; raise on failure."""
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    request = (
+        f"GET {path} HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n"
+    )
+    conn.sendall(request.encode("ascii"))
+    response = b""
+    while b"\r\n\r\n" not in response:
+        chunk = conn.recv(4096)
+        if not chunk:
+            break
+        response += chunk
+    first_line = response.decode("utf-8", errors="replace").splitlines()[0] if response else ""
+    if " 101 " not in first_line:
+        raise ConnectionError(f"websocket handshake failed: {first_line}")
+
+
+def read_server_text_frame(conn: socket.socket) -> str | None:
+    """Read one server->client frame.
+
+    Returns the decoded text for a text frame, ``""`` for a handled control
+    frame (ping is answered with a pong; other control frames are ignored), and
+    ``None`` when the peer closed the connection.
+    """
+    first, second = read_exact(conn, 2)
+    opcode = first & 0x0F
+    masked = bool(second & 0x80)
+    length = second & 0x7F
+    if length == 126:
+        length = struct.unpack("!H", read_exact(conn, 2))[0]
+    elif length == 127:
+        length = struct.unpack("!Q", read_exact(conn, 8))[0]
+    mask = read_exact(conn, 4) if masked else b""
+    payload = read_exact(conn, length) if length else b""
+    if masked:
+        payload = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+    if opcode == 0x1:
+        return payload.decode("utf-8", errors="replace")
+    if opcode == 0x8:
+        return None
+    if opcode == 0x9:
+        conn.sendall(encode_masked_control_frame(0xA, payload))
+        return ""
+    return ""
 
 
 def serve_single_client(

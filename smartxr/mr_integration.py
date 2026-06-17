@@ -31,7 +31,9 @@ modules 3 and 6 own the on-device end-to-end measurement.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from smartxr.geometry import vst_camera_point_to_head
@@ -131,6 +133,26 @@ class Calibration:
 
 
 DEFAULT_CALIBRATION = Calibration.monocular()
+
+
+def load_calibration(matrix_path: Path | str | None) -> Calibration:
+    """Load a :class:`Calibration` from a JSON file, or the monocular default.
+
+    The file is either a bare 16-element ``right_eye_to_head`` array or an object
+    with a ``right_eye_to_head`` (or ``matrix``) key. A missing/short/invalid
+    matrix degrades to the monocular default flip.
+    """
+    if matrix_path is None:
+        return Calibration.monocular()
+    data = json.loads(Path(matrix_path).read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+        data = data.get("right_eye_to_head", data.get("matrix"))
+    if not isinstance(data, list):
+        raise ValueError(
+            f"{matrix_path}: expected a 16-element right_eye_to_head matrix "
+            "(a JSON array, or an object with a 'right_eye_to_head' key)"
+        )
+    return Calibration.with_right_eye_to_head(data)
 
 
 def _make_target_id(source: str, raw_id: Any, index: int) -> str:
