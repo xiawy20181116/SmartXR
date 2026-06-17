@@ -170,6 +170,8 @@ class AntmanVstProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertIn("[string]$ShmEye = \"Right\"", source)
         self.assertIn("--shm-eye", source)
         self.assertIn("--min-confidence", source)
+        self.assertIn("--principal-point-x", source)
+        self.assertIn("[double]$HorizontalFovDeg = 0.0", source)
         self.assertIn("Seq appears after a WebSocket client connects", source)
         self.assertIn("WebSocket listener was not started", source)
         self.assertIn("VST SHM source is unavailable", source)

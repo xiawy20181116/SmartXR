@@ -39,13 +39,17 @@ def project_bbox_center_to_camera_point(
     horizontal_fov_deg: float,
     vertical_fov_deg: float,
     depth_m: float,
+    principal_point_x: float | None = None,
+    principal_point_y: float | None = None,
 ) -> list[float]:
     """Project a bbox center pixel through the camera FOV onto a point at
     ``depth_m`` along the ray, in VST camera axes."""
+    pp_x = image_w * 0.5 if principal_point_x is None else principal_point_x
+    pp_y = image_h * 0.5 if principal_point_y is None else principal_point_y
     fx = (image_w * 0.5) / math.tan(math.radians(horizontal_fov_deg) * 0.5)
     fy = (image_h * 0.5) / math.tan(math.radians(vertical_fov_deg) * 0.5)
-    nx = (cx - image_w * 0.5) / fx
-    ny = (cy - image_h * 0.5) / fy
+    nx = (cx - pp_x) / fx
+    ny = (cy - pp_y) / fy
     length = math.sqrt(nx * nx + ny * ny + 1.0)
     return [nx / length * depth_m, ny / length * depth_m, 1.0 / length * depth_m]
 

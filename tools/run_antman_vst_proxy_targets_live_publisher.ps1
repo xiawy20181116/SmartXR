@@ -15,6 +15,10 @@ param(
     [string]$Model = "yolov8n.pt",
     [string]$Backend = "ultralytics",
     [int]$Imgsz = 320,
+    [double]$HorizontalFovDeg = 0.0,
+    [double]$VerticalFovDeg = 0.0,
+    [double]$PrincipalPointX = -1.0,
+    [double]$PrincipalPointY = -1.0,
     [string]$Device = "",
     [string]$PythonExe = ""
 )
@@ -47,6 +51,9 @@ Write-Host "WebSocket:   ws://${HostName}:${Port}/proxy_targets"
 Write-Host "Python:      $PythonExe"
 Write-Host "Source:      VST SHM + HumanTrackor"
 Write-Host "VST eye:     $ShmEye"
+if ($HorizontalFovDeg -gt 0.0 -or $VerticalFovDeg -gt 0.0 -or $PrincipalPointX -ge 0.0 -or $PrincipalPointY -ge 0.0) {
+    Write-Host "Calibration: hfov=$HorizontalFovDeg vfov=$VerticalFovDeg pp=($PrincipalPointX,$PrincipalPointY)"
+}
 Write-Host "Need headset: connect/start the headset VST producer before expecting frames."
 Write-Host "Seq appears after a WebSocket client connects and a target frame passes confidence gate."
 
@@ -74,6 +81,18 @@ if ($ShmNamespace -ne "") {
 }
 if ($Device -ne "") {
     $publisherArgs += @("--device", $Device)
+}
+if ($HorizontalFovDeg -gt 0.0) {
+    $publisherArgs += @("--horizontal-fov-deg", "$HorizontalFovDeg")
+}
+if ($VerticalFovDeg -gt 0.0) {
+    $publisherArgs += @("--vertical-fov-deg", "$VerticalFovDeg")
+}
+if ($PrincipalPointX -ge 0.0) {
+    $publisherArgs += @("--principal-point-x", "$PrincipalPointX")
+}
+if ($PrincipalPointY -ge 0.0) {
+    $publisherArgs += @("--principal-point-y", "$PrincipalPointY")
 }
 
 & $PythonExe @publisherArgs

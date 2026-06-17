@@ -22,6 +22,10 @@ For every setting, highest priority first:
 | `control_ws_url` | `SMARTXR_CONTROL_WS_URL` | `WS_URL` in `AndroidMovingCard.gd` | Keyboard control channel (`ws_control.py` server) |
 | `proxy_targets_ws_url` | `PROXY_TARGETS_WS_URL` | `PROXY_TARGETS_WS_URL` const | proxy_targets live stream endpoint |
 | `proxy_targets_ws_enabled` | `SMARTXR_PROXY_TARGETS_WS_ENABLED` | `PROXY_TARGETS_WS_ENABLED` const | Whether the live consumer runs |
+| `vst_horizontal_fov_deg` | `SMARTXR_VST_HORIZONTAL_FOV_DEG` | `BBOX_HORIZONTAL_FOV_DEG` const | Right-eye VST horizontal FOV for bbox projection |
+| `vst_vertical_fov_deg` | `SMARTXR_VST_VERTICAL_FOV_DEG` | `BBOX_VERTICAL_FOV_DEG` const | Right-eye VST vertical FOV for bbox projection |
+| `vst_principal_point_x` | `SMARTXR_VST_PRINCIPAL_POINT_X` | image center fallback | Right-eye principal point X in pixels |
+| `vst_principal_point_y` | `SMARTXR_VST_PRINCIPAL_POINT_Y` | image center fallback | Right-eye principal point Y in pixels |
 
 `PROXY_TARGETS_WS_URL` keeps its historical environment-variable name (it
 predates this class and is referenced by existing harnesses); new settings use
@@ -38,9 +42,18 @@ other non-empty value is false.
 {
   "control_ws_url": "ws://192.168.1.20:8766/control",
   "proxy_targets_ws_url": "ws://192.168.1.20:8766/proxy_targets",
-  "proxy_targets_ws_enabled": true
+  "proxy_targets_ws_enabled": true,
+  "vst_horizontal_fov_deg": 70.0,
+  "vst_vertical_fov_deg": 43.0,
+  "vst_principal_point_x": 436.0,
+  "vst_principal_point_y": 326.0
 }
 ```
+
+`VSTCapture.status_snapshot()` reports `horizontal_fov_deg`,
+`vertical_fov_deg`, and `principal_point_px`, so
+`proxy_targets_live_status.json` can show whether a run used the default image
+center or calibrated right-eye principal point.
 
 On Android, `user://` resolves under the app's files directory, e.g.
 `/sdcard/Android/data/com.smartxr.godotcontrol/files/`.

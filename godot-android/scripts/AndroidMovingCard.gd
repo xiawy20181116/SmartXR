@@ -901,6 +901,12 @@ func _exit_tree() -> void:
 
 
 func _setup_vst_capture() -> void:
+	var vst_calibration := _options.vst_camera_calibration(BBOX_HORIZONTAL_FOV_DEG, BBOX_VERTICAL_FOV_DEG)
+	_vst_capture.set_camera_calibration(
+		float(vst_calibration.get("horizontal_fov_deg", BBOX_HORIZONTAL_FOV_DEG)),
+		float(vst_calibration.get("vertical_fov_deg", BBOX_VERTICAL_FOV_DEG)),
+		Vector2(vst_calibration.get("principal_point_px", Vector2(-1.0, -1.0)))
+	)
 	_vst_capture.set_raw_image_callback(_on_vst_raw_right_image)
 	_vst_capture.set_boxes_callback(_on_vst_tracker_boxes)
 	_vst_capture.set_anchor_callback(_on_vst_tracker_anchor)
