@@ -1,0 +1,331 @@
+{
+  "type": "capture_clip_manifest",
+  "schema_version": 1,
+  "source_package": {
+    "package_id": "fixed_replay_captures-20260429-194546",
+    "source_manifest": "CAPTURE_PACKAGE_MANIFEST.json",
+    "source_manifest_status": "not_available_in_workspace",
+    "capture_root_reference": "E:\\xia\\antman-smart-source\\capture_packages\\fixed_replay_captures-20260429-194546",
+    "verification_report": "docs/yolov8n_vst_verification.json",
+    "tracker_replay_fixture": "godot-android/fixtures/tracking_raw_replay_c1.jsonl"
+  },
+  "label_policy": {
+    "tier_scope": "The existing six real VST sessions are T1 basic-real data.",
+    "unknown_policy": "Use unknown/unlabeled when a field is not encoded in the committed package metadata or yolov8n verification report; do not invent distance, lateral motion, or lighting labels.",
+    "t3_gate": "Only create frame-level T3 annotations after T1 verification exposes a concrete detector/tracker gap."
+  },
+  "clips": [
+    {
+      "clip_id": "fixed_replay_captures-20260429-194546/capture_20260415T055846Z",
+      "session_id": "capture_20260415T055846Z",
+      "tier": "T1",
+      "frames_total": 1565,
+      "sampled_frames": 105,
+      "labels": {
+        "scene": {
+          "value": "real_vst_replay",
+          "confidence": "verified",
+          "notes": "Real recorded VST replay session from the fixed replay package."
+        },
+        "people": {
+          "min_sampled_count": 0,
+          "max_sampled_count": 2,
+          "dominant_sampled_count": 0,
+          "sampled_count_histogram": {
+            "0": 57,
+            "1": 39,
+            "2": 9
+          },
+          "confidence": "observed"
+        },
+        "distance": {
+          "band": "unknown",
+          "confidence": "unlabeled",
+          "notes": "Distance/depth label is not present in the committed verification report."
+        },
+        "motion": {
+          "pattern": "presence_change",
+          "confidence": "inferred",
+          "notes": "Sampled detections include both empty and person frames; lateral or approach motion still requires clip review."
+        },
+        "lighting": {
+          "condition": "unknown",
+          "confidence": "unlabeled",
+          "notes": "Lighting is not encoded in the committed verification report."
+        },
+        "entry_exit": {
+          "event": "candidate",
+          "confidence": "inferred",
+          "notes": "Empty/person count bins suggest a presence transition, but raw clip review is required to distinguish enter/exit from camera framing."
+        }
+      },
+      "verification": {
+        "person_recall_pct": 45.7,
+        "max_confidence": 0.825,
+        "mean_confidence": 0.5352
+      }
+    },
+    {
+      "clip_id": "fixed_replay_captures-20260429-194546/capture_20260415T062913Z",
+      "session_id": "capture_20260415T062913Z",
+      "tier": "T1",
+      "frames_total": 421,
+      "sampled_frames": 29,
+      "labels": {
+        "scene": {
+          "value": "real_vst_replay_smoke",
+          "confidence": "verified",
+          "notes": "Real VST replay smoke-test session with sparse person presence."
+        },
+        "people": {
+          "min_sampled_count": 0,
+          "max_sampled_count": 3,
+          "dominant_sampled_count": 0,
+          "sampled_count_histogram": {
+            "0": 23,
+            "1": 4,
+            "2": 1,
+            "3": 1
+          },
+          "confidence": "observed"
+        },
+        "distance": {
+          "band": "unknown",
+          "confidence": "unlabeled",
+          "notes": "Distance/depth label is not present in the committed verification report."
+        },
+        "motion": {
+          "pattern": "sparse_presence",
+          "confidence": "inferred",
+          "notes": "Mostly empty sampled frames with a small number of person frames."
+        },
+        "lighting": {
+          "condition": "unknown",
+          "confidence": "unlabeled",
+          "notes": "Lighting is not encoded in the committed verification report."
+        },
+        "entry_exit": {
+          "event": "candidate",
+          "confidence": "inferred",
+          "notes": "Sparse person frames make this a candidate transition clip pending raw review."
+        }
+      },
+      "verification": {
+        "person_recall_pct": 20.7,
+        "max_confidence": 0.8257,
+        "mean_confidence": 0.526
+      }
+    },
+    {
+      "clip_id": "fixed_replay_captures-20260429-194546/capture_20260415T063047Z",
+      "session_id": "capture_20260415T063047Z",
+      "tier": "T1",
+      "frames_total": 1801,
+      "sampled_frames": 121,
+      "labels": {
+        "scene": {
+          "value": "real_vst_replay_multiperson",
+          "confidence": "verified",
+          "notes": "Real VST replay session with multi-person detections."
+        },
+        "people": {
+          "min_sampled_count": 0,
+          "max_sampled_count": 5,
+          "dominant_sampled_count": 0,
+          "sampled_count_histogram": {
+            "0": 43,
+            "1": 29,
+            "2": 21,
+            "3": 22,
+            "4": 3,
+            "5": 3
+          },
+          "confidence": "observed"
+        },
+        "distance": {
+          "band": "unknown",
+          "confidence": "unlabeled",
+          "notes": "Distance/depth label is not present in the committed verification report."
+        },
+        "motion": {
+          "pattern": "presence_change",
+          "confidence": "inferred",
+          "notes": "Count distribution spans empty through five people; exact subject motion is not labeled."
+        },
+        "lighting": {
+          "condition": "unknown",
+          "confidence": "unlabeled",
+          "notes": "Lighting is not encoded in the committed verification report."
+        },
+        "entry_exit": {
+          "event": "candidate",
+          "confidence": "inferred",
+          "notes": "Empty and multi-person bins make this a candidate enter/exit or framing-change clip."
+        }
+      },
+      "verification": {
+        "person_recall_pct": 64.5,
+        "max_confidence": 0.8997,
+        "mean_confidence": 0.5966
+      }
+    },
+    {
+      "clip_id": "fixed_replay_captures-20260429-194546/capture_20260415T063848Z",
+      "session_id": "capture_20260415T063848Z",
+      "tier": "T1",
+      "frames_total": 1564,
+      "sampled_frames": 105,
+      "labels": {
+        "scene": {
+          "value": "real_vst_replay_multiperson",
+          "confidence": "verified",
+          "notes": "Real VST replay session with frequent person detections."
+        },
+        "people": {
+          "min_sampled_count": 0,
+          "max_sampled_count": 4,
+          "dominant_sampled_count": 1,
+          "sampled_count_histogram": {
+            "0": 23,
+            "1": 38,
+            "2": 16,
+            "3": 17,
+            "4": 11
+          },
+          "confidence": "observed"
+        },
+        "distance": {
+          "band": "unknown",
+          "confidence": "unlabeled",
+          "notes": "Distance/depth label is not present in the committed verification report."
+        },
+        "motion": {
+          "pattern": "presence_change",
+          "confidence": "inferred",
+          "notes": "Count distribution spans empty through four people; exact subject motion is not labeled."
+        },
+        "lighting": {
+          "condition": "unknown",
+          "confidence": "unlabeled",
+          "notes": "Lighting is not encoded in the committed verification report."
+        },
+        "entry_exit": {
+          "event": "candidate",
+          "confidence": "inferred",
+          "notes": "Empty and person bins make this a candidate enter/exit or framing-change clip."
+        }
+      },
+      "verification": {
+        "person_recall_pct": 78.1,
+        "max_confidence": 0.837,
+        "mean_confidence": 0.5013
+      }
+    },
+    {
+      "clip_id": "fixed_replay_captures-20260429-194546/capture_20260415T065340Z",
+      "session_id": "capture_20260415T065340Z",
+      "tier": "T1",
+      "frames_total": 2641,
+      "sampled_frames": 177,
+      "labels": {
+        "scene": {
+          "value": "real_vst_replay_multiperson",
+          "confidence": "verified",
+          "notes": "Real VST replay session with the widest sampled person-count range."
+        },
+        "people": {
+          "min_sampled_count": 0,
+          "max_sampled_count": 6,
+          "dominant_sampled_count": 0,
+          "sampled_count_histogram": {
+            "0": 85,
+            "1": 36,
+            "2": 28,
+            "3": 10,
+            "4": 9,
+            "5": 6,
+            "6": 3
+          },
+          "confidence": "observed"
+        },
+        "distance": {
+          "band": "unknown",
+          "confidence": "unlabeled",
+          "notes": "Distance/depth label is not present in the committed verification report."
+        },
+        "motion": {
+          "pattern": "presence_change",
+          "confidence": "inferred",
+          "notes": "Count distribution spans empty through six people; exact subject motion is not labeled."
+        },
+        "lighting": {
+          "condition": "unknown",
+          "confidence": "unlabeled",
+          "notes": "Lighting is not encoded in the committed verification report."
+        },
+        "entry_exit": {
+          "event": "candidate",
+          "confidence": "inferred",
+          "notes": "Empty and high-count bins make this a candidate enter/exit or framing-change clip."
+        }
+      },
+      "verification": {
+        "person_recall_pct": 52.0,
+        "max_confidence": 0.9459,
+        "mean_confidence": 0.5747,
+        "tracker_replay_window": "frames 351-550",
+        "tracker_replay_fixture": "godot-android/fixtures/tracking_raw_replay_c1.jsonl"
+      }
+    },
+    {
+      "clip_id": "fixed_replay_captures-20260429-194546/capture_20260417T073836Z",
+      "session_id": "capture_20260417T073836Z",
+      "tier": "T1",
+      "frames_total": 3391,
+      "sampled_frames": 227,
+      "labels": {
+        "scene": {
+          "value": "real_vst_replay_single_person",
+          "confidence": "verified",
+          "notes": "Real VST replay session with a single steadily present person in nearly every sampled frame."
+        },
+        "people": {
+          "min_sampled_count": 0,
+          "max_sampled_count": 2,
+          "dominant_sampled_count": 1,
+          "sampled_count_histogram": {
+            "0": 3,
+            "1": 219,
+            "2": 5
+          },
+          "confidence": "observed"
+        },
+        "distance": {
+          "band": "unknown",
+          "confidence": "unlabeled",
+          "notes": "Distance/depth label is not present in the committed verification report."
+        },
+        "motion": {
+          "pattern": "steady_presence",
+          "confidence": "inferred",
+          "notes": "Person is present in 224 of 227 sampled frames; lateral or approach motion still requires clip review."
+        },
+        "lighting": {
+          "condition": "unknown",
+          "confidence": "unlabeled",
+          "notes": "Lighting is not encoded in the committed verification report."
+        },
+        "entry_exit": {
+          "event": "no",
+          "confidence": "inferred",
+          "notes": "Near-continuous person presence makes this the current no-enter-exit baseline."
+        }
+      },
+      "verification": {
+        "person_recall_pct": 98.7,
+        "max_confidence": 0.8527,
+        "mean_confidence": 0.783
+      }
+    }
+  ]
+}
