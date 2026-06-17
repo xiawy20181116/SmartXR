@@ -258,3 +258,43 @@ pluggable topology. No device; validation is L0 schema + L1 math + L2 replay.
 yolov8n recall on real VST imagery is adequate for v1 (see
 `docs/yolov8n_vst_verification.md`), so no T3 frame annotation is needed for v1.
 Stereo/mono depth and the on-device ncnn backend are additive swaps behind C1.
+
+## ADR-11: Module 3 C1→C2 converter = landmark→head alignment + owned calibration (YAN-110)
+
+**Context.** YAN-110 builds module 3 (MR integration): convert C1 (`tracking_raw`,
+3D camera-frame tracking) to C2 (`proxy_targets`, head/world transforms) for the
+Godot card. C1/C2 are both frozen; the conversion is the alignment seam and the
+only device-gated data module, but the math is fully headless.
+
+**Decision.**
+- **Position comes from the C1 `landmark.point`, not the raw bbox.** The landmark
+  is the contract's designated derived anchor (centroid default); module 3
+  transforms whatever landmark module 1 chose, sidestepping the
+  vertices-vs-OBB bbox forms. Camera→head uses `smartxr.geometry`
+  (`vst_camera_point_to_head`), so the converter is automatically pinned to the
+  bbox-math dual-lock (ADR-5) and the GDScript card.
+- **Calibration is owned here** (`Calibration` in `smartxr/mr_integration.py`):
+  v1 monocular = default axis flip `[x,-y,-z]`; binocular = a row-major 4x4
+  `right_eye_to_head` applied instead. A short/invalid matrix degrades to the flip
+  (never errors). FOV (intrinsics) stays in module 1's projection because C1 is
+  already 3D; module 3 applies only the extrinsic. Swapping calibration changes
+  no contract or consumer.
+- **Dedicated C1→C2 state map**, not `schema.canonical_state` (which maps C1
+  `lost`→`tracked`): `tentative/confirmed→tracked`, `lost→predicted`,
+  `deleted→lost`, unknown→`lost`. Optional `stale_after_ms` downgrades a lagging
+  `tracked` pose to `stale` (baseline §12).
+- **Empty C1 frame → no C2 message** (returns `None`). C2 requires non-empty
+  targets/cards, so the valid "no people" state is represented by not publishing;
+  the stateful converter advances `sequence` only on emitted frames. One card is
+  bound to the primary target; per-target card lifecycle is module 2 / C3.
+- **`source_frame.coordinate_space`** of `head`/`world` passes through unconverted;
+  anything else is treated as a camera frame and flipped.
+- **Display wiring** = `tools/convert_tracking_raw_to_proxy_targets.py`, which
+  validates both ends (C1 in, C2 out) and feeds the existing proxy_targets path;
+  the converted C2 needs no consumer change.
+
+**Consequences.** Module 3's alignment is locked at L0/L1/L2 fully headless
+(`tests/test_mr_integration.py` + the new `proxy_targets_from_c1_sample.json`
+gate); the GDScript/Godot consumer is unchanged. L3 device alignment smoke is
+documented in `docs/mr_integration.md` and pending a headset (with YAN-102). The
+binocular `right_eye_to_head` is an additive calibration swap.
