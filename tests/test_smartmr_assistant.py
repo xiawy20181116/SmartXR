@@ -1,10 +1,17 @@
 import asyncio
 import json
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from SmartMRAssistant.assistant.dispatcher import ToolCall, dispatch_tool_call
-from SmartMRAssistant.assistant.session import LiveVoiceSession, SimulatedVoiceSession
+from SmartMRAssistant.assistant.session import (
+    GeminiLiveVoiceSession,
+    LiveVoiceSession,
+    QwenOmniRealtimeVoiceSession,
+    SimulatedVoiceSession,
+    VoiceSessionConfig,
+)
 from SmartMRAssistant.assistant.tools import ToolRegistry, create_default_registry
 
 
@@ -287,6 +294,93 @@ class SmartMRAssistantDispatcherTests(unittest.TestCase):
 
         self.assertEqual(response["tool_call_id"], "live-call-1")
         self.assertEqual(response["response"], {"status": "ok", "scene": {"last_user_text": "from live", "facts": {}}})
+
+    def test_gemini_and_qwen_mock_events_emit_identical_c4(self):
+        config = VoiceSessionConfig(provider="test", model_id="model-from-test", api_key_env="TEST_API_KEY")
+        gemini = GeminiLiveVoiceSession(config=config, registry=create_default_registry())
+        qwen = QwenOmniRealtimeVoiceSession(config=config, registry=create_default_registry())
+
+        gemini_calls = gemini.extract_tool_calls(
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call-shared-1",
+                            "name": "identity_lookup",
+                            "args": {"person_ref": "person-1", "snapshot": {"people": []}},
+                        }
+                    ]
+                }
+            }
+        )
+        qwen_calls = qwen.extract_tool_calls(
+            {
+                "type": "response.function_call_arguments.done",
+                "call_id": "call-shared-1",
+                "name": "identity_lookup",
+                "arguments": {"person_ref": "person-1", "snapshot": {"people": []}},
+            }
+        )
+
+        self.assertEqual(gemini_calls, qwen_calls)
+        self.assertEqual(gemini_calls[0].scheduling, "NON_BLOCKING")
+
+    def test_voice_session_config_reads_model_ids_from_environment(self):
+        patch = unittest.mock.patch.dict(
+            "os.environ",
+            {
+                "SMARTMR_VOICE_GEMINI_MODEL": "gemini-live-from-env",
+                "SMARTMR_VOICE_QWEN_MODEL": "qwen-realtime-from-env",
+                "GEMINI_API_KEY": "not-secret-in-code",
+                "DASHSCOPE_API_KEY": "not-secret-in-code",
+            },
+            clear=True,
+        )
+        with patch:
+            gemini_config = VoiceSessionConfig.from_env("gemini")
+            qwen_config = VoiceSessionConfig.from_env("qwen")
+
+        self.assertEqual(gemini_config.model_id, "gemini-live-from-env")
+        self.assertEqual(gemini_config.api_key_env, "GEMINI_API_KEY")
+        self.assertTrue(gemini_config.has_api_key)
+        self.assertEqual(qwen_config.model_id, "qwen-realtime-from-env")
+        self.assertEqual(qwen_config.api_key_env, "DASHSCOPE_API_KEY")
+
+    def test_recorded_audio_replay_dispatches_provider_tool_calls(self):
+        session = GeminiLiveVoiceSession(
+            config=VoiceSessionConfig(provider="gemini", model_id="model-from-test", api_key_env="GEMINI_API_KEY"),
+            registry=create_default_registry(),
+        )
+
+        responses = asyncio.run(
+            session.replay_recorded_audio(
+                audio_chunks=[b"pcm-16k-sample"],
+                provider_events=[
+                    {
+                        "toolCall": {
+                            "functionCalls": [
+                                {
+                                    "id": "replay-call-1",
+                                    "name": "scene_status",
+                                    "args": {"scene_snapshot": {"last_user_text": "from replay"}},
+                                }
+                            ]
+                        }
+                    }
+                ],
+            )
+        )
+
+        self.assertEqual(
+            responses,
+            [
+                {
+                    "tool_call_id": "replay-call-1",
+                    "name": "scene_status",
+                    "response": {"status": "ok", "scene": {"last_user_text": "from replay", "facts": {}}},
+                }
+            ],
+        )
 
 
 if __name__ == "__main__":

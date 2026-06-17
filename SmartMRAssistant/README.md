@@ -14,8 +14,10 @@ Godot MR assistant. It keeps the audio transport boundary separate from tool dis
   tracing.
 - `assistant/dispatcher.py` executes a `ToolCall` through the registry and
   returns a tool response payload.
-- `assistant/session.py` contains `LiveVoiceSession` for Live tool-call payloads
-  and `SimulatedVoiceSession` for local headless runs.
+- `assistant/session.py` contains the provider-neutral `VoiceSession` contract,
+  `GeminiLiveVoiceSession` and `QwenOmniRealtimeVoiceSession` adapters,
+  `LiveVoiceSession` for normalized tool-call payloads, and
+  `SimulatedVoiceSession` for local headless runs.
 - `assistant/schema_adapter.py` converts exported C5 tool schemas into
   provider-neutral Live tool declarations.
 - `assistant/live_adapter.py` normalizes provider-style tool-call events and
@@ -105,8 +107,25 @@ python -m unittest tests.test_smartmr_live_adapter tests.test_smartmr_live_assis
 ## Environment
 
 The S1 simulator does not require headset hardware, microphone access, Gemini
-credentials, or a Godot runtime. Future Live integration should add provider
-credentials at the session/transport layer, not inside the dispatcher.
+credentials, Qwen credentials, or a Godot runtime.
+
+Live provider sessions read model IDs from environment variables so model names
+can be confirmed at startup without code changes:
+
+```powershell
+$env:SMARTMR_VOICE_GEMINI_MODEL = "gemini-3.1-flash-live-preview"
+$env:SMARTMR_VOICE_QWEN_MODEL = "qwen3.5-omni-plus"
+$env:GEMINI_API_KEY = "<runtime secret>"
+$env:DASHSCOPE_API_KEY = "<runtime secret>"
+```
+
+The API key values stay in the runtime environment only. The dispatcher receives
+only C4 tool-call objects and never reads audio, model IDs, or provider secrets.
+As of 2026-06-16, Google lists `gemini-3.1-flash-live-preview` as the current
+Live API preview model. Alibaba Cloud's current Qwen-Omni documentation lists
+`qwen3.5-omni-plus` for streaming omni-modal invocation; if a Qwen Realtime
+endpoint exposes a different model ID in the target region, set
+`SMARTMR_VOICE_QWEN_MODEL` to that value at startup.
 
 ## Source Relationship
 

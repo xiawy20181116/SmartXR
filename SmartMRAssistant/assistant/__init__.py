@@ -4,7 +4,14 @@ from .context import SceneContext
 from .dispatcher import ToolCall, dispatch_tool_call
 from .live_adapter import handle_live_tool_call_event, normalize_live_tool_call_event, run_fake_live_task_query_turn
 from .schema_adapter import export_live_tool_declarations
-from .session import LiveVoiceSession, SimulatedVoiceSession
+from .session import (
+    GeminiLiveVoiceSession,
+    LiveVoiceSession,
+    QwenOmniRealtimeVoiceSession,
+    SimulatedVoiceSession,
+    VoiceSession,
+    VoiceSessionConfig,
+)
 from .tools import (
     ToolRegistry,
     assistant_card_push_tool,
@@ -17,10 +24,14 @@ from .tools import (
 
 __all__ = [
     "SceneContext",
+    "GeminiLiveVoiceSession",
     "LiveVoiceSession",
+    "QwenOmniRealtimeVoiceSession",
     "SimulatedVoiceSession",
     "ToolCall",
     "ToolRegistry",
+    "VoiceSession",
+    "VoiceSessionConfig",
     "assistant_card_push_tool",
     "card_command_tool",
     "create_default_registry",
