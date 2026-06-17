@@ -63,6 +63,17 @@ class AntmanVstHumanTrackorDumperTests(unittest.TestCase):
         self.assertEqual(record["people"][0]["confidence"], 0.91)
         self.assertEqual(record["source_stats"]["producer_pid"], 1234)
 
+    def test_resolves_dual_eye_shm_name_for_antman_v1_contract(self):
+        dumper = load_module(DUMPER, "dump_antman_vst_humantrackor_jsonl")
+
+        self.assertEqual(dumper.resolve_vst_shm_name("Antman.VST.AI.v1", "Right"), "Antman.VST.AI.v1.Right")
+        self.assertEqual(dumper.resolve_vst_shm_name("Antman.VST.AI.v1", "Left"), "Antman.VST.AI.v1.Left")
+        self.assertEqual(dumper.resolve_vst_shm_name("Antman.VST.AI.v1.Right", "Right"), "Antman.VST.AI.v1.Right")
+        self.assertEqual(dumper.resolve_vst_shm_name("Antman.VST.AI.v1", ""), "Antman.VST.AI.v1")
+
+        with self.assertRaises(ValueError):
+            dumper.resolve_vst_shm_name("Antman.VST.AI.v1", "Center")
+
     def test_dump_session_writes_empty_frames_and_stops_after_first_target_window(self):
         dumper = load_module(DUMPER, "dump_antman_vst_humantrackor_jsonl")
 
@@ -126,6 +137,8 @@ class AntmanVstHumanTrackorDumperTests(unittest.TestCase):
         self.assertIn("human_detect\\.venv\\Scripts\\python.exe", source)
         self.assertIn(".venv\\Scripts\\python.exe", source)
         self.assertIn(".uv-venv\\Scripts\\python.exe", source)
+        self.assertIn("[string]$ShmEye = \"Right\"", source)
+        self.assertIn("--shm-eye", source)
         self.assertIn("Dependency unavailable", source)
 
     def test_dumper_reports_missing_dependency_separately_from_vst_source(self):
