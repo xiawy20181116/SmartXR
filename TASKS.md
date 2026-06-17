@@ -6,6 +6,24 @@ side.
 
 ## Completed
 
+- [x] **YAN-110 (A) — module 3 live bridge: C1 WS → align → proxy_targets WS**
+  (ADR-12). Closes the full PC headless chain
+  `NV12 → ncnn → C1 producer → C1 WS → [bridge] → proxy_targets WS → Godot card`.
+  - `smartxr/cli/mr_integration_bridge.py` (+ wrapper `tools/run_mr_integration_bridge.py`):
+    WS client to `--c1-url /tracking_raw` + WS server on `/proxy_targets`; per-card
+    fresh C1 subscription + converter (sequence restarts per card); empty frames
+    not forwarded; reuses the unchanged ADR-11 converter so live == file output.
+  - Client WS primitives centralized in `smartxr/transport.py`
+    (`client_handshake` / `encode_masked_text_frame` / `read_server_text_frame` /
+    `read_exact`); C1 monitor refactored to use them; `load_calibration` shared
+    via `smartxr/mr_integration.py`.
+  - Harness `tools/run_mr_integration_bridge_harness.ps1` (C1 replay publisher →
+    bridge → proxy_targets monitor, dependency-free closed loop).
+  - Tests `tests/test_mr_integration_bridge.py` (9): transport client primitives,
+    request gate, and the live L2 e2e (C1 publisher thread → bridge → card reader,
+    schema-valid + contiguous). Full suite **335 tests** green; both gates ok.
+  - Docs `docs/mr_integration.md` "Live bridge" section; DECISIONS.md ADR-12.
+
 - [x] **YAN-110 — module 3 MR integration: C1→C2 alignment + VST display wiring**
   (Track C, against the frozen C1/C2 contracts; ADR-11). Headless core; L3
   device alignment smoke documented and pending a headset. Built:

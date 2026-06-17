@@ -14,11 +14,8 @@ Dependency-free (stdlib + `smartxr` schema/fakes). Mirrors
 from __future__ import annotations
 
 import argparse
-import base64
 import json
-import os
 import socket
-import struct
 import time
 from pathlib import Path
 from typing import Any
@@ -26,86 +23,13 @@ from urllib.parse import urlparse
 
 from smartxr.tracking_raw_fakes import TrackingRawConsumer
 from smartxr.tracking_raw_schema import validate_message
+from smartxr.transport import (
+    client_handshake,
+    encode_masked_text_frame,
+    read_server_text_frame,
+)
 
 DEFAULT_URL = "ws://127.0.0.1:8770/tracking_raw"
-
-
-def _read_exact(conn: socket.socket, size: int) -> bytes:
-    chunks = []
-    remaining = size
-    while remaining > 0:
-        chunk = conn.recv(remaining)
-        if not chunk:
-            raise ConnectionError("connection closed while reading websocket frame")
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
-
-
-def _encode_masked_text_frame(payload: str) -> bytes:
-    data = payload.encode("utf-8")
-    length = len(data)
-    if length < 126:
-        header = struct.pack("!BB", 0x81, 0x80 | length)
-    elif length <= 0xFFFF:
-        header = struct.pack("!BBH", 0x81, 0x80 | 126, length)
-    else:
-        header = struct.pack("!BBQ", 0x81, 0x80 | 127, length)
-    mask = os.urandom(4)
-    masked = bytes(value ^ mask[index % 4] for index, value in enumerate(data))
-    return header + mask + masked
-
-
-def _encode_masked_control_frame(opcode: int, payload: bytes = b"") -> bytes:
-    mask = os.urandom(4)
-    masked = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
-    return struct.pack("!BB", 0x80 | opcode, 0x80 | len(payload)) + mask + masked
-
-
-def _read_websocket_text(conn: socket.socket) -> str | None:
-    first, second = _read_exact(conn, 2)
-    opcode = first & 0x0F
-    masked = bool(second & 0x80)
-    length = second & 0x7F
-    if length == 126:
-        length = struct.unpack("!H", _read_exact(conn, 2))[0]
-    elif length == 127:
-        length = struct.unpack("!Q", _read_exact(conn, 8))[0]
-    mask = _read_exact(conn, 4) if masked else b""
-    payload = _read_exact(conn, length) if length else b""
-    if masked:
-        payload = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
-    if opcode == 0x1:
-        return payload.decode("utf-8", errors="replace")
-    if opcode == 0x8:
-        return None
-    if opcode == 0x9:
-        conn.sendall(_encode_masked_control_frame(0xA, payload))
-        return ""
-    return ""
-
-
-def _perform_client_handshake(conn: socket.socket, host: str, port: int, path: str) -> None:
-    key = base64.b64encode(os.urandom(16)).decode("ascii")
-    request = (
-        f"GET {path} HTTP/1.1\r\n"
-        f"Host: {host}:{port}\r\n"
-        "Upgrade: websocket\r\n"
-        "Connection: Upgrade\r\n"
-        f"Sec-WebSocket-Key: {key}\r\n"
-        "Sec-WebSocket-Version: 13\r\n"
-        "\r\n"
-    )
-    conn.sendall(request.encode("ascii"))
-    response = b""
-    while b"\r\n\r\n" not in response:
-        chunk = conn.recv(4096)
-        if not chunk:
-            break
-        response += chunk
-    first_line = response.decode("utf-8", errors="replace").splitlines()[0] if response else ""
-    if " 101 " not in first_line:
-        raise ConnectionError(f"websocket handshake failed: {first_line}")
 
 
 def analyze_c1_messages(messages: list[dict[str, Any]], min_packets: int) -> dict[str, Any]:
@@ -204,13 +128,13 @@ def monitor_stream(url: str, min_packets: int, timeout_seconds: float) -> dict[s
 
     with socket.create_connection((host, port), timeout=timeout_seconds) as conn:
         conn.settimeout(max(0.1, timeout_seconds))
-        _perform_client_handshake(conn, host, port, path)
+        client_handshake(conn, host, port, path)
         conn.sendall(
-            _encode_masked_text_frame(json.dumps({"type": "subscribe", "stream": "tracking_raw"}, separators=(",", ":")))
+            encode_masked_text_frame(json.dumps({"type": "subscribe", "stream": "tracking_raw"}, separators=(",", ":")))
         )
         while len(messages) < min_packets and time.monotonic() < deadline:
             conn.settimeout(max(0.1, deadline - time.monotonic()))
-            payload = _read_websocket_text(conn)
+            payload = read_server_text_frame(conn)
             if payload is None:
                 break
             if payload == "":

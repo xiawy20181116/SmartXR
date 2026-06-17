@@ -1,5 +1,31 @@
 # HANDOFF
 
+## State (after YAN-110 A — module 3 live bridge)
+
+- **YAN-110 option A done** (live wiring on top of the merged converter). The
+  module-3 bridge subscribes to a live C1 source and serves `proxy_targets` to the
+  card, closing the full PC headless chain
+  `NV12 → ncnn → C1 producer → C1 WS → [bridge align] → proxy_targets WS → Godot`.
+  New files: `smartxr/cli/mr_integration_bridge.py`,
+  `tools/run_mr_integration_bridge.py`, `tools/run_mr_integration_bridge_harness.ps1`,
+  `tests/test_mr_integration_bridge.py`. Changed: `smartxr/transport.py` (added
+  client WS primitives), `smartxr/cli/tracking_raw_monitor.py` (reuse them),
+  `smartxr/mr_integration.py` + `smartxr/cli/convert_tracking_raw.py` (shared
+  `load_calibration`), `tests/validate_project.ps1`. Decision: ADR-12. Doc:
+  `docs/mr_integration.md` "Live bridge".
+- **Verification**: full suite **335 tests OK**; proxy_targets + tracking_raw
+  gates green. Python-only. The live L2 (real C1 publisher → bridge → card reader)
+  is in `tests/test_mr_integration_bridge.py` and was run 5/5 stable in isolation.
+  NOTE: `test_tracking_raw_live_chain.EndToEndSocketTests` (pre-existing, from
+  PR #45) is timing-flaky under full-suite load (`1 != 0`); it passes 5/5 in
+  isolation and is unrelated to this change — the monitor refactor did not alter
+  its behavior.
+- **Risks / open**: unchanged from the converter — the **L3 on-device alignment
+  smoke still needs a headset + module 6 (YAN-102)**; v1 monocular (no real
+  `right_eye_to_head` captured yet); one card bound to the primary target.
+  `tools/monitor_proxy_targets_live_stream.py` still has its own copy of the
+  client WS primitives (tools-path import; left out of this slice's scope).
+
 ## State (after YAN-110 — module 3 MR integration, C1→C2 alignment + display wiring)
 
 - **YAN-110 done** (Track C, module 3). The publisher-side C1→C2 alignment seam.

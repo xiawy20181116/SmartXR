@@ -19,25 +19,11 @@ import json
 from pathlib import Path
 
 from smartxr.mr_integration import (
-    Calibration,
     TrackingRawToProxyTargetsConverter,
+    load_calibration,
 )
 from smartxr.schema import validate_message as validate_proxy_targets
 from smartxr.tracking_raw_schema import validate_message as validate_tracking_raw
-
-
-def _load_calibration(matrix_path: Path | None) -> Calibration:
-    if matrix_path is None:
-        return Calibration.monocular()
-    data = json.loads(matrix_path.read_text(encoding="utf-8"))
-    if isinstance(data, dict):
-        data = data.get("right_eye_to_head", data.get("matrix"))
-    if not isinstance(data, list):
-        raise ValueError(
-            f"{matrix_path}: expected a 16-element right_eye_to_head matrix "
-            "(a JSON array, or an object with a 'right_eye_to_head' key)"
-        )
-    return Calibration.with_right_eye_to_head(data)
 
 
 def _iter_input_messages(input_path: Path):
@@ -83,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     converter = TrackingRawToProxyTargetsConverter(
-        _load_calibration(args.right_eye_to_head),
+        load_calibration(args.right_eye_to_head),
         card_id=args.card_id,
         stale_after_ms=args.stale_after_ms,
         min_confidence=args.min_confidence,

@@ -10,6 +10,8 @@ try {
         tests/test_tracker.py `
         tests/test_tracking_raw_producer.py `
         tests/test_tracking_raw_live_chain.py `
+        tests/test_mr_integration.py `
+        tests/test_mr_integration_bridge.py `
         tests/test_godot_android_mesh_card.py `
         tests/test_godot_card_attachment.py `
         tests/test_godot_smartxr_options.py `

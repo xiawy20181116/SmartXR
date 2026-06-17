@@ -100,6 +100,39 @@ so the bridge cannot emit a bad payload; empty C1 frames are skipped. The C2
 `.jsonl` it produces feeds the existing fake publisher / monitor / Godot consumer
 unchanged.
 
+### Live bridge (C1 WS -> C2 WS)
+
+`tools/run_mr_integration_bridge.py` (`smartxr.cli.mr_integration_bridge`) is the
+**live** form: it subscribes to an upstream C1 publisher and serves the converted
+`proxy_targets` to the Godot card, closing the whole PC headless chain:
+
+```
+NV12 -> ncnn -> C1 producer -> C1 WS (/tracking_raw)
+    -> [bridge: C1->C2 alignment] -> proxy_targets WS (/proxy_targets) -> Godot card
+```
+
+The bridge is both a WebSocket **client** (subscribes to `--c1-url`, e.g.
+`smartxr.cli.tracking_raw_publisher`) and a **server** (serves `/proxy_targets`,
+the stream the card already consumes). Per card connection it opens a fresh C1
+subscription and a fresh converter, then pumps: read one C1 frame -> convert ->
+forward the C2 frame. Empty C1 frames convert to `None` and are not forwarded
+(the card idles/holds). The conversion is the unchanged dual-locked converter, so
+the live path and the file path produce identical C2.
+
+```
+# C1 source (replay of recorded detections, or the real NV12->ncnn driver):
+python -m smartxr.cli.tracking_raw_publisher --port 8770
+# module-3 bridge:
+python tools/run_mr_integration_bridge.py --c1-url ws://127.0.0.1:8770/tracking_raw \
+    --host 127.0.0.1 --port 8766 [--right-eye-to-head matrix.json]
+```
+
+Dependency-free closed loop (C1 replay publisher -> bridge -> proxy_targets
+monitor): `tools/run_mr_integration_bridge_harness.ps1`. The shared WebSocket
+client primitives (`client_handshake` / `encode_masked_text_frame` /
+`read_server_text_frame`) live in `smartxr.transport` so the bridge and the live
+monitors share one implementation.
+
 ## Verification ladder
 
 - **L0 (schema gate, CI)**: `godot-android/fixtures/proxy_targets_from_c1_sample.json`
@@ -112,9 +145,11 @@ unchanged.
 - **L2 (fake end-to-end, headless)**: the C1 fake producer
   (`smartxr.tracking_raw_fakes.build_fake_tracking_raw_message`) feeds the converter
   and the canonical C2 consumer (`smartxr.schema`) across a moving sequence with a
-  stable id. The wiring tool covers the file/stream path. For the full WS round-trip,
-  emit C2 `.jsonl` with the tool and replay it through the existing proxy_targets
-  publisher/harness.
+  stable id (`tests/test_mr_integration.py`). The **full live WS chain** is covered
+  by `tests/test_mr_integration_bridge.py`: a real C1 publisher thread -> the bridge
+  -> a card-side reader, asserting the forwarded `proxy_targets` stream is
+  schema-valid and sequence-contiguous. The dependency-free runner is
+  `tools/run_mr_integration_bridge_harness.ps1`.
 - **L3 (device smoke)**: real headset, pending — see below.
 
 ## L3 device alignment smoke (pending device)

@@ -1,5 +1,47 @@
 # Notes — change log
 
+## YAN-110 (A) — module 3 live bridge (C1 WS → align → proxy_targets WS)
+
+### Files added
+
+- `smartxr/cli/mr_integration_bridge.py` — the live bridge. WS client to the C1
+  source (`--c1-url .../tracking_raw`) + WS server on `/proxy_targets`. Per card
+  connection: fresh upstream subscription + fresh
+  `TrackingRawToProxyTargetsConverter` (C2 sequence restarts per card). Pump loop:
+  drain the card (notice disconnects), `select`-poll the upstream so an idle C1
+  source doesn't block, read one C1 frame, `converter.convert`, forward C2; empty
+  frames (None) are not forwarded. Reuses the unchanged ADR-11 converter, so the
+  live path emits byte-identical C2 to the file path.
+- `tools/run_mr_integration_bridge.py` — thin wrapper to the CLI main.
+- `tools/run_mr_integration_bridge_harness.ps1` — dependency-free closed loop:
+  C1 replay publisher → bridge → `monitor_proxy_targets_live_stream.py`, asserts
+  the proxy_targets stream the card would see.
+- `tests/test_mr_integration_bridge.py` (9) — transport client primitives
+  (masked encode/decode, server-frame read incl. ping→pong and close→None via a
+  `_FakeConn`), the `/proxy_targets` request gate, the live L2 e2e (real C1
+  publisher thread → bridge → card reader; every forwarded message schema-valid,
+  contiguous sequence from 0, targets + card present), and runner/wrapper pins.
+
+### Files changed
+
+- `smartxr/transport.py` — added the client-side WS primitives (`read_exact`,
+  `encode_masked_text_frame`, `encode_masked_control_frame`, `client_handshake`,
+  `read_server_text_frame`) so the bridge and the live monitors share one copy.
+- `smartxr/cli/tracking_raw_monitor.py` — refactored to import those primitives
+  (removed its private duplicates); behavior identical, covered by
+  `test_tracking_raw_live_chain.py`.
+- `smartxr/mr_integration.py` — added shared `load_calibration(path)`;
+  `smartxr/cli/convert_tracking_raw.py` now uses it (removed its private copy).
+- `tests/validate_project.ps1` — registered `test_mr_integration*.py`.
+
+### Notes / decisions
+
+- Full suite **335 tests OK**; both schema gates green. The live L2 e2e is 5/5
+  stable in isolation. `test_tracking_raw_live_chain.EndToEndSocketTests`
+  (pre-existing, PR #45) is timing-flaky under full-suite load (`1 != 0`), passes
+  5/5 in isolation, unrelated to this change. DECISIONS.md ADR-12; doc
+  `docs/mr_integration.md` "Live bridge".
+
 ## YAN-110 — module 3 MR integration (C1→C2 alignment + VST display wiring)
 
 ### Files added

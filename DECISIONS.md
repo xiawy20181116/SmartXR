@@ -298,3 +298,37 @@ only device-gated data module, but the math is fully headless.
 gate); the GDScript/Godot consumer is unchanged. L3 device alignment smoke is
 documented in `docs/mr_integration.md` and pending a headset (with YAN-102). The
 binocular `right_eye_to_head` is an additive calibration swap.
+
+## ADR-12: Module 3 live bridge = C1 WS client + C2 WS server, shared transport client (YAN-110 A)
+
+**Context.** With the converter (ADR-11) and the merged live C1 publisher
+(`smartxr.cli.tracking_raw_publisher`, the YAN-108 PC chain) both in place, the
+missing piece is the live glue that drives the Godot card from a live C1 source
+instead of a static file. This closes the full PC headless chain
+`NV12 -> ncnn -> C1 producer -> C1 WS -> [align] -> proxy_targets WS -> card`.
+
+**Decision.**
+- **The bridge is both a WS client and a WS server**
+  (`smartxr/cli/mr_integration_bridge.py`): it subscribes to the upstream C1
+  `/tracking_raw` and serves converted C2 on `/proxy_targets` (the stream the card
+  already consumes). Per card connection it opens a fresh C1 subscription and a
+  fresh `TrackingRawToProxyTargetsConverter`, so the C2 `sequence` restarts per
+  card — matching the C1 publisher's per-client producer.
+- **It reuses the unchanged converter**, so the live path and the file path
+  (`convert_tracking_raw`) emit byte-identical C2. Empty C1 frames convert to
+  `None` and are simply not forwarded (the card idles/holds, baseline §12). The
+  card disconnect is noticed promptly via a `select` poll timeout on the upstream
+  read between forwards.
+- **Client WS primitives moved into `smartxr.transport`** (`client_handshake`,
+  `encode_masked_text_frame`, `encode_masked_control_frame`,
+  `read_server_text_frame`, `read_exact`); the C1 monitor was refactored to use
+  them, removing one of the duplicated copies. (`tools/monitor_proxy_targets_live_stream.py`
+  keeps its own copy for now — tools-path import, out of this slice's scope.)
+- **Calibration loading centralized** as `mr_integration.load_calibration`,
+  shared by the convert CLI and the bridge.
+
+**Consequences.** Module 3 now has a live L2: a real C1 publisher -> bridge ->
+card reader round-trip (`tests/test_mr_integration_bridge.py`) plus the
+dependency-free `tools/run_mr_integration_bridge_harness.ps1`. Still fully
+headless and Python-only; the Godot consumer is unchanged. The remaining gap is
+unchanged: the L3 on-device alignment smoke (needs a headset + module 6).
