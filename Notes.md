@@ -1,5 +1,83 @@
 # Notes — change log
 
+## YAN-108 — module 1 C1 (tracking_raw) producer (2.5D, yolov8n)
+
+### Files added (core, stdlib-only, in the CI gate)
+
+- `smartxr/nv12_reader.py` — NV12 capture reader. Parses the 32-byte `<6I Q`
+  packet header (magic `0x4E563132` "NV12", header_size, width, height, stride,
+  payload_size, `timestamp_us`), validates magic/size/geometry/payload, splits
+  Y/UV planes, and iterates a session dir (`metadata.json` + `nv12_packets/`)
+  with a `start/limit/step` window so multi-GB sessions never load fully. Real
+  geometry: 880x660, stride 896, payload 887040.
+- `smartxr/box_builder_2_5d.py` — 2.5D box builder. Projects the bbox center to
+  the scalar depth (reusing `geometry.project_bbox_center_to_camera_point`),
+  sizes X/Y from the 2D bbox extent projected to metric at depth
+  (`projected_bbox` default, `nominal_human` alternative), Z from nominal human
+  thickness, emits 8 vertices in canonical sign order, derives `landmark` from a
+  rule (centroid/bottom_center/top_center/front_top_center). In
+  `vst_right_camera` axes (+X right, +Y down, +Z forward); module 3 converts.
+- `smartxr/tracker.py` — greedy-IOU `HumanTracker` with the C1 lifecycle
+  (`tentative -> confirmed -> lost -> deleted`), stable monotonic non-reused ids,
+  `age_frames`, held-pose timestamp for lost tracks.
+- `smartxr/detection_backend.py` — pluggable detection-backend seam
+  (on_device/pc_offload/hybrid) + `ReplayDetectionBackend` (recorded detections,
+  no model) + `detections_from_records`.
+- `smartxr/tracking_raw_producer.py` — the real C1 producer. Pluggable
+  `DepthSource` (`ConstantDepthSource` -> constant_depth/fixed_depth);
+  detections -> tracker -> box builder -> a **validated** C1 message (raises on
+  invalid emission).
+
+### Files added (tools, optional numpy/opencv/ncnn — NOT imported by tests)
+
+- `tools/yolov8n_ncnn_detector.py` — PC-offload ncnn `yolov8n_320` person
+  detector: NV12 -> BGR -> letterbox 320 -> ncnn out0 (84,2100) -> NMS ->
+  normalized boxes (the `DetectionBackend` shape).
+- `tools/verify_yolov8n_on_capture.py` — recall sweep over the capture package +
+  `--dump-*` to record a real detection window to JSONL.
+- `tools/build_tracking_raw_replay_fixture.py` — dependency-free; pinned
+  producer recipe that builds the golden C1 JSONL from recorded detections.
+
+### Fixtures (real capture, no image data)
+
+- `godot-android/fixtures/tracking_raw_replay_detections.jsonl` — 200-frame
+  yolov8n detection window (capture `capture_20260415T065340Z` frames 351-550,
+  conf 0.25): empty -> 1/2/3 people -> empty.
+- `godot-android/fixtures/tracking_raw_replay_c1.jsonl` — golden C1 stream
+  (5 ids; all four lifecycle states; 74 empty frames).
+
+### Tests added (pure-python)
+
+- `tests/test_nv12_reader.py` (15) — header/plane/session, synthetic packets.
+- `tests/test_box_builder_2_5d.py` (16) — projection, extent scaling, landmark
+  rules, output passes the frozen C1 schema.
+- `tests/test_tracker.py` (12) — confirm/lost/reacquire/delete, id stability,
+  2-person, lateral motion, re-entry new id.
+- `tests/test_tracking_raw_producer.py` (13) — L2 replay of real detections
+  through producer + fake consumer (all valid + accepted, full lifecycle, empty
+  frames, golden reproduced within tolerance), pluggable-depth contract.
+
+### Files modified
+
+- `.gitignore` — ignore `.venv-detect/` / `.venv/`.
+- `tests/validate_project.ps1` — register the four new test files.
+- `docs/tracking_raw_producer.md`, `docs/yolov8n_vst_verification.md` (+ `.json`)
+  added; `DECISIONS.md` ADR-10; `TASKS.md`/`HANDOFF.md` bookkeeping.
+
+### Verification run
+
+- `python -m unittest discover -s tests -p "test_*.py"` -> **272 tests, OK**.
+- C1 schema gate on both single-object fixtures -> ok.
+- Core `smartxr/*` modules import with zero third-party deps (CI model).
+- yolov8n recall sweep on all 6 real sessions: 21%-98.7% (scene-content driven);
+  ~94 fps PC CPU. See `docs/yolov8n_vst_verification.md`.
+
+### Next slice recommendation
+
+- **Module 3 (YAN-110)**: C1 -> C2 conversion + camera->head + real-device VST
+  gate, consuming this producer (or the fake). The on-device/PC-offload ncnn
+  backend wiring is a deployment task behind C1 (same `DetectionBackend` shape).
+
 ## M4 step 1 — shared bbox math test vectors (YAN-80)
 
 ### Files added

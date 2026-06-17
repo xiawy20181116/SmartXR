@@ -1,5 +1,36 @@
 # HANDOFF
 
+## State (after YAN-108 — module 1 C1 producer, 2.5D + yolov8n)
+
+- **YAN-108 done** (Track B, module 1): the real C1 (`tracking_raw`) producer
+  against the frozen ADR-8 contract. No device. New files:
+  - Core (stdlib-only, in the CI gate): `smartxr/nv12_reader.py`,
+    `smartxr/box_builder_2_5d.py`, `smartxr/tracker.py`,
+    `smartxr/detection_backend.py`, `smartxr/tracking_raw_producer.py`.
+  - Tools (optional numpy/opencv/ncnn, not imported by tests):
+    `tools/yolov8n_ncnn_detector.py` (PC-offload detector),
+    `tools/verify_yolov8n_on_capture.py` (recall sweep + detection dump),
+    `tools/build_tracking_raw_replay_fixture.py` (dependency-free, builds golden).
+  - Fixtures (real capture, no image data): `tracking_raw_replay_detections.jsonl`
+    (200-frame window of yolov8n detections) + `tracking_raw_replay_c1.jsonl`
+    (golden C1 stream).
+  - Tests: `tests/test_nv12_reader.py` (L0/L1), `test_box_builder_2_5d.py` (L1),
+    `test_tracker.py` (L1), `test_tracking_raw_producer.py` (L2 replay).
+  - Docs: `docs/tracking_raw_producer.md`, `docs/yolov8n_vst_verification.md`
+    (+ `.json`). Decision: DECISIONS.md ADR-10.
+- **Verification**: full suite **272 tests OK**; C1 schema gate green; core
+  modules import with zero third-party deps. yolov8n recall on real VST imagery
+  21%–98.7% (scene-content driven, not a model failure) — adequate for v1, so no
+  T3 frame annotation needed (the empty-frame bins are valid "no people" states).
+- **Risks / open**: (1) the 2.5D box uses `fixed_depth`; X/Y scale-correct from
+  the bbox, Z nominal — 3D depth fidelity waits for mono/stereo (additive swap
+  behind C1, ADR-10). (2) The `.venv-detect` and ncnn run are PC-side only; the
+  on-device ncnn backend adapts to the same `DetectionBackend` shape but is not
+  wired here. (3) Module 3 (YAN-110) consumes this C1 and owns the camera→head
+  conversion + the real-device VST gate.
+- **Next**: module 3 (YAN-110) builds C1→C2 against this producer (or the fake);
+  the on-device/PC-offload detection backend wiring is a deployment task behind C1.
+
 ## State (after YAN-105 Step 0 — C1 + C3 contracts frozen)
 
 - **YAN-105 done**: C1 (tracking-raw) and C3 (card-lifecycle) are frozen to the

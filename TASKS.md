@@ -6,6 +6,26 @@ side.
 
 ## Completed
 
+- [x] **YAN-108 — module 1 C1 (`tracking_raw`) producer (2.5D, yolov8n)**
+  (Track B, against the ADR-8 frozen contract). No device. Built:
+  - NV12 reader `smartxr/nv12_reader.py` (`<6I Q` header, 880x660 stride 896).
+  - 2.5D box builder `smartxr/box_builder_2_5d.py` (project center to pluggable
+    depth, extrude, landmark rules) in `vst_right_camera` axes (ADR-10).
+  - Tracker `smartxr/tracker.py` (greedy IOU + tentative/confirmed/lost/deleted).
+  - Pluggable detection backend `smartxr/detection_backend.py`
+    (on_device/pc_offload/hybrid + `ReplayDetectionBackend`).
+  - Producer `smartxr/tracking_raw_producer.py` (pluggable `DepthSource`,
+    validates every emitted C1 message).
+  - PC-offload ncnn detector + capture verification + fixture builder under
+    `tools/` (optional numpy/opencv/ncnn, kept out of the CI gate).
+  - Fixtures from REAL capture: `tracking_raw_replay_detections.jsonl` +
+    golden `tracking_raw_replay_c1.jsonl`.
+  - Validation: L0 C1 schema + L1 projection/derivation + lifecycle math + L2
+    replay producer->consumer. `tests/test_{nv12_reader,box_builder_2_5d,tracker,
+    tracking_raw_producer}.py`. Full suite **272 tests** green.
+  - Docs `docs/tracking_raw_producer.md`, `docs/yolov8n_vst_verification.md`;
+    DECISIONS.md ADR-10. yolov8n adequate on real VST -> no T3 annotation for v1.
+
 - [x] **YAN-105 Step 0 — freeze C1 + C3 contracts** (architecture_modules.md
   §10 "step 0", unlocks Track B). Both contracts taken to the §5 five-point
   freeze bar:
