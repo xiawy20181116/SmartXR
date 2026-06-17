@@ -5,6 +5,7 @@ param(
     [double]$MinConfidence = 0.5,
     [switch]$RequireTarget,
     [string]$ShmName = "Antman.VST.AI.v1",
+    [string]$ShmEye = "Right",
     [string]$ShmNamespace = "",
     [int]$WaitTimeoutMs = 1000,
     [double]$WaitForProducerSeconds = 10.0,
@@ -49,6 +50,7 @@ Write-Host "Work dir:    $WorkDir"
 Write-Host "JSONL:       $JsonlPath"
 Write-Host "Duration:    $DurationSeconds seconds"
 Write-Host "Python:      $PythonExe"
+Write-Host "VST eye:     $ShmEye"
 Write-Host "Need headset: only if VST SHM has no frames or target sample is required from live VST."
 
 $dumperArgs = @(
@@ -59,6 +61,7 @@ $dumperArgs = @(
     "--min-confidence", "$MinConfidence",
     "--stop-after-first-target-frames", "$StopAfterFirstTargetFrames",
     "--shm-name", $ShmName,
+    "--shm-eye", $ShmEye,
     "--wait-timeout-ms", "$WaitTimeoutMs",
     "--wait-for-producer-seconds", "$WaitForProducerSeconds",
     "--model", $Model,

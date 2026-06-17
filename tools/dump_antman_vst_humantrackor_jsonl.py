@@ -9,6 +9,19 @@ from typing import Any, Callable
 
 
 DEFAULT_ANTMAN_ROOT = Path("E:/xia/Antman_smart")
+VALID_VST_EYES = {"Left", "Right"}
+
+
+def resolve_vst_shm_name(base_name: str, eye: str | None) -> str:
+    eye_value = "" if eye is None else str(eye).strip()
+    base_value = str(base_name).strip()
+    if not eye_value:
+        return base_value
+    if eye_value not in VALID_VST_EYES:
+        raise ValueError(f"unsupported VST SHM eye {eye_value!r}; expected Left, Right, or empty legacy eye")
+    if base_value.endswith(".Left") or base_value.endswith(".Right"):
+        return base_value
+    return f"{base_value}.{eye_value}"
 
 
 def _shape_width_height(frame: Any) -> tuple[int, int]:
@@ -151,8 +164,9 @@ def _create_live_reader_and_tracker(args: argparse.Namespace) -> tuple[Any, Any]
     from human_face_visualizer.async_runtime import VstAiShmReader
     from human_trackor.api import HumanTrackor
 
+    shm_name = resolve_vst_shm_name(args.shm_name, getattr(args, "shm_eye", "Right"))
     reader = VstAiShmReader(
-        name=args.shm_name,
+        name=shm_name,
         namespace=args.shm_namespace,
         wait_timeout_ms=args.wait_timeout_ms,
         wait_for_producer_seconds=args.wait_for_producer_seconds,
@@ -199,6 +213,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--require-target", action="store_true")
     parser.add_argument("--stop-after-first-target-frames", type=int, default=10)
     parser.add_argument("--shm-name", default="Antman.VST.AI.v1")
+    parser.add_argument("--shm-eye", default="Right", help='VST eye suffix: "Right", "Left", or "" for legacy unsuffixed SHM')
     parser.add_argument("--shm-namespace", default=None)
     parser.add_argument("--wait-timeout-ms", type=int, default=1000)
     parser.add_argument("--wait-for-producer-seconds", type=float, default=10.0)

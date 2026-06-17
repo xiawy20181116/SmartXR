@@ -8,6 +8,7 @@ param(
     [int]$LogEvery = 20,
     [int]$MaxEmptyReads = 120,
     [string]$ShmName = "Antman.VST.AI.v1",
+    [string]$ShmEye = "Right",
     [string]$ShmNamespace = "",
     [int]$WaitTimeoutMs = 1000,
     [double]$WaitForProducerSeconds = 10.0,
@@ -45,6 +46,7 @@ Write-Host "Antman root: $AntmanRoot"
 Write-Host "WebSocket:   ws://${HostName}:${Port}/proxy_targets"
 Write-Host "Python:      $PythonExe"
 Write-Host "Source:      VST SHM + HumanTrackor"
+Write-Host "VST eye:     $ShmEye"
 Write-Host "Need headset: connect/start the headset VST producer before expecting frames."
 Write-Host "Seq appears after a WebSocket client connects and a target frame passes confidence gate."
 
@@ -59,6 +61,7 @@ $publisherArgs = @(
     "--log-every", "$LogEvery",
     "--max-empty-reads", "$MaxEmptyReads",
     "--shm-name", $ShmName,
+    "--shm-eye", $ShmEye,
     "--wait-timeout-ms", "$WaitTimeoutMs",
     "--wait-for-producer-seconds", "$WaitForProducerSeconds",
     "--model", $Model,

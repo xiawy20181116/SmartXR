@@ -167,6 +167,8 @@ class AntmanVstProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertIn("human_detect\\.venv\\Scripts\\python.exe", source)
         self.assertIn("--host", source)
         self.assertIn("--port", source)
+        self.assertIn("[string]$ShmEye = \"Right\"", source)
+        self.assertIn("--shm-eye", source)
         self.assertIn("--min-confidence", source)
         self.assertIn("Seq appears after a WebSocket client connects", source)
         self.assertIn("WebSocket listener was not started", source)

@@ -277,6 +277,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--min-confidence", type=float, default=0.5)
     parser.add_argument("--max-empty-reads", type=int, default=120)
     parser.add_argument("--shm-name", default="Antman.VST.AI.v1")
+    parser.add_argument("--shm-eye", default="Right", help='VST eye suffix: "Right", "Left", or "" for legacy unsuffixed SHM')
     parser.add_argument("--shm-namespace", default=None)
     parser.add_argument("--wait-timeout-ms", type=int, default=1000)
     parser.add_argument("--wait-for-producer-seconds", type=float, default=10.0)
