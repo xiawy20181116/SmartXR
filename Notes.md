@@ -50,6 +50,89 @@
 - Full suite **310 tests OK**; proxy_targets gate (3 fixtures) + tracking_raw gate
   green. DECISIONS.md ADR-11, docs `docs/mr_integration.md`.
 
+## YAN-109 module 2 收尾 — card_lifecycle probe fix + real-runner verification
+
+Wrap-up of module 2: its delivered GDScript probes had never actually run (no
+Godot 4.6.2 runner existed when PR #41 landed; the gdscript-probes CI job only
+fires on `workflow_dispatch` against a self-hosted runner). A Godot 4.6.2 binary
+is now available locally, so the module-2 probe surface was run for real.
+
+### Fix
+
+- `godot-android/tests/script_only_card_lifecycle_probe.gd` — line 119
+  `var fixture := _load_json_file(...)` was a **parse error** on Godot 4.6.2
+  ("Cannot infer the type of 'fixture'": `_load_json_file` has no typed return).
+  Changed `:=` to untyped `=`, matching the repo's no-project-mode convention
+  (Notes: "untyped `=` ... so script-only probes can load"). The probe now
+  parses and passes.
+
+### Verification (real Godot 4.6.2, no device)
+
+- `tools\run_godot_card_lifecycle_probe.ps1` -> PASSED (22/22 checks, incl. the
+  C3 fixture validation; status exit_code 0, failed []).
+- Re-ran the rest of the module-2 / Phase-B probe surface, all PASS:
+  `run_godot_card_view_probe.ps1`, `run_godot_card_attachment_probe.ps1`,
+  `run_godot_mr_assistant_card_probe.ps1`, `run_godot_mr_assistant_updates_probe.ps1`.
+- Python suite unaffected: **290 tests OK**; `test_godot_card_lifecycle.py` green.
+
+### Module 2 status
+
+- YAN-109 deliverables (card_lifecycle.gd C3 state machine + D2 Phase B) are
+  merged (PR #41) and now **runtime-verify on a real Godot runner**.
+- Phase C (YAN-112, CardState/View/Receiver host refactor) and Phase D (YAN-113)
+  remain as their own backlog issues. Phase C is device-critical: the host
+  (`AndroidMovingCard.gd`) boots OpenXR and cannot run headless, so its ~97
+  state-field references can only be gated by a compile-load gate + on-device
+  smoke, not a headless behavior probe. Deliberately not rewired here, per the
+  §16 "small PR, no big-bang merge" guardrail.
+
+## YAN-108 follow-up — live C1 PC chain (WS publisher + consumer harness)
+
+Wires the whole module-1 chain end to end on PC, no device:
+`NV12 session -> PC-offload yolov8n -> producer -> live C1 WebSocket -> consumer harness`.
+
+### Files added
+
+- `smartxr/cli/tracking_raw_publisher.py` (stdlib) — live C1 WS publisher on
+  `/tracking_raw`, one message per frame at `--hz`, fresh producer+tracker per
+  client, pluggable frame source. Default source replays the recorded detections
+  JSONL through the producer (dependency-free). Reuses `smartxr/transport.py`.
+- `smartxr/cli/tracking_raw_monitor.py` (stdlib) — consumer harness: connects,
+  subscribes, validates each C1 message (schema + `TrackingRawConsumer`), checks
+  sequence contiguity, reports ids / lifecycle states / rejections. Mirrors
+  `monitor_proxy_targets_live_stream.py`.
+- `tools/run_tracking_raw_live_publisher.py` (optional numpy/opencv/ncnn) — the
+  full NV12->ncnn driver; builds an NV12+ncnn source and calls the publisher's
+  shared `serve()`, so the wire path is not forked.
+- `tools/run_tracking_raw_live_harness.ps1` — dependency-free closed loop
+  (replay publisher + monitor, asserts the stream).
+- `tools/run_tracking_raw_pc_chain.ps1` — full PC chain runner (.venv-detect
+  publisher + dependency-free monitor).
+- `tests/test_tracking_raw_live_chain.py` (11) — analyzer ok/bad cases, JSONL
+  source + loop, exception classification, runner static pins, and a real
+  end-to-end socket round-trip (publisher thread -> monitor) over the committed
+  real-capture fixture.
+
+### Files modified
+
+- `tests/validate_project.ps1` — register `test_tracking_raw_live_chain.py`.
+- `docs/tracking_raw_producer.md` — new "Live PC chain" section.
+
+### Verification run
+
+- `python -m unittest discover -s tests -p "test_*.py"` -> **285 tests, OK**.
+- `tools\run_tracking_raw_live_harness.ps1` -> exit 0 (60 packets, contiguous,
+  accepted, zero rejects).
+- Full real chain (NV12 `capture_20260415T065340Z` 400..520 -> ncnn -> producer
+  -> WS -> monitor, via `.venv-detect`): 90 packets, all accepted, contiguous,
+  3 ids, all four lifecycle states (tentative/confirmed/lost/deleted).
+
+### Next slice recommendation
+
+- Module 3 (YAN-110) subscribes to `ws://.../tracking_raw` for a live C1 source
+  and builds C1->C2 + camera->head; the on-device ncnn backend can later feed the
+  same publisher path (same `DetectionBackend` shape).
+
 ## YAN-108 — module 1 C1 (tracking_raw) producer (2.5D, yolov8n)
 
 ### Files added (core, stdlib-only, in the CI gate)

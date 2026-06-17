@@ -31,6 +31,16 @@ side.
   - Docs `docs/mr_integration.md` (C1→C2 table, calibration ownership, state map,
     §13 latency note, L3 device smoke procedure); DECISIONS.md ADR-11.
 
+- [x] **YAN-108 follow-up — live C1 PC chain** (WS publisher + consumer harness).
+  Runs the whole module-1 chain end to end on PC, no device:
+  `NV12 session -> PC-offload yolov8n -> producer -> live C1 WS -> harness`.
+  `smartxr/cli/tracking_raw_publisher.py` + `tracking_raw_monitor.py` (stdlib),
+  `tools/run_tracking_raw_live_publisher.py` (ncnn driver) +
+  `run_tracking_raw_live_harness.ps1` / `run_tracking_raw_pc_chain.ps1`,
+  `tests/test_tracking_raw_live_chain.py` (incl. a real socket round-trip).
+  Full suite **285 tests** green; real NV12->ncnn->WS chain verified (90 packets,
+  all accepted, all four lifecycle states). Gives module 3 a live C1 source.
+
 - [x] **YAN-108 — module 1 C1 (`tracking_raw`) producer (2.5D, yolov8n)**
   (Track B, against the ADR-8 frozen contract). No device. Built:
   - NV12 reader `smartxr/nv12_reader.py` (`<6I Q` header, 880x660 stride 896).

@@ -32,6 +32,23 @@
   primary target; multi-card per-target lifecycle is module 2 / C3, not wired
   here. (4) Rotation/scale are identity in v1 (axis-aligned box, no orientation).
 
+## State (after YAN-108 follow-up — live C1 PC chain)
+
+- **Live C1 WebSocket chain done** (on top of the merged module-1 producer). The
+  whole module-1 chain now runs end to end on PC, no device:
+  `NV12 session -> PC-offload yolov8n -> producer -> live C1 WS -> consumer harness`.
+  New files: `smartxr/cli/tracking_raw_publisher.py` (stdlib),
+  `smartxr/cli/tracking_raw_monitor.py` (stdlib),
+  `tools/run_tracking_raw_live_publisher.py` (optional numpy/opencv/ncnn),
+  `tools/run_tracking_raw_live_harness.ps1`, `tools/run_tracking_raw_pc_chain.ps1`,
+  `tests/test_tracking_raw_live_chain.py`. Docs: `docs/tracking_raw_producer.md`
+  "Live PC chain" section.
+- **Verification**: full suite **285 tests OK** (incl. a real publisher->monitor
+  socket round-trip); harness exit 0; full NV12->ncnn->WS chain on real capture
+  gave 90 packets, all accepted, contiguous, 3 ids, all four lifecycle states.
+- **Next**: module 3 (YAN-110) subscribes to `ws://.../tracking_raw` for a live
+  C1 source; the on-device ncnn backend can feed the same publisher path later.
+
 ## State (after YAN-108 — module 1 C1 producer, 2.5D + yolov8n)
 
 - **YAN-108 done** (Track B, module 1): the real C1 (`tracking_raw`) producer

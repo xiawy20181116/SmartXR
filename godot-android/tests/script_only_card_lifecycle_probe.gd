@@ -116,7 +116,7 @@ func _run_checks() -> String:
 	# Optional: validate a real C3 fixture if one is provided.
 	var fixture_path := OS.get_environment("SMARTXR_CARD_LIFECYCLE_FIXTURE")
 	if not fixture_path.is_empty():
-		var fixture := _load_json_file(fixture_path)
+		var fixture = _load_json_file(fixture_path)
 		var fixture_consumer = lifecycle_script.new()
 		_checks["fixture_shape_valid"] = fixture_consumer.validate_message(fixture).is_empty()
 
