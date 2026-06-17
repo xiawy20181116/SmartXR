@@ -16,6 +16,10 @@ Godot MR assistant. It keeps the audio transport boundary separate from tool dis
   returns a tool response payload.
 - `assistant/session.py` contains `LiveVoiceSession` for Live tool-call payloads
   and `SimulatedVoiceSession` for local headless runs.
+- `assistant/schema_adapter.py` converts exported C5 tool schemas into
+  provider-neutral Live tool declarations.
+- `assistant/live_adapter.py` normalizes provider-style tool-call events and
+  provides the fake Live L1/L2 task-query path.
 - `assistant/__main__.py` provides the local no-headset simulation entry point.
 
 ## Tools
@@ -37,6 +41,30 @@ The lookup tools are fixture-backed by default. They do not call network
 services, read credentials, or require a live Jira/identity connection; real
 sources can be injected later at the session boundary without changing the
 dispatcher contract.
+
+## Live Adapter L1/L2
+
+The L1 adapter path starts from `create_default_registry().export_schemas()` and
+uses `export_live_tool_declarations()` to build provider-neutral Live tool
+declarations. Each declaration carries the input schema plus SmartXR metadata
+for output schema, latency budget, and scheduling.
+
+The L2 fake Live path uses `handle_live_tool_call_event()` and
+`run_fake_live_task_query_turn()` to exercise provider-shaped events without a
+real microphone, model session, Jira service, or headset:
+
+```python
+published = []
+session = LiveVoiceSession(registry=create_default_registry(card_sink=published.append))
+result = await run_fake_live_task_query_turn("他手上有什么任务", session)
+assistant_card = result["assistant_card"]
+```
+
+That path normalizes fake/provider tool calls into
+`LiveVoiceSession.handle_tool_call_payload()`, runs the real dispatcher and
+handlers, and finishes with a C6 `assistant_card`. Tool failures are returned as
+structured error responses so a future Live event loop can send provider-visible
+tool errors without crashing.
 
 Pass `trace_path` to `create_default_registry()` to append one JSON object per
 tool call. Trace records include the tool name, summarized non-sensitive args,
@@ -71,6 +99,7 @@ response = await session.run_tool_call(
 
 ```powershell
 python -m unittest tests.test_smartmr_assistant
+python -m unittest tests.test_smartmr_live_adapter tests.test_smartmr_live_assistant_e2e
 ```
 
 ## Environment
