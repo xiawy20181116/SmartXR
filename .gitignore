@@ -8,6 +8,7 @@ __pycache__/
 
 # Local harness/test scratch space
 .tmp/
+.gradle-user-home/
 
 # Android and Godot build outputs
 *.apk
@@ -33,3 +34,4 @@ godot-android/.godot/exported/
 godot-android/.godot/imported/
 godot-android/.godot/*.bin
 godot-android/.godot/global_script_class_cache.cfg
+godot-android/**/*.gd.uid
