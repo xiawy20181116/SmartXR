@@ -1,5 +1,41 @@
 # Notes — change log
 
+## YAN-109 module 2 收尾 — card_lifecycle probe fix + real-runner verification
+
+Wrap-up of module 2: its delivered GDScript probes had never actually run (no
+Godot 4.6.2 runner existed when PR #41 landed; the gdscript-probes CI job only
+fires on `workflow_dispatch` against a self-hosted runner). A Godot 4.6.2 binary
+is now available locally, so the module-2 probe surface was run for real.
+
+### Fix
+
+- `godot-android/tests/script_only_card_lifecycle_probe.gd` — line 119
+  `var fixture := _load_json_file(...)` was a **parse error** on Godot 4.6.2
+  ("Cannot infer the type of 'fixture'": `_load_json_file` has no typed return).
+  Changed `:=` to untyped `=`, matching the repo's no-project-mode convention
+  (Notes: "untyped `=` ... so script-only probes can load"). The probe now
+  parses and passes.
+
+### Verification (real Godot 4.6.2, no device)
+
+- `tools\run_godot_card_lifecycle_probe.ps1` -> PASSED (22/22 checks, incl. the
+  C3 fixture validation; status exit_code 0, failed []).
+- Re-ran the rest of the module-2 / Phase-B probe surface, all PASS:
+  `run_godot_card_view_probe.ps1`, `run_godot_card_attachment_probe.ps1`,
+  `run_godot_mr_assistant_card_probe.ps1`, `run_godot_mr_assistant_updates_probe.ps1`.
+- Python suite unaffected: **290 tests OK**; `test_godot_card_lifecycle.py` green.
+
+### Module 2 status
+
+- YAN-109 deliverables (card_lifecycle.gd C3 state machine + D2 Phase B) are
+  merged (PR #41) and now **runtime-verify on a real Godot runner**.
+- Phase C (YAN-112, CardState/View/Receiver host refactor) and Phase D (YAN-113)
+  remain as their own backlog issues. Phase C is device-critical: the host
+  (`AndroidMovingCard.gd`) boots OpenXR and cannot run headless, so its ~97
+  state-field references can only be gated by a compile-load gate + on-device
+  smoke, not a headless behavior probe. Deliberately not rewired here, per the
+  §16 "small PR, no big-bang merge" guardrail.
+
 ## YAN-108 follow-up — live C1 PC chain (WS publisher + consumer harness)
 
 Wires the whole module-1 chain end to end on PC, no device:
