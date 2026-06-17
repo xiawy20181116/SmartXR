@@ -1,5 +1,52 @@
 # Notes — change log
 
+## YAN-108 follow-up — live C1 PC chain (WS publisher + consumer harness)
+
+Wires the whole module-1 chain end to end on PC, no device:
+`NV12 session -> PC-offload yolov8n -> producer -> live C1 WebSocket -> consumer harness`.
+
+### Files added
+
+- `smartxr/cli/tracking_raw_publisher.py` (stdlib) — live C1 WS publisher on
+  `/tracking_raw`, one message per frame at `--hz`, fresh producer+tracker per
+  client, pluggable frame source. Default source replays the recorded detections
+  JSONL through the producer (dependency-free). Reuses `smartxr/transport.py`.
+- `smartxr/cli/tracking_raw_monitor.py` (stdlib) — consumer harness: connects,
+  subscribes, validates each C1 message (schema + `TrackingRawConsumer`), checks
+  sequence contiguity, reports ids / lifecycle states / rejections. Mirrors
+  `monitor_proxy_targets_live_stream.py`.
+- `tools/run_tracking_raw_live_publisher.py` (optional numpy/opencv/ncnn) — the
+  full NV12->ncnn driver; builds an NV12+ncnn source and calls the publisher's
+  shared `serve()`, so the wire path is not forked.
+- `tools/run_tracking_raw_live_harness.ps1` — dependency-free closed loop
+  (replay publisher + monitor, asserts the stream).
+- `tools/run_tracking_raw_pc_chain.ps1` — full PC chain runner (.venv-detect
+  publisher + dependency-free monitor).
+- `tests/test_tracking_raw_live_chain.py` (11) — analyzer ok/bad cases, JSONL
+  source + loop, exception classification, runner static pins, and a real
+  end-to-end socket round-trip (publisher thread -> monitor) over the committed
+  real-capture fixture.
+
+### Files modified
+
+- `tests/validate_project.ps1` — register `test_tracking_raw_live_chain.py`.
+- `docs/tracking_raw_producer.md` — new "Live PC chain" section.
+
+### Verification run
+
+- `python -m unittest discover -s tests -p "test_*.py"` -> **285 tests, OK**.
+- `tools\run_tracking_raw_live_harness.ps1` -> exit 0 (60 packets, contiguous,
+  accepted, zero rejects).
+- Full real chain (NV12 `capture_20260415T065340Z` 400..520 -> ncnn -> producer
+  -> WS -> monitor, via `.venv-detect`): 90 packets, all accepted, contiguous,
+  3 ids, all four lifecycle states (tentative/confirmed/lost/deleted).
+
+### Next slice recommendation
+
+- Module 3 (YAN-110) subscribes to `ws://.../tracking_raw` for a live C1 source
+  and builds C1->C2 + camera->head; the on-device ncnn backend can later feed the
+  same publisher path (same `DetectionBackend` shape).
+
 ## YAN-108 — module 1 C1 (tracking_raw) producer (2.5D, yolov8n)
 
 ### Files added (core, stdlib-only, in the CI gate)
