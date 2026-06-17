@@ -126,3 +126,53 @@ track keeps its last observed timestamp — the contract's stale-depth note).
 
 See `docs/yolov8n_vst_verification.md` for the on-device detector recall on the
 real captures.
+
+## Live PC chain (WebSocket publisher + consumer harness)
+
+The producer can stream **live** C1 over a WebSocket so module 3 (or CI) develops
+against a moving C1 source, not just a static fixture — entirely on PC, no device.
+
+```
+NV12 session ─▶ ncnn yolov8n ─▶ producer ─▶ C1 WS publisher ═══▶ consumer harness
+  (recorded)    (PC-offload)    (validate)   /tracking_raw       (validate + report)
+```
+
+| Piece | Code | Deps |
+|---|---|---|
+| Publisher (serve loop) | `smartxr/cli/tracking_raw_publisher.py` | stdlib |
+| Consumer harness | `smartxr/cli/tracking_raw_monitor.py` | stdlib |
+| Full NV12→ncnn driver | `tools/run_tracking_raw_live_publisher.py` | numpy/opencv/ncnn |
+
+The publisher serves one client at a time on `/tracking_raw` (reusing
+`smartxr/transport.py`), one C1 message per frame at `--hz`, with a fresh
+producer+tracker per connection. Its frame source is pluggable: the default
+replays the recorded **detections JSONL** through the producer (dependency-free,
+CI-testable); the NV12→ncnn driver builds an NV12+ncnn source and calls the same
+`serve()`, so the wire path is shared, not forked. The harness connects,
+subscribes, reads N messages, validates each against the C1 schema + the
+`TrackingRawConsumer`, checks sequence contiguity, and reports ids / lifecycle
+states / rejections.
+
+Runners:
+
+```powershell
+# Dependency-free closed loop (replay detections -> publisher -> harness):
+tools\run_tracking_raw_live_harness.ps1 -Port 8770 -MinPackets 60
+
+# Full PC chain from real NV12 (needs .venv-detect):
+tools\run_tracking_raw_pc_chain.ps1 -CaptureRoot "<...>\fixed_replay_captures-20260429-194546" `
+    -Session capture_20260415T065340Z -Start 350 -Count 200 -Port 8770
+```
+
+Or by hand:
+
+```
+# terminal A (full chain): .venv-detect/Scripts/python.exe tools/run_tracking_raw_live_publisher.py \
+#     --capture-root "<...>" --session capture_20260415T065340Z --start 350 --count 200 --port 8770
+# terminal B: python -m smartxr.cli.tracking_raw_monitor --url ws://127.0.0.1:8770/tracking_raw --min-packets 60
+```
+
+The end-to-end socket round-trip (publisher thread → monitor) is covered
+dependency-free in `tests/test_tracking_raw_live_chain.py`; the full NV12→ncnn
+chain was run on real capture and confirmed healthy (all four lifecycle states,
+multiple ids, contiguous, zero rejects).
