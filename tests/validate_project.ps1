@@ -7,6 +7,7 @@ try {
         tests/test_bbox_math_vectors.py `
         tests/test_box_builder_2_5d.py `
         tests/test_nv12_reader.py `
+        tests/test_stereo_depth.py `
         tests/test_tracker.py `
         tests/test_tracking_raw_producer.py `
         tests/test_tracking_raw_live_chain.py `
