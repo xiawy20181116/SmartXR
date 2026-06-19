@@ -137,9 +137,12 @@ func _run_checks() -> String:
 	receiver.poll(0.1)
 	_checks["connect_and_poll_use_injected_ws"] = ws.connected_url == "ws://127.0.0.1:8766/proxy_targets" and ws.poll_count == 1
 
+	ws.on_packet.call("line1\r\nline2")
+	_checks["packet_preview_preserves_status_hud_escape_contract"] = fragment.packet_preview == "line1\\r\\nline2"
+
 	_checks["valid_payload_updates_status"] = receiver.apply_live_payload("{\"type\":\"proxy_targets\"}")
 	var status: Dictionary = receiver.status_values({"attachments": 1})
-	_checks["status_values_preserve_runtime_and_scene_values"] = status.get("live", 0) == 1 and status.get("attachments", 0) == 1 and status.get("packets", 0) == 3 and status.get("packet_bytes", 0) == 42
+	_checks["status_values_preserve_runtime_and_scene_values"] = status.get("live", 0) == 2 and status.get("attachments", 0) == 1 and status.get("packets", 0) == 3 and status.get("packet_bytes", 0) == 42
 	_checks["valid_payload_records_head_info_and_command"] = fragment.parsed_head_info.get("target_id", "") == "head-target" and _last_command == "proxy_live"
 
 	source.next_error = "json_invalid"

@@ -137,4 +137,4 @@ func _set_last_command(command: String) -> void:
 
 
 func _sanitize_status_text(text: String) -> String:
-	return text.replace("\r", " ").replace("\n", " ").left(160)
+	return text.replace("\r", "\\r").replace("\n", "\\n").substr(0, 160)
