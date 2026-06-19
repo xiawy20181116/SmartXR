@@ -338,9 +338,10 @@ Operational steps (module 2; each a small PR + script-only probe, under existing
   consumer/adapter + ws_transport), shrinking `AndroidMovingCard` to a host that
   instantiates the trio and owns the XR lifecycle. Incremental; needs device/Godot
   verification of the 954-line `AndroidMovingCard` host.
-- **Phase D (TODO)**: unify card types - the assistant-card and the tracked-target card
-  share one CardState/CardView base, differing only by data source (assistant_updates vs
-  proxy_targets). End state: one runtime, one card pattern, two data sources.
+- **Phase D (DONE, YAN-121)**: unified card types - the assistant-card and the
+  tracked-target card share `card_state_base.gd` / `card_view_base.gd`, differing only
+  by data source (`assistant_updates` vs `proxy_targets`). The script-only probes cover
+  both sources through the shared base while keeping C2/C6 payload shapes unchanged.
 
 Guardrails: do not port native VST/XR/ncnn toward the assistant card layer (reverse
 direction = high risk); no big-bang merge; keep the two relocated assistant probes as

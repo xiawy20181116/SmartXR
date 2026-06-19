@@ -1,4 +1,4 @@
-extends RefCounted
+extends "card_state_base.gd"
 
 ## Pure tracked-card data state.
 ##
@@ -25,6 +25,7 @@ var _card_end_yaw_deg := -32.0
 
 
 func _init(options := {}) -> void:
+	configure_card_state("proxy_targets")
 	if typeof(options) != TYPE_DICTIONARY:
 		return
 	_speed_deg_per_second = float(options.get("speed_deg_per_second", _speed_deg_per_second))
@@ -114,7 +115,7 @@ func set_anchor_mode(mode: String) -> void:
 
 
 func status_values() -> Dictionary:
-	return {
+	var values := {
 		"speed_deg_per_second": _speed_deg_per_second,
 		"anchor_yaw_deg": _anchor_yaw_deg,
 		"anchor_pitch_deg": _anchor_pitch_deg,
@@ -128,6 +129,8 @@ func status_values() -> Dictionary:
 		"paused": _paused,
 		"last_command": _last_command,
 	}
+	update_snapshot(values)
+	return values
 
 
 func speed_deg_per_second() -> float:
