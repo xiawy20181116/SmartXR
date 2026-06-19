@@ -5,6 +5,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 TRANSPORT = ROOT / "godot-android" / "scripts" / "ws_transport.gd"
 SCRIPT = ROOT / "godot-android" / "scripts" / "AndroidMovingCard.gd"
+CARD_RECEIVER = ROOT / "godot-android" / "scripts" / "card_receiver.gd"
 PROBE = ROOT / "godot-android" / "tests" / "script_only_ws_transport_probe.gd"
 RUNNER = ROOT / "tools" / "run_godot_ws_transport_probe.ps1"
 
@@ -69,35 +70,39 @@ class GodotWSTransportTests(unittest.TestCase):
 
     def test_moving_card_delegates_both_ws_loops(self):
         card = SCRIPT.read_text(encoding="utf-8")
+        receiver = CARD_RECEIVER.read_text(encoding="utf-8")
 
         self.assertIn('const WSTransportScript := preload("res://scripts/ws_transport.gd")', card)
         # Two transports, untyped `=` (no class_name reference) like _options.
         self.assertIn("var _control_ws = WSTransportScript.new()", card)
         self.assertIn("var _proxy_targets_ws = WSTransportScript.new()", card)
-        # The card wires callbacks and keeps URL/enable resolution + packet
-        # handling + error formatting (ADR-4).
+        # The card wires control callbacks; CardReceiver owns proxy_targets
+        # packet handling + proxy error formatting (ADR-4).
         self.assertIn("func _setup_ws_transports() -> void:", card)
         self.assertIn("_control_ws.set_on_packet(_handle_packet)", card)
         self.assertIn("_control_ws.set_url_provider(_control_ws_url)", card)
-        self.assertIn("_proxy_targets_ws.set_on_packet(_on_proxy_targets_ws_packet)", card)
+        self.assertIn("_card_receiver.setup(", card)
+        self.assertIn("_ws.set_on_packet(_on_ws_packet)", receiver)
         self.assertIn(
-            '_proxy_targets_ws.set_subscribe_payload(JSON.stringify({"type": "subscribe", "stream": "proxy_targets"}))',
-            card,
+            '_ws.set_subscribe_payload(JSON.stringify({"type": "subscribe", "stream": "proxy_targets"}))',
+            receiver,
         )
-        self.assertIn("_proxy_targets_ws.set_url_provider(_proxy_targets_ws_url)", card)
-        self.assertIn('_last_command = "ws connect err " + str(result)', card)
-        self.assertIn('_last_command = "proxy_ws_connect_err_" + str(result)', card)
+        self.assertIn("_ws.set_url_provider(_ws_url)", receiver)
+        self.assertIn('_set_last_command("ws connect err " + str(result))', card)
+        self.assertIn('_set_last_command("proxy_ws_connect_err_" + str(result))', receiver)
         self.assertIn("_control_ws.connect_to(_control_ws_url())", card)
-        self.assertIn("_proxy_targets_ws.connect_to(_proxy_targets_ws_url())", card)
+        self.assertIn("_card_receiver.connect_if_enabled()", card)
+        self.assertIn("_ws.connect_to(_ws_url())", receiver)
         self.assertIn("_control_ws.poll(delta)", card)
-        self.assertIn("_proxy_targets_ws.poll(delta)", card)
-        # The card reads connection state from the transports for the
+        self.assertIn("_card_receiver.poll(delta)", card)
+        self.assertIn("_ws.poll(delta)", receiver)
+        # The receiver reads proxy transport state for the
         # status snapshot (same keys and values as before the extraction).
         self.assertIn('"ws_connected": _control_ws.ws_connected()', card)
-        self.assertIn('"ws_connected": _proxy_targets_ws.ws_connected()', card)
-        self.assertIn('"ws_subscribed": _proxy_targets_ws.ws_subscribed()', card)
-        self.assertIn('"packets": _proxy_targets_ws.packets_seen()', card)
-        self.assertIn('"packet_bytes": _proxy_targets_ws.last_packet_bytes()', card)
+        self.assertIn('"ws_connected": _ws.ws_connected() if _ws != null else false', receiver)
+        self.assertIn('"ws_subscribed": _ws.ws_subscribed() if _ws != null else false', receiver)
+        self.assertIn('"packets": _ws.packets_seen() if _ws != null else 0', receiver)
+        self.assertIn('"packet_bytes": _ws.last_packet_bytes() if _ws != null else 0', receiver)
         # The duplicated WebSocketPeer loops moved out of the card: no peer
         # is constructed or driven there anymore.
         self.assertNotIn("WebSocketPeer.new()", card)
