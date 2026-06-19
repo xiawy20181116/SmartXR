@@ -215,7 +215,7 @@ class SmartMRAssistantToolTests(unittest.TestCase):
         self.assertNotIn("identity_source", records[0]["args_summary"])
         self.assertIn("duration_ms", records[0])
         self.assertEqual(records[1]["success"], False)
-        self.assertEqual(records[1]["error_type"], "ValueError")
+        self.assertEqual(records[1]["error_type"], "MissingRequiredArgumentError")
 
 
 class SmartMRAssistantDispatcherTests(unittest.TestCase):
@@ -238,6 +238,120 @@ class SmartMRAssistantDispatcherTests(unittest.TestCase):
                 "response": {"status": "ok", "scene": {"last_user_text": "ping", "facts": {}}},
             },
         )
+
+    def test_dispatcher_returns_structured_error_for_unknown_tool(self):
+        trace_path = Path("tool_calls_unknown_test.jsonl")
+        try:
+            trace_path.unlink(missing_ok=True)
+            registry = create_default_registry(trace_path=trace_path)
+            call = ToolCall(
+                id="call-missing",
+                name="missing_tool",
+                args={"api_key": "secret-value", "public": "visible"},
+            )
+
+            response = asyncio.run(dispatch_tool_call(call, registry))
+            records = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+        finally:
+            trace_path.unlink(missing_ok=True)
+
+        self.assertEqual(response["tool_call_id"], "call-missing")
+        self.assertEqual(response["name"], "missing_tool")
+        self.assertEqual(response["response"]["status"], "error")
+        self.assertEqual(response["response"]["error_type"], "UnknownToolError")
+        self.assertIn("missing_tool", response["response"]["message"])
+        self.assertNotIn("secret-value", response["response"]["message"])
+        self.assertEqual(records[-1]["success"], False)
+        self.assertEqual(records[-1]["error_type"], "UnknownToolError")
+        self.assertEqual(records[-1]["args_summary"], {"public": "visible"})
+
+    def test_dispatcher_returns_structured_error_for_missing_required_arg(self):
+        trace_path = Path("tool_calls_missing_arg_test.jsonl")
+        try:
+            trace_path.unlink(missing_ok=True)
+            registry = create_default_registry(trace_path=trace_path)
+            call = ToolCall(
+                id="call-missing-arg",
+                name="identity_lookup",
+                args={"identity_source": {"people": [{"id": "person-ada"}]}, "password": "secret-value"},
+            )
+
+            response = asyncio.run(dispatch_tool_call(call, registry))
+            records = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+        finally:
+            trace_path.unlink(missing_ok=True)
+
+        self.assertEqual(
+            response,
+            {
+                "tool_call_id": "call-missing-arg",
+                "name": "identity_lookup",
+                "response": {
+                    "status": "error",
+                    "error_type": "MissingRequiredArgumentError",
+                    "message": "Tool 'identity_lookup' missing required argument(s): person_ref.",
+                },
+            },
+        )
+        self.assertEqual(records[-1]["success"], False)
+        self.assertEqual(records[-1]["error_type"], "MissingRequiredArgumentError")
+        self.assertEqual(records[-1]["args_summary"], {})
+
+    def test_dispatcher_returns_structured_error_for_handler_exception_without_secret_leak(self):
+        trace_path = Path("tool_calls_handler_failure_test.jsonl")
+        try:
+            trace_path.unlink(missing_ok=True)
+            registry = ToolRegistry(trace_path=trace_path)
+
+            def failing_handler(args):
+                raise RuntimeError(f"boom {args['token']}")
+
+            registry.register("failing_tool", failing_handler)
+            call = ToolCall(
+                id="call-handler-failure",
+                name="failing_tool",
+                args={"token": "secret-token", "prompt": "short public text"},
+            )
+
+            response = asyncio.run(dispatch_tool_call(call, registry))
+            records = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+        finally:
+            trace_path.unlink(missing_ok=True)
+
+        self.assertEqual(response["response"]["status"], "error")
+        self.assertEqual(response["response"]["error_type"], "RuntimeError")
+        self.assertEqual(response["response"]["message"], "Tool 'failing_tool' failed while handling the request.")
+        self.assertNotIn("secret-token", json.dumps(response, ensure_ascii=False))
+        self.assertEqual(records[-1]["success"], False)
+        self.assertEqual(records[-1]["error_type"], "RuntimeError")
+        self.assertEqual(records[-1]["args_summary"], {"prompt": "short public text"})
+
+    def test_dispatcher_allows_failed_call_to_produce_error_card(self):
+        published = []
+        registry = create_default_registry(card_sink=published.append)
+
+        failed_lookup = asyncio.run(dispatch_tool_call(ToolCall(id="call-identity", name="identity_lookup"), registry))
+        card_response = asyncio.run(
+            dispatch_tool_call(
+                ToolCall(
+                    id="call-error-card",
+                    name="assistant_card_push",
+                    args={
+                        "card_id": "CardAnchor",
+                        "target_id": "person-ada",
+                        "assistant_state": "error",
+                        "response_text": failed_lookup["response"]["message"],
+                        "tool_summary": {"failed_tool": failed_lookup["name"]},
+                    },
+                ),
+                registry,
+            )
+        )
+
+        self.assertEqual(failed_lookup["response"]["status"], "error")
+        self.assertEqual(card_response["response"]["status"], "published")
+        self.assertEqual(card_response["response"]["assistant_card"]["assistant_state"], "error")
+        self.assertEqual(published, [card_response["response"]["assistant_card"]])
 
     def test_simulated_voice_session_turn_invokes_capabilities_and_pushes_card(self):
         published = []

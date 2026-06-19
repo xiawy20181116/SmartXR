@@ -64,9 +64,11 @@ assistant_card = result["assistant_card"]
 
 That path normalizes fake/provider tool calls into
 `LiveVoiceSession.handle_tool_call_payload()`, runs the real dispatcher and
-handlers, and finishes with a C6 `assistant_card`. Tool failures are returned as
-structured error responses so a future Live event loop can send provider-visible
-tool errors without crashing.
+handlers, and finishes with a C6 `assistant_card`. `ToolRegistry.run()` still
+raises for direct callers, while `dispatch_tool_call()` is the voice/tool-call
+normalization boundary: unknown tools, missing required arguments, and handler
+exceptions are returned as structured error responses so a future Live event loop
+can send provider-visible tool errors without crashing.
 
 Pass `trace_path` to `create_default_registry()` to append one JSON object per
 tool call. Trace records include the tool name, summarized non-sensitive args,

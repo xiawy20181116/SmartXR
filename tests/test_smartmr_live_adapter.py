@@ -84,11 +84,12 @@ class SmartMRLiveToolCallAdapterTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(response["ok"], False)
+        self.assertEqual(response["ok"], True)
         self.assertEqual(response["tool_call_id"], "live-work-item-err")
         self.assertEqual(response["name"], "work_item_lookup")
-        self.assertEqual(response["error"]["type"], "ValueError")
-        self.assertIn("missing required", response["error"]["message"])
+        self.assertEqual(response["response"]["status"], "error")
+        self.assertEqual(response["response"]["error_type"], "MissingRequiredArgumentError")
+        self.assertIn("missing required", response["response"]["message"])
 
 
 if __name__ == "__main__":
