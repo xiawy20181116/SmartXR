@@ -1,4 +1,4 @@
-extends RefCounted
+extends "../card_state_base.gd"
 class_name AssistantCardState
 
 ## Minimal assistant-card payload state for the Godot MR assistant.
@@ -10,7 +10,7 @@ class_name AssistantCardState
 const MESSAGE_TYPE := "assistant_card"
 const SCHEMA_VERSION := 1
 
-var _snapshot := {
+const DEFAULT_SNAPSHOT := {
 	"type": MESSAGE_TYPE,
 	"schema_version": SCHEMA_VERSION,
 	"card_id": "",
@@ -21,13 +21,16 @@ var _snapshot := {
 	"person": null,
 	"issue": null,
 }
-var _last_error := "-"
+
+
+func _init() -> void:
+	configure_card_state("assistant_updates", DEFAULT_SNAPSHOT)
 
 
 func apply_assistant_card_json(payload: String) -> bool:
 	var parsed = JSON.parse_string(payload)
 	if typeof(parsed) != TYPE_DICTIONARY:
-		_last_error = "json_invalid"
+		set_last_error("json_invalid")
 		return false
 	return apply_assistant_card_message(parsed)
 
@@ -35,9 +38,9 @@ func apply_assistant_card_json(payload: String) -> bool:
 func apply_assistant_card_message(message: Dictionary) -> bool:
 	var error := _validate_message(message)
 	if error != "-":
-		_last_error = error
+		set_last_error(error)
 		return false
-	_snapshot = {
+	update_snapshot({
 		"type": MESSAGE_TYPE,
 		"schema_version": SCHEMA_VERSION,
 		"card_id": str(message.get("card_id", "")),
@@ -47,17 +50,9 @@ func apply_assistant_card_message(message: Dictionary) -> bool:
 		"tool_summary": _dict_or_empty(message.get("tool_summary", {})),
 		"person": _dict_or_null(message.get("person", null)),
 		"issue": _dict_or_null(message.get("issue", null)),
-	}
-	_last_error = "-"
+	})
+	clear_last_error()
 	return true
-
-
-func snapshot() -> Dictionary:
-	return _snapshot.duplicate(true)
-
-
-func last_error() -> String:
-	return _last_error
 
 
 func _validate_message(message: Dictionary) -> String:
@@ -82,13 +77,3 @@ func _validate_message(message: Dictionary) -> String:
 	return "-"
 
 
-func _dict_or_empty(value) -> Dictionary:
-	if typeof(value) == TYPE_DICTIONARY:
-		return value.duplicate(true)
-	return {}
-
-
-func _dict_or_null(value):
-	if typeof(value) == TYPE_DICTIONARY:
-		return value.duplicate(true)
-	return null

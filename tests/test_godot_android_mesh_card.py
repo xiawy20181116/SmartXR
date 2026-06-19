@@ -23,6 +23,7 @@ WS_TRANSPORT = ROOT / "godot-android" / "scripts" / "ws_transport.gd"
 # assertions are pinned there, the public API, anchor-mode switching, and the
 # status snapshot stay on the card.
 CARD_ATTACHMENT = ROOT / "godot-android" / "scripts" / "card_attachment.gd"
+CARD_STATE_BASE = ROOT / "godot-android" / "scripts" / "card_state_base.gd"
 CARD_STATE = ROOT / "godot-android" / "scripts" / "card_state.gd"
 CARD_RECEIVER = ROOT / "godot-android" / "scripts" / "card_receiver.gd"
 # Command parsing / state reduction moved to scripts/command_dispatcher.gd in
@@ -59,6 +60,7 @@ PASSTHROUGH_OVERLAY_PRESENTER = (
 )
 # Card viewport/mesh/UI construction moved to scripts/card_view.gd in YAN-103;
 # card-side assertions cover only owner wiring and retained handles.
+CARD_VIEW_BASE = ROOT / "godot-android" / "scripts" / "card_view_base.gd"
 CARD_VIEW = ROOT / "godot-android" / "scripts" / "card_view.gd"
 VALIDATION_SCENE_BUILDER = ROOT / "godot-android" / "scripts" / "validation_scene_builder.gd"
 VALIDATOR = ROOT / "tests" / "validate_project.ps1"
@@ -89,6 +91,7 @@ FAKE_PROXY_TARGETS_PUBLISHER = ROOT / "tools" / "fake_proxy_targets_publisher.py
 class GodotAndroidMeshCardTests(unittest.TestCase):
     def test_moving_card_uses_regular_mesh_card_anchor(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        card_view_base = CARD_VIEW_BASE.read_text(encoding="utf-8")
         card_view = CARD_VIEW.read_text(encoding="utf-8")
 
         self.assertIn('CARD_ANCHOR_NAME := "CardAnchor"', source)
@@ -97,6 +100,8 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_card_viewport = _card_view.viewport()", source)
         self.assertIn("_card_anchor = _card_view.anchor()", source)
         self.assertIn("_card_mesh = _card_view.card_mesh()", source)
+        self.assertIn("class_name CardViewBase", card_view_base)
+        self.assertIn('extends "card_view_base.gd"', card_view)
         self.assertIn("MeshInstance3D.new()", card_view)
         self.assertIn("QuadMesh.new()", card_view)
         self.assertIn("StandardMaterial3D.new()", card_view)
@@ -104,6 +109,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
 
     def test_phase_c_uses_card_state_view_receiver_trio(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        card_state_base = CARD_STATE_BASE.read_text(encoding="utf-8")
         card_state = CARD_STATE.read_text(encoding="utf-8")
         card_receiver = CARD_RECEIVER.read_text(encoding="utf-8")
 
@@ -117,6 +123,8 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertNotIn("func _connect_proxy_targets_ws() -> void:", source)
         self.assertNotIn("func _poll_proxy_targets_ws(delta: float) -> void:", source)
         self.assertNotIn("func _apply_proxy_targets_live_payload(payload: String) -> void:", source)
+        self.assertIn("class_name CardStateBase", card_state_base)
+        self.assertIn('extends "card_state_base.gd"', card_state)
         self.assertIn("func command_state() -> Dictionary:", card_state)
         self.assertIn("func apply_command_state(next_state: Dictionary) -> void:", card_state)
         self.assertIn("func apply_bbox_payload(parsed: Dictionary) -> bool:", card_state)

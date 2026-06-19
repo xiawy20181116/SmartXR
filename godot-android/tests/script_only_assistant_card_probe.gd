@@ -47,6 +47,7 @@ func _run_checks() -> String:
 	_checks["scripts_load"] = true
 
 	var state = state_script.new()
+	_checks["state_uses_shared_card_base"] = state.has_method("configure_card_state") and state.data_source() == "assistant_updates"
 	var valid_payload := {
 		"type": "assistant_card",
 		"schema_version": 1,
@@ -79,6 +80,7 @@ func _run_checks() -> String:
 
 	var parent := Node3D.new()
 	var view = view_script.new()
+	_checks["view_uses_shared_card_base"] = view.has_method("build_label3d") and view.has_method("format_snapshot_text")
 	var label = view.build_card_label(parent)
 	view.update_from_snapshot(snapshot)
 	var label_text := str(label.text)
@@ -87,7 +89,6 @@ func _run_checks() -> String:
 	_checks["view_label_parented"] = label.get_parent() == parent
 
 	parent.free()
-	view.free()
 	return "-"
 
 
