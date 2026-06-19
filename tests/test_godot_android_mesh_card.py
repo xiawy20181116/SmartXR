@@ -82,6 +82,7 @@ EXPORT_PRESETS = GODOT_ANDROID / "export_presets.cfg"
 WINDOWS_PCMR_RUNNER = ROOT / "tools" / "run_windows_pcmr.ps1"
 GXR_EXTENSION_SWITCH = ROOT / "tools" / "set_gxr_extension.ps1"
 ANDROID_EXPORT_RUNNER = ROOT / "tools" / "export_android.ps1"
+ANDROID_WORKFLOW_DOC = ROOT / "docs" / "android_apk_workflow.md"
 PROXY_TARGETS_CONSUMER = GODOT_ANDROID / "scripts" / "proxy_targets_consumer.gd"
 PROXY_TARGETS_CARD_ADAPTER = GODOT_ANDROID / "scripts" / "proxy_targets_card_adapter.gd"
 PROXY_TARGETS_SAMPLE = GODOT_ANDROID / "fixtures" / "proxy_targets_sample.json"
@@ -747,6 +748,44 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("Android", runner)
         self.assertIn("SmartXR-Godot-Control.apk", runner)
 
+    def test_android_export_runner_preflights_templates_aar_signing_and_smoke(self):
+        runner = ANDROID_EXPORT_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("SMARTXR_GODOT_EXE", runner)
+        self.assertIn("PreflightOnly", runner)
+        self.assertIn("android_source.zip", runner)
+        self.assertIn("godot-lib.template_debug.aar", runner)
+        self.assertIn("godot-lib.template_release.aar", runner)
+        self.assertIn("themes.xml", runner)
+        self.assertIn("JAVA_HOME", runner)
+        self.assertIn("ANDROID_HOME", runner)
+        self.assertIn("ANDROID_SDK_ROOT", runner)
+        self.assertIn("GRADLE_USER_HOME", runner)
+        self.assertIn("apksigner", runner)
+        self.assertIn("verify --verbose", runner)
+        self.assertIn("adb install -r", runner)
+        self.assertIn("INSTALL_FAILED_UPDATE_INCOMPATIBLE", runner)
+        self.assertIn("adb uninstall", runner)
+        self.assertIn("adb reverse tcp:8766 tcp:8766", runner)
+        self.assertIn("adb reverse tcp:8767 tcp:8767", runner)
+        self.assertIn("pm list packages com.smartxr.godotcontrol", runner)
+
+    def test_android_apk_workflow_doc_records_repeatable_device_steps(self):
+        doc = ANDROID_WORKFLOW_DOC.read_text(encoding="utf-8")
+
+        self.assertIn("tools\\export_android.ps1 -PreflightOnly", doc)
+        self.assertIn("tools\\export_android.ps1", doc)
+        self.assertIn("Godot 4.6.2", doc)
+        self.assertIn("JDK 17", doc)
+        self.assertIn("ANDROID_HOME", doc)
+        self.assertIn("android_source.zip", doc)
+        self.assertIn("godot-lib.template_debug.aar", doc)
+        self.assertIn("apksigner verify --verbose", doc)
+        self.assertIn("adb install -r godot-android\\builds\\SmartXR-Godot-Control.apk", doc)
+        self.assertIn("adb reverse tcp:8766 tcp:8766", doc)
+        self.assertIn("adb reverse tcp:8767 tcp:8767", doc)
+        self.assertIn("adb shell pm list packages com.smartxr.godotcontrol", doc)
+
     def test_android_app_label_is_demo_run_for_device_disambiguation(self):
         project = (GODOT_ANDROID / "project.godot").read_text(encoding="utf-8")
         export_presets = (GODOT_ANDROID / "export_presets.cfg").read_text(encoding="utf-8")
@@ -783,6 +822,9 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
             matches = list(res_dir.glob(f"mipmap*/{ref}.*"))
             with self.subTest(resource=ref):
                 self.assertTrue(matches, f"{adaptive_icon} references missing @mipmap/{ref}")
+        themes = (res_dir / "values" / "themes.xml").read_text(encoding="utf-8")
+        self.assertNotIn("@mipmap/icon_background", themes)
+        self.assertIn("@color/icon_background", themes)
 
 
 if __name__ == "__main__":
