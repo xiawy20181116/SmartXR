@@ -23,6 +23,8 @@ WS_TRANSPORT = ROOT / "godot-android" / "scripts" / "ws_transport.gd"
 # assertions are pinned there, the public API, anchor-mode switching, and the
 # status snapshot stay on the card.
 CARD_ATTACHMENT = ROOT / "godot-android" / "scripts" / "card_attachment.gd"
+CARD_STATE = ROOT / "godot-android" / "scripts" / "card_state.gd"
+CARD_RECEIVER = ROOT / "godot-android" / "scripts" / "card_receiver.gd"
 # Command parsing / state reduction moved to scripts/command_dispatcher.gd in
 # YAN-104; command alias assertions are pinned there, while the card keeps
 # node side effects and state copy-back.
@@ -99,6 +101,29 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("QuadMesh.new()", card_view)
         self.assertIn("StandardMaterial3D.new()", card_view)
         self.assertIn("albedo_texture = _viewport.get_texture()", card_view)
+
+    def test_phase_c_uses_card_state_view_receiver_trio(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        card_state = CARD_STATE.read_text(encoding="utf-8")
+        card_receiver = CARD_RECEIVER.read_text(encoding="utf-8")
+
+        self.assertIn('const CardStateScript := preload("res://scripts/card_state.gd")', source)
+        self.assertIn('const CardReceiverScript := preload("res://scripts/card_receiver.gd")', source)
+        self.assertIn("var _card_state = CardStateScript.new(", source)
+        self.assertIn("var _card_receiver = CardReceiverScript.new()", source)
+        self.assertIn("_card_receiver.setup(", source)
+        self.assertIn("_card_receiver.connect_if_enabled()", source)
+        self.assertIn("_card_receiver.poll(delta)", source)
+        self.assertNotIn("func _connect_proxy_targets_ws() -> void:", source)
+        self.assertNotIn("func _poll_proxy_targets_ws(delta: float) -> void:", source)
+        self.assertNotIn("func _apply_proxy_targets_live_payload(payload: String) -> void:", source)
+        self.assertIn("func command_state() -> Dictionary:", card_state)
+        self.assertIn("func apply_command_state(next_state: Dictionary) -> void:", card_state)
+        self.assertIn("func apply_bbox_payload(parsed: Dictionary) -> bool:", card_state)
+        self.assertIn("func status_values() -> Dictionary:", card_state)
+        self.assertIn("func connect_if_enabled() -> void:", card_receiver)
+        self.assertIn("func apply_live_payload(payload: String) -> bool:", card_receiver)
+        self.assertIn("func status_values(extra := {}) -> Dictionary:", card_receiver)
 
     def test_antman_passthrough_overlay_layer_path_is_gated_by_env(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -361,7 +386,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_card_attachment.set_resolver(_target_registry.resolve)", source)
         self.assertIn("adapter.get_global_transform()", attachment)
         self.assertIn("offset_transform(adapter.get_global_transform(), offset_rule)", attachment)
-        self.assertIn('_anchor_mode = "target"', source)
+        self.assertIn("_card_state.mark_attached(target_id)", source)
         self.assertIn("_orient_card_for_3dof_reading()", source)
         self.assertRegex(source, r"if _anchor_mode == \"target\":\s+_update_target_attachments\(\)")
 
@@ -469,12 +494,14 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         # transport contract.
         transport = WS_TRANSPORT.read_text(encoding="utf-8")
         fragment = PROXY_TARGETS_STATUS_FRAGMENT.read_text(encoding="utf-8")
+        receiver = CARD_RECEIVER.read_text(encoding="utf-8")
 
         self.assertIn("const PROXY_TARGETS_WS_ENABLED := true", source)
         self.assertIn('const PROXY_TARGETS_WS_URL := "ws://127.0.0.1:8766/proxy_targets"', source)
         self.assertIn('const PROXY_TARGETS_STATUS_RES := "user://proxy_targets_live_status.json"', hud)
         self.assertIn("var _proxy_targets_ws = WSTransportScript.new()", source)
-        self.assertIn("var _proxy_targets_live_messages := 0", source)
+        self.assertIn("var _card_receiver = CardReceiverScript.new()", source)
+        self.assertIn("var _messages_seen := 0", receiver)
         self.assertIn("var _subscribed := false", transport)
         self.assertIn("var _packets_seen := 0", transport)
         self.assertIn("var _parsed_messages := 0", fragment)
@@ -486,15 +513,15 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('var _last_error := "-"', fragment)
         self.assertIn("var _last_source_coordinate := {}", fragment)
         self.assertIn("var _proxy_targets_status_write_elapsed := 0.0", hud)
-        self.assertIn("func _connect_proxy_targets_ws() -> void:", source)
-        self.assertIn("func _poll_proxy_targets_ws(delta: float) -> void:", source)
+        self.assertIn("func connect_if_enabled() -> void:", receiver)
+        self.assertIn("func poll(delta: float) -> void:", receiver)
         self.assertIn("func _send_subscribe_once() -> void:", transport)
-        self.assertIn("func _apply_proxy_targets_live_payload(payload: String) -> void:", source)
+        self.assertIn("func apply_live_payload(payload: String) -> bool:", receiver)
         self.assertIn("func record_parsed_message(message: Dictionary, head_info: Dictionary = {}) -> void:", fragment)
         self.assertIn("func _write_proxy_targets_status_file(snapshot: Dictionary, delta: float) -> void:", hud)
         self.assertIn("func _format_proxy_targets_status_line(proxy: Dictionary) -> String:", hud)
-        self.assertIn("_connect_proxy_targets_ws()", source)
-        self.assertIn("_poll_proxy_targets_ws(delta)", source)
+        self.assertIn("_card_receiver.connect_if_enabled()", source)
+        self.assertIn("_card_receiver.poll(delta)", source)
         self.assertIn("_send_subscribe_once()", transport)
         self.assertIn("_proxy_targets_ws_url()", source)
         # URL/enable resolution is centralized in SmartXROptions (env var ->
@@ -503,15 +530,15 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("_options.proxy_targets_ws_url(PROXY_TARGETS_WS_URL)", source)
         self.assertIn("_options.proxy_targets_ws_enabled(PROXY_TARGETS_WS_ENABLED)", source)
         self.assertIn("_options.control_ws_url(WS_URL)", source)
-        self.assertIn("connect_to(_proxy_targets_ws_url())", source)
+        self.assertIn("_ws.connect_to(_ws_url())", receiver)
         self.assertIn("connect_to(_control_ws_url())", source)
         self.assertIn("connect_to_url(url)", transport)
         self.assertIn("_packets_seen += 1", transport)
         self.assertIn("_last_packet_bytes = packet.size()", transport)
-        self.assertIn("_proxy_targets_status_fragment.set_packet_preview(StatusHudScript.sanitize_status_text(payload))", source)
-        self.assertIn("_proxy_targets_target_source.apply_proxy_targets_json(payload)", source)
-        self.assertIn("func _on_proxy_targets_message_parsed(message: Dictionary) -> void:", source)
-        self.assertIn("_proxy_targets_status_fragment.record_parsed_message(message, _proxy_targets_head_to_world_info())", source)
+        self.assertIn("_status_fragment.set_packet_preview(_sanitize_status_text(payload))", receiver)
+        self.assertIn("_target_source.apply_proxy_targets_json(payload)", receiver)
+        self.assertIn("func _on_message_parsed(message: Dictionary) -> void:", receiver)
+        self.assertIn("_status_fragment.record_parsed_message(message, head_info)", receiver)
         # Per-frame seam: the card assembles the snapshot, StatusHud writes the files.
         self.assertIn("_update_status_hud(delta)", source)
         self.assertIn("_status_hud.write_status_files(snapshot, delta)", source)
@@ -538,9 +565,9 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('"source_coordinate": _last_source_coordinate', fragment)
         self.assertIn('"source_coordinate_summary": _source_coordinate_summary(proxy.get("source_coordinate", {}))', hud)
         self.assertIn("func _source_coordinate_summary(source_coordinate: Dictionary) -> String:", hud)
-        self.assertLess(source.index("_proxy_targets_target_source.apply_proxy_targets_json(payload)"), source.index('_last_command = "proxy_live"'))
+        self.assertLess(receiver.index("_target_source.apply_proxy_targets_json(payload)"), receiver.index('_set_last_command("proxy_live")'))
         self.assertIn("ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s src=%s err=%s", hud)
-        self.assertIn('_last_command = "proxy_live"', source)
+        self.assertIn('_set_last_command("proxy_live")', receiver)
 
     def test_fake_proxy_targets_publisher_exists_and_uses_stdlib_websocket(self):
         # The tools file is a compatibility wrapper; implementation lives in

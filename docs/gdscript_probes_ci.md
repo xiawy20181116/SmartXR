@@ -38,6 +38,8 @@ powershell -ExecutionPolicy Bypass -File tools/run_godot_status_snapshot_compose
 powershell -ExecutionPolicy Bypass -File tools/run_godot_passthrough_overlay_presenter_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_card_view_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_card_lifecycle_probe.ps1 -GodotExe $env:GODOT_BIN
+powershell -ExecutionPolicy Bypass -File tools/run_godot_card_state_probe.ps1 -GodotExe $env:GODOT_BIN
+powershell -ExecutionPolicy Bypass -File tools/run_godot_card_receiver_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_target_source_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_vst_capture_probe.ps1 -GodotExe $env:GODOT_BIN
 powershell -ExecutionPolicy Bypass -File tools/run_godot_vst_debug_ui_probe.ps1 -GodotExe $env:GODOT_BIN
@@ -66,6 +68,14 @@ viewport/layer/UI construction and camera-relative transform update.
 
 The CardView probe guards the dependency-free main card viewport, UI, card
 panel mesh/material, and XR render probe construction.
+
+The CardState probe guards the dependency-free tracked-card data snapshot used
+by command dispatch, bbox anchoring, manual motion, and target attach/detach
+mode transitions.
+
+The CardReceiver probe guards the dependency-free proxy_targets receiver glue:
+transport setup, subscribe payload, live-payload status updates, parsed-message
+head diagnostics, and scene-supplied status values.
 
 The CardLifecycle probe guards the dependency-free C3 card-lifecycle state
 machine in `godot-android/scripts/card_lifecycle.gd`: the canonical

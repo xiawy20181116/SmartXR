@@ -42,7 +42,9 @@ const PASSTHROUGH_OVERLAY_VIEWPORT_SIZE := Vector2i(512, 256)
 const PASSTHROUGH_OVERLAY_QUAD_SIZE_M := Vector2(0.42, 0.20)
 const PASSTHROUGH_OVERLAY_DEPTH_M := 1.5
 const CardAttachmentScript := preload("res://scripts/card_attachment.gd")
+const CardStateScript := preload("res://scripts/card_state.gd")
 const CardViewScript := preload("res://scripts/card_view.gd")
+const CardReceiverScript := preload("res://scripts/card_receiver.gd")
 const CommandDispatcherScript := preload("res://scripts/command_dispatcher.gd")
 const ProxyTargetsConsumerScript := preload("res://scripts/proxy_targets_consumer.gd")
 const ProxyTargetsCardAdapterScript := preload("res://scripts/proxy_targets_card_adapter.gd")
@@ -63,6 +65,20 @@ const XRBootstrapScript := preload("res://scripts/xr_bootstrap.gd")
 # -> script const default). The consts below stay as the defaults; deployment
 # overrides go through SmartXROptions instead of source edits.
 var _options = SmartXROptionsScript.load_options()
+var _card_state = CardStateScript.new({
+	"speed_deg_per_second": CARD_DEFAULT_SPEED_DEG_PER_SECOND,
+	"anchor_yaw_deg": CARD_START_YAW_DEG,
+	"anchor_pitch_deg": CARD_START_PITCH_DEG,
+	"anchor_depth_m": CARD_START_DEPTH_M,
+	"bbox_center_px": BBOX_START_CENTER_PX,
+	"bbox_size_px": BBOX_START_SIZE_PX,
+	"bbox_image_size": BBOX_IMAGE_SIZE,
+	"bbox_depth_m": CARD_START_DEPTH_M,
+	"min_depth_m": MIN_DEPTH_M,
+	"max_depth_m": MAX_DEPTH_M,
+	"card_start_yaw_deg": CARD_START_YAW_DEG,
+	"card_end_yaw_deg": CARD_END_YAW_DEG,
+})
 
 # M1 (YAN-56): on-device VST capture + ncnn tracker scaffold.
 # Functional behaviour is gated on GXRDualVstCapture class registration so the
@@ -163,7 +179,7 @@ var _proxy_targets_target_source = null
 # Second WSTransport instance (see _control_ws above): the proxy_targets
 # stream adds the subscribe-once-on-open payload on top of the same loop.
 var _proxy_targets_ws = WSTransportScript.new()
-var _proxy_targets_live_messages := 0
+var _card_receiver = CardReceiverScript.new()
 var _proxy_targets_status_fragment = ProxyTargetsStatusFragmentScript.new()
 var _proxy_targets_card_apply_count := 0
 var _passthrough_overlay_enabled := false
@@ -227,8 +243,9 @@ func _ready() -> void:
 	_build_debug_target_marker()
 	_build_proxy_targets_validation()
 	_setup_ws_transports()
+	_setup_card_receiver()
 	_connect_ws()
-	_connect_proxy_targets_ws()
+	_card_receiver.connect_if_enabled()
 	_setup_vst_capture()
 	set_process(true)
 
@@ -351,14 +368,6 @@ func _build_proxy_targets_validation() -> void:
 	var sample_command := str(result.get("sample_command", ""))
 	if not sample_command.is_empty():
 		_last_command = sample_command
-	if _proxy_targets_target_source != null:
-		_proxy_targets_target_source.set_on_message_parsed(_on_proxy_targets_message_parsed)
-
-
-func _connect_proxy_targets_ws() -> void:
-	if not _proxy_targets_ws_enabled():
-		return
-	_proxy_targets_ws.connect_to(_proxy_targets_ws_url())
 
 
 func _proxy_targets_ws_enabled() -> bool:
@@ -371,41 +380,6 @@ func _proxy_targets_ws_url() -> String:
 
 func _control_ws_url() -> String:
 	return _options.control_ws_url(WS_URL)
-
-
-func _poll_proxy_targets_ws(delta: float) -> void:
-	if not _proxy_targets_ws_enabled():
-		return
-	_proxy_targets_ws.poll(delta)
-
-
-func _on_proxy_targets_ws_packet(payload: String) -> void:
-	_proxy_targets_status_fragment.set_packet_preview(StatusHudScript.sanitize_status_text(payload))
-	_apply_proxy_targets_live_payload(payload)
-
-
-func _apply_proxy_targets_live_payload(payload: String) -> void:
-	if _proxy_targets_target_source == null:
-		_proxy_targets_status_fragment.set_error("adapter_null")
-		return
-	var applied: bool = bool(_proxy_targets_target_source.apply_proxy_targets_json(payload))
-	var source_error := str(_proxy_targets_target_source.last_error())
-	if source_error == "json_invalid":
-		_proxy_targets_status_fragment.set_message_type("invalid")
-		_proxy_targets_status_fragment.set_error("json_invalid")
-		_last_command = "proxy_live_invalid"
-		return
-	if applied:
-		_proxy_targets_live_messages += 1
-		_proxy_targets_status_fragment.set_error("-")
-		_last_command = "proxy_live"
-	else:
-		_proxy_targets_status_fragment.set_error(source_error)
-		_last_command = "proxy_live_failed"
-
-
-func _on_proxy_targets_message_parsed(message: Dictionary) -> void:
-	_proxy_targets_status_fragment.record_parsed_message(message, _proxy_targets_head_to_world_info())
 
 
 func _proxy_targets_head_to_world_info() -> Dictionary:
@@ -471,18 +445,27 @@ func _setup_ws_transports() -> void:
 	_control_ws.set_on_packet(_handle_packet)
 	_control_ws.set_on_connect_error(_on_control_ws_connect_error)
 	_control_ws.set_url_provider(_control_ws_url)
-	_proxy_targets_ws.set_on_packet(_on_proxy_targets_ws_packet)
-	_proxy_targets_ws.set_subscribe_payload(JSON.stringify({"type": "subscribe", "stream": "proxy_targets"}))
-	_proxy_targets_ws.set_on_connect_error(_on_proxy_targets_ws_connect_error)
-	_proxy_targets_ws.set_url_provider(_proxy_targets_ws_url)
+
+
+func _setup_card_receiver() -> void:
+	_card_receiver.setup({
+		"ws": _proxy_targets_ws,
+		"status_fragment": _proxy_targets_status_fragment,
+		"target_source": _proxy_targets_target_source,
+		"ws_url_provider": _proxy_targets_ws_url,
+		"ws_enabled_provider": _proxy_targets_ws_enabled,
+		"last_command_callback": _set_last_command,
+		"head_info_provider": _proxy_targets_head_to_world_info,
+	})
 
 
 func _on_control_ws_connect_error(result: int) -> void:
-	_last_command = "ws connect err " + str(result)
+	_set_last_command("ws connect err " + str(result))
 
 
-func _on_proxy_targets_ws_connect_error(result: int) -> void:
-	_last_command = "proxy_ws_connect_err_" + str(result)
+func _set_last_command(command: String) -> void:
+	_last_command = command
+	_sync_card_state_from_fields()
 
 
 func _connect_ws() -> void:
@@ -491,14 +474,13 @@ func _connect_ws() -> void:
 
 func _process(delta: float) -> void:
 	_poll_ws(delta)
-	_poll_proxy_targets_ws(delta)
+	_card_receiver.poll(delta)
 	_poll_vst_bbox()
 	_advance_vst_target_state(delta)
 	_update_debug_target_marker(delta)
-	if not _paused and _anchor_mode == "manual":
-		_anchor_yaw_deg -= _speed_deg_per_second * delta
-		if _anchor_yaw_deg < CARD_END_YAW_DEG:
-			_anchor_yaw_deg = CARD_START_YAW_DEG
+	_sync_card_state_from_fields()
+	_card_state.advance_manual(delta)
+	_sync_card_fields_from_state()
 	if _anchor_mode == "bbox":
 		_apply_bbox_anchor()
 	if _anchor_mode == "target":
@@ -606,16 +588,19 @@ func _on_card_attachment_applied() -> void:
 func attach_to_target(card_id: String, target_id: String, offset_rule = {}) -> bool:
 	if not _card_attachment.attach(card_id, target_id, offset_rule):
 		return false
-	_anchor_mode = "target"
-	_last_command = "attach_target:" + target_id
+	_sync_card_state_from_fields()
+	_card_state.mark_attached(target_id)
+	_sync_card_fields_from_state()
 	_update_target_attachments()
 	return true
 
 
 func detach_card(card_id: String) -> void:
 	_card_attachment.detach(card_id)
-	if _card_attachment.is_empty() and _anchor_mode == "target":
-		_anchor_mode = "manual"
+	_sync_card_state_from_fields()
+	_card_state.mark_detached(_card_attachment.is_empty())
+	_sync_card_fields_from_state()
+	if _anchor_mode == "manual":
 		_apply_3dof_anchor_transform()
 
 
@@ -656,7 +641,17 @@ func _apply_command(command: String) -> void:
 
 
 func _command_state() -> Dictionary:
-	return {
+	_sync_card_state_from_fields()
+	return _card_state.command_state()
+
+
+func _apply_command_state(next_state: Dictionary) -> void:
+	_card_state.apply_command_state(next_state)
+	_sync_card_fields_from_state()
+
+
+func _sync_card_state_from_fields() -> void:
+	_card_state.apply_command_state({
 		"speed_deg_per_second": _speed_deg_per_second,
 		"anchor_yaw_deg": _anchor_yaw_deg,
 		"anchor_pitch_deg": _anchor_pitch_deg,
@@ -669,22 +664,23 @@ func _command_state() -> Dictionary:
 		"bbox_angular_size_deg": _bbox_angular_size_deg,
 		"paused": _paused,
 		"last_command": _last_command,
-	}
+	})
 
 
-func _apply_command_state(next_state: Dictionary) -> void:
-	_speed_deg_per_second = float(next_state.get("speed_deg_per_second", _speed_deg_per_second))
-	_anchor_yaw_deg = float(next_state.get("anchor_yaw_deg", _anchor_yaw_deg))
-	_anchor_pitch_deg = float(next_state.get("anchor_pitch_deg", _anchor_pitch_deg))
-	_anchor_depth_m = float(next_state.get("anchor_depth_m", _anchor_depth_m))
-	_anchor_mode = str(next_state.get("anchor_mode", _anchor_mode))
-	_bbox_center_px = Vector2(next_state.get("bbox_center_px", _bbox_center_px))
-	_bbox_size_px = Vector2(next_state.get("bbox_size_px", _bbox_size_px))
-	_bbox_image_size = Vector2(next_state.get("bbox_image_size", _bbox_image_size))
-	_bbox_depth_m = float(next_state.get("bbox_depth_m", _bbox_depth_m))
-	_bbox_angular_size_deg = Vector2(next_state.get("bbox_angular_size_deg", _bbox_angular_size_deg))
-	_paused = bool(next_state.get("paused", _paused))
-	_last_command = str(next_state.get("last_command", _last_command))
+func _sync_card_fields_from_state() -> void:
+	var state := _card_state.status_values()
+	_speed_deg_per_second = float(state.get("speed_deg_per_second", _speed_deg_per_second))
+	_anchor_yaw_deg = float(state.get("anchor_yaw_deg", _anchor_yaw_deg))
+	_anchor_pitch_deg = float(state.get("anchor_pitch_deg", _anchor_pitch_deg))
+	_anchor_depth_m = float(state.get("anchor_depth_m", _anchor_depth_m))
+	_anchor_mode = str(state.get("anchor_mode", _anchor_mode))
+	_bbox_center_px = Vector2(state.get("bbox_center_px", _bbox_center_px))
+	_bbox_size_px = Vector2(state.get("bbox_size_px", _bbox_size_px))
+	_bbox_image_size = Vector2(state.get("bbox_image_size", _bbox_image_size))
+	_bbox_depth_m = float(state.get("bbox_depth_m", _bbox_depth_m))
+	_bbox_angular_size_deg = Vector2(state.get("bbox_angular_size_deg", _bbox_angular_size_deg))
+	_paused = bool(state.get("paused", _paused))
+	_last_command = str(state.get("last_command", _last_command))
 
 
 func _run_command_effects(effects: Array) -> void:
@@ -705,25 +701,17 @@ func _run_command_effects(effects: Array) -> void:
 
 
 func _apply_bbox_payload(parsed: Dictionary) -> void:
-	var bbox = parsed.get("bbox", {})
-	var image = parsed.get("image", {})
-	if typeof(bbox) != TYPE_DICTIONARY or typeof(image) != TYPE_DICTIONARY:
+	_sync_card_state_from_fields()
+	if not _card_state.apply_bbox_payload(parsed):
 		return
-	_bbox_center_px = Vector2(float(bbox.get("cx", _bbox_center_px.x)), float(bbox.get("cy", _bbox_center_px.y)))
-	_bbox_size_px = Vector2(float(bbox.get("w", _bbox_size_px.x)), float(bbox.get("h", _bbox_size_px.y)))
-	_bbox_image_size = Vector2(float(image.get("w", _bbox_image_size.x)), float(image.get("h", _bbox_image_size.y)))
-	_bbox_depth_m = clampf(float(parsed.get("depth_m", _bbox_depth_m)), MIN_DEPTH_M, MAX_DEPTH_M)
-	_anchor_mode = "bbox"
-	_last_command = "bbox_payload"
+	_sync_card_fields_from_state()
 	_apply_bbox_anchor()
 
 
 func _apply_bbox_anchor() -> void:
 	var anchor := _anchor_from_bbox(_bbox_center_px, _bbox_size_px, _bbox_image_size, _bbox_depth_m)
-	_anchor_yaw_deg = anchor["yaw_deg"]
-	_anchor_pitch_deg = anchor["pitch_deg"]
-	_anchor_depth_m = anchor["depth_m"]
-	_bbox_angular_size_deg = anchor["angular_size_deg"]
+	_card_state.apply_bbox_anchor(anchor)
+	_sync_card_fields_from_state()
 
 
 func _anchor_from_bbox(center_px: Vector2, size_px: Vector2, image_size: Vector2, depth_m: float) -> Dictionary:
@@ -871,10 +859,7 @@ func _build_vst_status_snapshot() -> Dictionary:
 
 
 func _build_proxy_targets_status_snapshot() -> Dictionary:
-	return _status_snapshot_composer.build_proxy_targets_status_snapshot(_proxy_targets_status_fragment.status_values({
-		"ws_connected": _proxy_targets_ws.ws_connected(),
-		"ws_subscribed": _proxy_targets_ws.ws_subscribed(),
-		"ws_url": _proxy_targets_ws_url(),
+	return _status_snapshot_composer.build_proxy_targets_status_snapshot(_card_receiver.status_values({
 		"attachments": _card_attachment.size(),
 		"card_target_id": _proxy_targets_card_target_id(),
 		"proxy_target_count": _proxy_targets_proxy_count(),
@@ -882,9 +867,6 @@ func _build_proxy_targets_status_snapshot() -> Dictionary:
 		"card_resolved_position": _proxy_targets_card_resolved_position(),
 		"card_node_position": _proxy_targets_card_node_position(),
 		"card_apply_count": _proxy_targets_card_apply_count,
-		"packets": _proxy_targets_ws.packets_seen(),
-		"live": _proxy_targets_live_messages,
-		"packet_bytes": _proxy_targets_ws.last_packet_bytes(),
 	}))
 
 
