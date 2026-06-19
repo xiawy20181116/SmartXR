@@ -18,6 +18,14 @@ ToolHandler = Callable[[ToolArgs], ToolResult | Awaitable[ToolResult]]
 CardSink = Callable[[dict[str, Any]], None]
 
 
+class UnknownToolError(KeyError):
+    """Raised when a caller requests a tool that is not registered."""
+
+
+class MissingRequiredArgumentError(ValueError):
+    """Raised when a tool call omits schema-required input."""
+
+
 @dataclass(frozen=True, slots=True)
 class ToolSpec:
     name: str
@@ -69,16 +77,15 @@ class ToolRegistry:
         return {name: spec.export() for name, spec in self._specs.items()}
 
     async def run(self, name: str, args: ToolArgs) -> ToolResult:
-        try:
-            spec = self._specs[name]
-        except KeyError as exc:
-            raise KeyError(f"unknown tool: {name}") from exc
-
         start = datetime.now(timezone.utc)
         start_perf = time.perf_counter()
         success = False
         error_type: str | None = None
         try:
+            try:
+                spec = self._specs[name]
+            except KeyError as exc:
+                raise UnknownToolError(f"unknown tool: {name}") from exc
             _validate_required_args(name, args, spec.input_schema)
             result = spec.handler(args)
             if inspect.isawaitable(result):
@@ -289,7 +296,7 @@ def create_default_registry(trace_path: str | Path | None = None, card_sink: Car
 def _validate_required_args(name: str, args: ToolArgs, schema: Mapping[str, Any]) -> None:
     missing = [field for field in schema.get("required", []) if field not in args]
     if missing:
-        raise ValueError(f"{name} missing required argument(s): {', '.join(missing)}")
+        raise MissingRequiredArgumentError(f"{name} missing required argument(s): {', '.join(missing)}")
 
 
 def _summarize_args(args: ToolArgs) -> dict[str, Any]:
