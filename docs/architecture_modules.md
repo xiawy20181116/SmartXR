@@ -13,6 +13,11 @@ developed and verified against the contract (and fakes), not against the other
 modules' code. Integration then happens against contracts, and only the modules
 that genuinely touch hardware require a real-device gate.
 
+This module/contract split is the structural realization of three founding product
+principles — **capability encapsulation, business-driven invocation, and intelligent
+voice control**. Section 17 pins the explicit mapping from each principle to the
+layers, contracts, and code that realize it.
+
 ## 2. Layered model
 
 Single-direction dependency. Lower layers do not know upper layers exist.
@@ -346,3 +351,70 @@ Guardrails: do not port native VST/XR/ncnn toward the assistant card layer (reve
 direction = high risk); no big-bang merge; keep the two relocated assistant probes as
 regression anchors. Phase A/B can run early/independently; Phase C/D run after C1/C3 are frozen
 (the card's data contracts settle first).
+
+## 17. Founding design principles -> architecture mapping (three pillars)
+
+The whole stack is built around three founding product principles. They are not
+add-ons; sections 1-16 are *how* these are realized. The single-direction layered
+model (§2) is the spine: perception (module 1) and MR presentation (modules 2/3) are
+the stage; the capability bus, tool layer, and voice (modules 4/5) are the control
+plane on top.
+
+### Pillar 1 - Capability encapsulation (按能力封装)
+
+Each capability is a self-describing, hot-pluggable unit; nothing couples to another
+capability's implementation.
+
+- **Macro**: modules 1-6 + frozen versioned contracts C1-C6; pure-Python capability bus
+  `smartxr/`. Each module builds against contracts + fakes (§1, §5).
+- **Micro (assistant)**: `ToolRegistry` / `ToolSpec` in
+  `SmartMRAssistant/assistant/tools.py`. A capability = `name` + `handler` +
+  `input_schema` + `output_schema` + `latency_budget_ms` + `scheduling`. `register()`
+  is hot-pluggable; `export_schemas()` self-describes (C5). Per-call trace with
+  sensitive-arg redaction.
+- **Status**: realized. Default capabilities: `scene_status`, `identity_lookup`,
+  `work_item_lookup`, `card_command`, `assistant_card_push`.
+
+### Pillar 2 - Business-driven invocation (按业务调用)
+
+Business invokes a capability by contract (name + args), never by implementation.
+
+- **Seam**: C4 `ToolCall` (id/name/args/scheduling) -> `dispatch_tool_call(call, registry)`
+  in `dispatcher.py` -> structured `{tool_call_id, name, response}`.
+- Capabilities reach the presentation plane by contract too: `card_command` -> control
+  payload to the Godot card; `assistant_card_push` -> C6 `assistant_card`.
+- **Status**: realized. Limitation: §12 specifies the dispatcher returns a *structured
+  error response*; today `dispatch_tool_call` propagates exceptions (traced but not
+  normalized) — tracked as a headless follow-up.
+
+### Pillar 3 - Intelligent voice control (智能语音控制)
+
+A provider-neutral LLM voice agent drives capabilities by function-calling.
+
+- `VoiceSession` (ABC, `session.py`) emits C4 tool calls only; audio capture / codec /
+  VAD / transport stay outside the interface. Provider adapters
+  `GeminiLiveVoiceSession` / `QwenOmniRealtimeVoiceSession` normalize each provider's
+  function-call events into the same frozen C4.
+- `schema_adapter.export_live_tool_declarations()` advertises C5 capability schemas to
+  the voice LLM, closing the loop: C5 declarations -> model function-call -> C4 ->
+  dispatcher -> capability -> C6 card.
+- `SimulatedVoiceSession` runs the whole loop headless (no mic/headset); e2e covered by
+  `tests/test_smartmr_live_assistant_e2e.py`.
+- **Status**: realized at the tool-call/event layer and provider-agnostic. Pending: the
+  live audio leg (real capture/streaming) is intentionally out of scope of this
+  interface and needs voice API credentials (data-need #4) + audio I/O.
+
+### Current limitations / refinements
+
+1. Live audio leg not implemented (Pillar 3) — mock/replay tested headless; live needs
+   creds (#4) + audio transport.
+2. Dispatcher error contract (Pillar 2) — align with §12 (structured error, not
+   exception); headless follow-up.
+3. Capability data-source binding (Pillar 1) — `identity_lookup` / `work_item_lookup`
+   take their source as a call arg (fixtures, data-need #5); a real integration should
+   let the capability own its source adapter.
+4. Tool input validation is required-args presence only, not full JSON-schema;
+   acceptable for v1.
+
+These are integration-pending items, not structural gaps: the three pillars are
+satisfied by construction.
