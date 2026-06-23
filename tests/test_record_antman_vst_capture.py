@@ -42,6 +42,21 @@ class FakeNv12Frame:
         self.nv12 = bytes([fill_y]) * (stride * height) + bytes([fill_uv]) * (stride * height // 2)
 
 
+class FakeDecodedBgrFrame:
+    shape = (2, 2, 3)
+    timestamp_us = 3_000_000
+
+    def __init__(self):
+        self.pixels = [
+            [(0, 0, 0), (255, 255, 255)],
+            [(0, 0, 255), (0, 255, 0)],
+        ]
+
+    def __getitem__(self, key):
+        y, x, c = key
+        return self.pixels[y][x][c]
+
+
 class RecordAntmanVstCaptureTests(unittest.TestCase):
     def make_tmp_dir(self) -> Path:
         path = TMP / uuid.uuid4().hex
@@ -96,6 +111,43 @@ class RecordAntmanVstCaptureTests(unittest.TestCase):
         self.assertEqual(timeline["frames"][0]["at_ms"], 0.0)
         self.assertEqual(timeline["frames"][0]["timestamp_us"], source.timestamp_us)
 
+    def test_writer_converts_live_decoded_bgr_frame_to_nv12_and_flags_metadata(self):
+        recorder = load_module(RECORDER, "record_antman_vst_capture")
+        source = FakeDecodedBgrFrame()
+
+        session_dir = self.make_tmp_dir()
+        writer = recorder.CaptureSessionWriter(
+            session_dir=session_dir,
+            shm_name="Antman.VST.AI.v1",
+            shm_eye="Right",
+            resolved_shm_name="Antman.VST.AI.v1.Right",
+            antman_root=Path("E:/xia/Antman_smart"),
+            source_version="test-source",
+            record_start_wall_clock="2026-06-18T10:00:00Z",
+            decoded_color_order="BGR",
+        )
+        writer.write_frame(
+            frame=source,
+            frame_id=77,
+            timestamp_us=source.timestamp_us,
+            at_ms=0.0,
+        )
+        writer.write_manifest(
+            status={"source_alive": True, "frames_written": 1, "dropped": 0, "reason": "max_frames"},
+        )
+
+        frames = list(iter_session(session_dir))
+        self.assertEqual(len(frames), 1)
+        self.assertEqual(frames[0].width, 2)
+        self.assertEqual(frames[0].height, 2)
+        self.assertEqual(frames[0].stride, 2)
+        self.assertEqual(len(frames[0].y_plane), 4)
+        self.assertEqual(len(frames[0].uv_plane), 2)
+
+        metadata = json.loads((session_dir / "metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(metadata["source_frame_format"], "decoded_bgr24")
+        self.assertEqual(metadata["conversion"], "decoded_bgr24_to_nv12_bt601_limited")
+
     def test_recorder_dedups_frame_ids_and_reports_status(self):
         recorder = load_module(RECORDER, "record_antman_vst_capture")
         source = FakeNv12Frame()
@@ -140,6 +192,8 @@ class RecordAntmanVstCaptureTests(unittest.TestCase):
         self.assertEqual(status["frames_written"], 2)
         self.assertEqual(status["dropped"], 1)
         self.assertEqual(status["reason"], "max_frames")
+        self.assertEqual(status["source_frame_format"], "native_nv12")
+        self.assertEqual(status["conversion"], "none")
         self.assertEqual([f.timestamp_us for f in iter_session(session_dir)], [2_000_000, 2_033_000])
         timeline = json.loads((session_dir / "timeline.json").read_text(encoding="utf-8"))
         self.assertEqual([frame["at_ms"] for frame in timeline["frames"]], [0.0, 33.0])
@@ -151,6 +205,8 @@ class RecordAntmanVstCaptureTests(unittest.TestCase):
         self.assertIn("[string]$ShmEye = \"Right\"", source)
         self.assertIn("--shm-eye", source)
         self.assertIn("--max-frames", source)
+        self.assertIn("[string]$DecodedColorOrder = \"BGR\"", source)
+        self.assertIn("--decoded-color-order", source)
         self.assertIn("human_detect\\.venv\\Scripts\\python.exe", source)
         self.assertIn(".uv-venv\\Scripts\\python.exe", source)
         self.assertIn("Need headset", source)

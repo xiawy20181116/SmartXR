@@ -29,8 +29,30 @@ from smartxr.nv12_reader import (  # noqa: E402
 )
 
 
+VALID_DECODED_COLOR_ORDERS = {"BGR", "RGB"}
+
+
 class Nv12FrameContractError(ValueError):
     """Raised when a live frame cannot be proven to be native NV12 bytes."""
+
+
+class ExtractedNv12Frame:
+    def __init__(
+        self,
+        *,
+        width: int,
+        height: int,
+        stride: int,
+        payload: bytes,
+        source_frame_format: str,
+        conversion: str,
+    ) -> None:
+        self.width = int(width)
+        self.height = int(height)
+        self.stride = int(stride)
+        self.payload = payload
+        self.source_frame_format = source_frame_format
+        self.conversion = conversion
 
 
 def _value(obj: Any, names: tuple[str, ...], default: Any = None) -> Any:
@@ -58,12 +80,128 @@ def _bytes_from_value(value: Any) -> bytes | None:
     return None
 
 
-def extract_nv12_frame(frame: Any) -> tuple[int, int, int, bytes]:
+def _clip_u8(value: int) -> int:
+    return max(0, min(255, int(value)))
+
+
+def _rgb_to_yuv_bt601_limited(r: int, g: int, b: int) -> tuple[int, int, int]:
+    y = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16
+    u = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128
+    v = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128
+    return _clip_u8(y), _clip_u8(u), _clip_u8(v)
+
+
+def _decoded_dimensions(frame: Any) -> tuple[int, int] | None:
+    shape = getattr(frame, "shape", None)
+    if isinstance(shape, tuple) and len(shape) >= 3 and int(shape[2]) == 3:
+        return int(shape[1]), int(shape[0])
+    return None
+
+
+def _pixel_bgr(frame: Any, y: int, x: int, color_order: str) -> tuple[int, int, int]:
+    c0 = int(frame[y, x, 0])
+    c1 = int(frame[y, x, 1])
+    c2 = int(frame[y, x, 2])
+    if color_order == "RGB":
+        return c2, c1, c0
+    return c0, c1, c2
+
+
+def _numpy_decoded_to_nv12(frame: Any, color_order: str) -> bytes | None:
+    try:
+        import numpy as np
+    except Exception:
+        return None
+
+    try:
+        arr = np.asarray(frame)
+    except Exception:
+        return None
+    if arr.ndim != 3 or arr.shape[2] != 3:
+        return None
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.uint8, copy=False)
+
+    try:
+        import cv2
+
+        code = cv2.COLOR_RGB2YUV_I420 if color_order == "RGB" else cv2.COLOR_BGR2YUV_I420
+        i420 = cv2.cvtColor(arr, code).reshape(-1)
+        height, width = int(arr.shape[0]), int(arr.shape[1])
+        y_size = width * height
+        uv_size = y_size // 4
+        y_plane = i420[:y_size].tobytes()
+        u = i420[y_size : y_size + uv_size]
+        v = i420[y_size + uv_size : y_size + uv_size + uv_size]
+        uv = np.empty(uv_size * 2, dtype=np.uint8)
+        uv[0::2] = u
+        uv[1::2] = v
+        return y_plane + uv.tobytes()
+    except Exception:
+        pass
+
+    if color_order == "RGB":
+        r = arr[:, :, 0].astype(np.int32)
+        g = arr[:, :, 1].astype(np.int32)
+        b = arr[:, :, 2].astype(np.int32)
+    else:
+        b = arr[:, :, 0].astype(np.int32)
+        g = arr[:, :, 1].astype(np.int32)
+        r = arr[:, :, 2].astype(np.int32)
+    y_plane = np.clip(((66 * r + 129 * g + 25 * b + 128) >> 8) + 16, 0, 255).astype(np.uint8)
+    u_full = np.clip(((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128, 0, 255)
+    v_full = np.clip(((112 * r - 94 * g - 18 * b + 128) >> 8) + 128, 0, 255)
+    u = np.rint(u_full.reshape(arr.shape[0] // 2, 2, arr.shape[1] // 2, 2).mean(axis=(1, 3))).astype(np.uint8)
+    v = np.rint(v_full.reshape(arr.shape[0] // 2, 2, arr.shape[1] // 2, 2).mean(axis=(1, 3))).astype(np.uint8)
+    uv = np.empty((arr.shape[0] // 2, arr.shape[1]), dtype=np.uint8)
+    uv[:, 0::2] = u
+    uv[:, 1::2] = v
+    return y_plane.tobytes() + uv.tobytes()
+
+
+def _decoded_to_nv12_payload(frame: Any, width: int, height: int, color_order: str) -> bytes:
+    if color_order not in VALID_DECODED_COLOR_ORDERS:
+        raise Nv12FrameContractError(
+            f"unsupported decoded color order {color_order!r}; expected BGR or RGB"
+        )
+    if width % 2 != 0 or height % 2 != 0:
+        raise Nv12FrameContractError(
+            f"decoded frame dimensions must be even for NV12: width={width} height={height}"
+        )
+
+    payload = _numpy_decoded_to_nv12(frame, color_order)
+    if payload is not None:
+        return payload
+
+    y_plane = bytearray(width * height)
+    uv_plane = bytearray(width * height // 2)
+    for row in range(height):
+        for col in range(width):
+            b, g, r = _pixel_bgr(frame, row, col, color_order)
+            y_value, _u, _v = _rgb_to_yuv_bt601_limited(r, g, b)
+            y_plane[row * width + col] = y_value
+    for row in range(0, height, 2):
+        uv_row = row // 2
+        for col in range(0, width, 2):
+            u_sum = 0
+            v_sum = 0
+            for yy in (row, row + 1):
+                for xx in (col, col + 1):
+                    b, g, r = _pixel_bgr(frame, yy, xx, color_order)
+                    _y, u_value, v_value = _rgb_to_yuv_bt601_limited(r, g, b)
+                    u_sum += u_value
+                    v_sum += v_value
+            offset = uv_row * width + col
+            uv_plane[offset] = _clip_u8(round(u_sum / 4))
+            uv_plane[offset + 1] = _clip_u8(round(v_sum / 4))
+    return bytes(y_plane) + bytes(uv_plane)
+
+
+def extract_nv12_frame(frame: Any, *, decoded_color_order: str = "BGR") -> ExtractedNv12Frame:
     """Return width, height, stride, raw NV12 payload from a live Antman frame.
 
-    The recorder only writes native NV12 payloads. RGB/BGR-like arrays are
-    rejected instead of silently producing a replay package with the wrong
-    format or stride.
+    Native NV12 payloads are persisted unchanged. Decoded 3-channel frames are
+    converted to tight-stride NV12 and flagged in metadata.
     """
     payload = _bytes_from_value(_value(frame, ("nv12", "nv12_bytes", "payload", "data", "buffer")))
     if payload is None:
@@ -77,8 +215,25 @@ def extract_nv12_frame(frame: Any) -> tuple[int, int, int, bytes]:
     strides = getattr(frame, "strides", None)
     if isinstance(shape, tuple):
         if len(shape) >= 3 and int(shape[2]) in (3, 4):
-            raise Nv12FrameContractError(
-                f"SHM frame shape {shape!r} looks decoded, not native NV12"
+            if int(shape[2]) != 3:
+                raise Nv12FrameContractError(
+                    f"SHM frame shape {shape!r} is decoded but not 3-channel BGR/RGB"
+                )
+            decoded = _decoded_dimensions(frame)
+            if decoded is None:
+                raise Nv12FrameContractError(
+                    f"SHM frame shape {shape!r} is decoded but dimensions are unavailable"
+                )
+            width, height = decoded
+            payload = _decoded_to_nv12_payload(frame, width, height, decoded_color_order)
+            source_format = f"decoded_{decoded_color_order.lower()}24"
+            return ExtractedNv12Frame(
+                width=width,
+                height=height,
+                stride=width,
+                payload=payload,
+                source_frame_format=source_format,
+                conversion=f"{source_format}_to_nv12_bt601_limited",
             )
         if width is None and len(shape) >= 2:
             width = int(shape[1])
@@ -104,7 +259,14 @@ def extract_nv12_frame(frame: Any) -> tuple[int, int, int, bytes]:
             f"NV12 payload size {len(payload)} != stride*height*3/2 {expected} "
             f"(width={width} height={height} stride={stride})"
         )
-    return width, height, stride, payload
+    return ExtractedNv12Frame(
+        width=width,
+        height=height,
+        stride=stride,
+        payload=payload,
+        source_frame_format="native_nv12",
+        conversion="none",
+    )
 
 
 def frame_timestamp_us(frame: Any, fallback_frame_id: int) -> int:
@@ -128,6 +290,7 @@ class CaptureSessionWriter:
         antman_root: Path,
         source_version: str,
         record_start_wall_clock: str,
+        decoded_color_order: str = "BGR",
     ) -> None:
         self.session_dir = Path(session_dir)
         self.packets_dir = self.session_dir / PACKETS_DIR
@@ -137,11 +300,14 @@ class CaptureSessionWriter:
         self.antman_root = Path(antman_root)
         self.source_version = source_version
         self.record_start_wall_clock = record_start_wall_clock
+        self.decoded_color_order = decoded_color_order.upper()
         self.files: list[str] = []
         self.timeline: list[dict[str, Any]] = []
         self.width: int | None = None
         self.height: int | None = None
         self.stride: int | None = None
+        self.source_frame_format: str | None = None
+        self.conversion: str | None = None
         self.packets_dir.mkdir(parents=True, exist_ok=True)
 
     def write_frame(
@@ -152,15 +318,26 @@ class CaptureSessionWriter:
         timestamp_us: int,
         at_ms: float,
     ) -> Path:
-        width, height, stride, payload = extract_nv12_frame(frame)
+        extracted = extract_nv12_frame(frame, decoded_color_order=self.decoded_color_order)
+        width = extracted.width
+        height = extracted.height
+        stride = extracted.stride
+        payload = extracted.payload
         if self.width is None:
             self.width, self.height, self.stride = width, height, stride
+            self.source_frame_format = extracted.source_frame_format
+            self.conversion = extracted.conversion
         elif (width, height, stride) != (self.width, self.height, self.stride):
             raise Nv12FrameContractError(
                 "capture geometry changed from "
                 f"{self.width}x{self.height} stride {self.stride} to "
                 f"{width}x{height} stride {stride}"
             )
+        elif (extracted.source_frame_format, extracted.conversion) != (
+            self.source_frame_format,
+            self.conversion,
+        ):
+            raise Nv12FrameContractError("capture frame format/conversion changed during session")
 
         index = len(self.files) + 1
         rel = f"{PACKETS_DIR}/packet_{index:06d}.bin"
@@ -201,6 +378,8 @@ class CaptureSessionWriter:
             "antman_root": str(self.antman_root),
             "source_version": self.source_version,
             "record_start_wall_clock": self.record_start_wall_clock,
+            "source_frame_format": self.source_frame_format,
+            "conversion": self.conversion,
             "status": status,
         }
         timeline = {"frames": self.timeline}
@@ -225,6 +404,7 @@ def record_vst_capture(
     resolved_shm_name: str,
     antman_root: Path,
     source_version: str,
+    decoded_color_order: str = "BGR",
     sleep_seconds: float = 0.005,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
@@ -237,6 +417,7 @@ def record_vst_capture(
         antman_root=antman_root,
         source_version=source_version,
         record_start_wall_clock=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        decoded_color_order=decoded_color_order,
     )
     frames_written = 0
     dropped = 0
@@ -293,6 +474,8 @@ def record_vst_capture(
         "reason": reason if frames_written > 0 else "no_frames_seen",
         "last_frame_id": -1 if last_frame_id is None else last_frame_id,
         "observed_fps": round(fps, 3),
+        "source_frame_format": writer.source_frame_format,
+        "conversion": writer.conversion,
         "output_dir": str(Path(session_dir).resolve()),
     }
     writer.write_manifest(status=status)
@@ -311,6 +494,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--wait-timeout-ms", type=int, default=1000)
     parser.add_argument("--wait-for-producer-seconds", type=float, default=10.0)
     parser.add_argument("--source-version", default="Antman.VST.AI.v1")
+    parser.add_argument(
+        "--decoded-color-order",
+        choices=sorted(VALID_DECODED_COLOR_ORDERS),
+        default="BGR",
+        help="Color channel order used when SHM exposes decoded HxWx3 frames instead of native NV12.",
+    )
     return parser.parse_args()
 
 
@@ -335,6 +524,7 @@ def main() -> int:
             resolved_shm_name=resolve_vst_shm_name(args.shm_name, args.shm_eye),
             antman_root=args.antman_root,
             source_version=args.source_version,
+            decoded_color_order=args.decoded_color_order,
         )
     except Nv12FrameContractError as exc:
         status = {

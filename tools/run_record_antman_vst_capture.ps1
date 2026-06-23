@@ -9,6 +9,7 @@ param(
     [int]$WaitTimeoutMs = 1000,
     [double]$WaitForProducerSeconds = 10.0,
     [string]$SourceVersion = "Antman.VST.AI.v1",
+    [string]$DecodedColorOrder = "BGR",
     [string]$PythonExe = ""
 )
 
@@ -43,6 +44,7 @@ Write-Host "Output dir:  $WorkDir"
 Write-Host "Duration:    $DurationSeconds seconds"
 Write-Host "Python:      $PythonExe"
 Write-Host "VST eye:     $ShmEye"
+Write-Host "Decoded:     $DecodedColorOrder -> NV12 if SHM exposes HxWx3 frames"
 Write-Host "Need headset: connect/start the headset VST producer before expecting frames."
 
 $recorderArgs = @(
@@ -54,7 +56,8 @@ $recorderArgs = @(
     "--shm-eye", $ShmEye,
     "--wait-timeout-ms", "$WaitTimeoutMs",
     "--wait-for-producer-seconds", "$WaitForProducerSeconds",
-    "--source-version", $SourceVersion
+    "--source-version", $SourceVersion,
+    "--decoded-color-order", $DecodedColorOrder
 )
 
 if ($MaxFrames -gt 0) {
@@ -74,8 +77,8 @@ if ($ExitCode -eq 3) {
     Write-Host "Use -PythonExe to point at the Antman_smart venv, or install the missing dependency in the selected Python."
 }
 if ($ExitCode -eq 4) {
-    Write-Host "Unsupported frame contract: SHM frames were not exposed as native NV12 bytes with width/height/stride."
-    Write-Host "Do not use this output as replay input until the live producer contract is confirmed."
+    Write-Host "Unsupported frame contract: SHM frames could not be recorded as native or converted NV12."
+    Write-Host "Check the JSON error, frame shape, and -DecodedColorOrder setting."
 }
 
 Write-Host ""
