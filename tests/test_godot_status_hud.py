@@ -29,6 +29,7 @@ class GodotStatusHudTests(unittest.TestCase):
         self.assertIn("var passthrough_overlay_status_path: String = PASSTHROUGH_OVERLAY_STATUS_RES", source)
         self.assertIn("func build_status_label(parent: Node3D) -> Label3D:", source)
         self.assertIn('"MeshCardStatus"', source)
+        self.assertIn("_status_label.pixel_size = 0.0025", source)
         self.assertIn("func update_status_label(snapshot: Dictionary, delta: float = 0.0, force: bool = false) -> void:", source)
         self.assertIn("if not _status_label.visible:", source)
         self.assertIn("_status_label_update_elapsed += delta", source)

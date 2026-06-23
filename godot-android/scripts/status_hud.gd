@@ -42,6 +42,7 @@ func build_status_label(parent: Node3D) -> Label3D:
 	_status_label = Label3D.new()
 	_status_label.name = "MeshCardStatus"
 	_status_label.font_size = 22
+	_status_label.pixel_size = 0.0025
 	_status_label.outline_size = 8
 	_status_label.no_depth_test = true
 	_status_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
