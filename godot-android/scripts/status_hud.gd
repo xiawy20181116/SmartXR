@@ -18,6 +18,7 @@ class_name StatusHud
 const PROXY_TARGETS_STATUS_RES := "user://proxy_targets_live_status.json"
 const PASSTHROUGH_OVERLAY_STATUS_RES := "user://passthrough_overlay_status.json"
 const STATUS_FILE_WRITE_INTERVAL_SECONDS := 0.25
+const STATUS_LABEL_UPDATE_INTERVAL_SECONDS := 0.25
 
 ## Status file paths are vars (defaulting to the historical user:// consts) so
 ## the script-only probe can redirect writes to a temp directory.
@@ -25,6 +26,7 @@ var proxy_targets_status_path: String = PROXY_TARGETS_STATUS_RES
 var passthrough_overlay_status_path: String = PASSTHROUGH_OVERLAY_STATUS_RES
 
 var _status_label: Label3D = null
+var _status_label_update_elapsed := 0.0
 var _proxy_targets_status_write_elapsed := 0.0
 var _passthrough_overlay_status_write_elapsed := 0.0
 
@@ -49,9 +51,15 @@ func build_status_label(parent: Node3D) -> Label3D:
 	return _status_label
 
 
-func update_status_label(snapshot: Dictionary) -> void:
+func update_status_label(snapshot: Dictionary, delta: float = 0.0, force: bool = false) -> void:
 	if _status_label == null:
 		return
+	if not _status_label.visible:
+		return
+	_status_label_update_elapsed += delta
+	if not force and _status_label_update_elapsed < STATUS_LABEL_UPDATE_INTERVAL_SECONDS:
+		return
+	_status_label_update_elapsed = 0.0
 	var corners: Dictionary = snapshot.get("corners", {})
 	var tl: Vector3 = corners.get("TL", Vector3.ZERO)
 	var tr: Vector3 = corners.get("TR", Vector3.ZERO)
@@ -64,7 +72,7 @@ func update_status_label(snapshot: Dictionary) -> void:
 	var xr_line := _format_xr_status_line(snapshot)
 	var vst_line := _format_vst_status_line(snapshot.get("vst", {}))
 	var proxy_targets_line := _format_proxy_targets_status_line(snapshot.get("proxy_targets", {}))
-	_status_label.text = "3DoF Anchor\nWS: %s  Cmd: %s  Face: 3DoF  Mode: %s\nCamera Pos xyz: %s\nCamera Rot xyz: %s\nXROrigin Pos xyz: %s\nBBox cx/cy/w/h: %.0f %.0f %.0f %.0f  Depth: %.2f\nYaw/Pitch/Depth: %.1f %.1f %.2f  Angular W/H: %.1f %.1f  Rot: %.1f %.1f %.1f\nSpeed: %.1f deg/s  Paused: %s\nTL %.2f %.2f %.2f  TR %.2f %.2f %.2f\nBL %.2f %.2f %.2f  BR %.2f %.2f %.2f\n%s\n%s\n%s" % [
+	var next_text := "3DoF Anchor\nWS: %s  Cmd: %s  Face: 3DoF  Mode: %s\nCamera Pos xyz: %s\nCamera Rot xyz: %s\nXROrigin Pos xyz: %s\nBBox cx/cy/w/h: %.0f %.0f %.0f %.0f  Depth: %.2f\nYaw/Pitch/Depth: %.1f %.1f %.2f  Angular W/H: %.1f %.1f  Rot: %.1f %.1f %.1f\nSpeed: %.1f deg/s  Paused: %s\nTL %.2f %.2f %.2f  TR %.2f %.2f %.2f\nBL %.2f %.2f %.2f  BR %.2f %.2f %.2f\n%s\n%s\n%s" % [
 		"connected" if bool(snapshot.get("ws_connected", false)) else "waiting",
 		str(snapshot.get("last_command", "none")),
 		str(snapshot.get("anchor_mode", "manual")),
@@ -102,6 +110,8 @@ func update_status_label(snapshot: Dictionary) -> void:
 		xr_line,
 		vst_line,
 	]
+	if next_text != _status_label.text:
+		_status_label.text = next_text
 
 
 func write_status_files(snapshot: Dictionary, delta: float) -> void:

@@ -310,7 +310,7 @@ func _build_status_hud() -> void:
 	add_child(_status_hud)
 	var status_label: Label3D = _status_hud.build_status_label(_card_anchor)
 	status_label.visible = _status_hud_visible()
-	_status_hud.update_status_label(_build_status_snapshot())
+	_status_hud.update_status_label(_build_status_snapshot(), 0.0, true)
 
 
 func _build_debug_target_marker() -> void:
@@ -824,7 +824,7 @@ func _update_status_hud(delta: float) -> void:
 		return
 	var snapshot := _build_status_snapshot()
 	if _card_anchor != null:
-		_status_hud.update_status_label(snapshot)
+		_status_hud.update_status_label(snapshot, delta)
 	_status_hud.write_status_files(snapshot, delta)
 
 
