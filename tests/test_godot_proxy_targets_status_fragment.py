@@ -5,6 +5,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 FRAGMENT = ROOT / "godot-android" / "scripts" / "proxy_targets_status_fragment.gd"
 SCRIPT = ROOT / "godot-android" / "scripts" / "AndroidMovingCard.gd"
+CARD_RECEIVER = ROOT / "godot-android" / "scripts" / "card_receiver.gd"
 PROBE = ROOT / "godot-android" / "tests" / "script_only_proxy_targets_status_fragment_probe.gd"
 RUNNER = ROOT / "tools" / "run_godot_proxy_targets_status_fragment_probe.ps1"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
@@ -40,17 +41,20 @@ class GodotProxyTargetsStatusFragmentTests(unittest.TestCase):
 
     def test_moving_card_delegates_proxy_diagnostics_to_fragment(self):
         card = SCRIPT.read_text(encoding="utf-8")
+        receiver = CARD_RECEIVER.read_text(encoding="utf-8")
 
         self.assertIn('const ProxyTargetsStatusFragmentScript := preload("res://scripts/proxy_targets_status_fragment.gd")', card)
         self.assertIn("var _proxy_targets_status_fragment = ProxyTargetsStatusFragmentScript.new()", card)
-        self.assertIn("_proxy_targets_status_fragment.set_packet_preview(", card)
-        self.assertIn("_proxy_targets_status_fragment.set_error(", card)
-        self.assertIn("_proxy_targets_status_fragment.set_message_type(", card)
-        self.assertIn("_proxy_targets_status_fragment.record_parsed_message(message, _proxy_targets_head_to_world_info())", card)
+        self.assertIn('"status_fragment": _proxy_targets_status_fragment', card)
+        self.assertIn("_status_fragment.set_packet_preview(", receiver)
+        self.assertIn("_status_fragment.set_error(", receiver)
+        self.assertIn("_status_fragment.set_message_type(", receiver)
+        self.assertIn("_status_fragment.record_parsed_message(message, head_info)", receiver)
         self.assertIn("func _proxy_targets_head_to_world_info() -> Dictionary:", card)
         self.assertIn("ProxyTargetsStatusFragmentScript.proxy_target_count(_proxy_targets_proxy_dictionary())", card)
         self.assertIn("ProxyTargetsStatusFragmentScript.proxy_target_ids(_proxy_targets_proxy_dictionary())", card)
-        self.assertIn("_proxy_targets_status_fragment.status_values({", card)
+        self.assertIn("_card_receiver.status_values({", card)
+        self.assertIn("_status_fragment.status_values({", receiver)
         self.assertNotIn("func _record_proxy_targets_diagnostics", card)
         self.assertNotIn("func _record_proxy_targets_head_to_world_diagnostics", card)
         self.assertNotIn("func _vector3_from_status_array", card)

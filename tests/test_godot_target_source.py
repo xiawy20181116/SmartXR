@@ -5,6 +5,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "godot-android" / "scripts" / "target_source.gd"
 SCRIPT = ROOT / "godot-android" / "scripts" / "AndroidMovingCard.gd"
+CARD_RECEIVER = ROOT / "godot-android" / "scripts" / "card_receiver.gd"
 VALIDATION_SCENE_BUILDER = ROOT / "godot-android" / "scripts" / "validation_scene_builder.gd"
 PROBE = ROOT / "godot-android" / "tests" / "script_only_target_source_probe.gd"
 RUNNER = ROOT / "tools" / "run_godot_target_source_probe.ps1"
@@ -46,6 +47,7 @@ class GodotTargetSourceTests(unittest.TestCase):
 
     def test_moving_card_wires_vst_target_source_boundary(self):
         card = SCRIPT.read_text(encoding="utf-8")
+        receiver = CARD_RECEIVER.read_text(encoding="utf-8")
         builder = VALIDATION_SCENE_BUILDER.read_text(encoding="utf-8")
 
         self.assertIn('const TargetSourceScript := preload("res://scripts/target_source.gd")', card)
@@ -53,16 +55,17 @@ class GodotTargetSourceTests(unittest.TestCase):
         self.assertIn("var _proxy_targets_target_source = null", card)
         self.assertIn("TargetSourceScript.VSTTargetSource.new(", card)
         self.assertIn("TargetSourceScript.ProxyTargetsTargetSource.new(", card)
-        self.assertIn("_proxy_targets_target_source.set_on_message_parsed(_on_proxy_targets_message_parsed)", card)
+        self.assertIn('"target_source": _proxy_targets_target_source', card)
+        self.assertIn("_target_source.set_on_message_parsed(_on_message_parsed)", receiver)
         self.assertIn("_vst_target_source.set_on_target_updated(_on_vst_target_updated)", card)
         self.assertIn("_vst_target_source.set_on_target_lost(_on_vst_target_lost)", card)
         self.assertIn("_vst_target_source.update_target(target_id, transform, confidence, timestamp_ms)", card)
         self.assertIn("target_source.apply_proxy_targets_json(sample)", builder)
-        self.assertIn("_proxy_targets_target_source.apply_proxy_targets_json(payload)", card)
-        self.assertIn("_proxy_targets_target_source.last_error()", card)
+        self.assertIn("_target_source.apply_proxy_targets_json(payload)", receiver)
+        self.assertIn("_target_source.last_error()", receiver)
         self.assertIn("_vst_target_source.advance(float(Time.get_ticks_msec()))", card)
         self.assertIn("if _vst_target_source.target_state() == TargetSourceScript.TRACKABLE_STATE_LOST:", card)
-        self.assertIn("func _on_proxy_targets_message_parsed(message: Dictionary) -> void:", card)
+        self.assertIn("func _on_message_parsed(message: Dictionary) -> void:", receiver)
         self.assertIn("func _on_vst_target_updated(_target_id: String, _transform: Transform3D) -> void:", card)
         self.assertIn("func _on_vst_target_lost(_target_id: String) -> void:", card)
         self.assertNotIn("class TrackableTarget:", card)

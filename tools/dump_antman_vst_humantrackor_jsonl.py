@@ -159,18 +159,24 @@ def _install_antman_paths(antman_root: Path) -> None:
             sys.path.insert(0, value)
 
 
-def _create_live_reader_and_tracker(args: argparse.Namespace) -> tuple[Any, Any]:
+def create_live_vst_reader(args: argparse.Namespace) -> Any:
     _install_antman_paths(args.antman_root)
     from human_face_visualizer.async_runtime import VstAiShmReader
-    from human_trackor.api import HumanTrackor
 
     shm_name = resolve_vst_shm_name(args.shm_name, getattr(args, "shm_eye", "Right"))
-    reader = VstAiShmReader(
+    return VstAiShmReader(
         name=shm_name,
         namespace=args.shm_namespace,
         wait_timeout_ms=args.wait_timeout_ms,
         wait_for_producer_seconds=args.wait_for_producer_seconds,
     )
+
+
+def _create_live_reader_and_tracker(args: argparse.Namespace) -> tuple[Any, Any]:
+    _install_antman_paths(args.antman_root)
+    from human_trackor.api import HumanTrackor
+
+    reader = create_live_vst_reader(args)
     tracker = HumanTrackor(
         model=args.model,
         backend=args.backend,

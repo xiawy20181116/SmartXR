@@ -1,4 +1,4 @@
-extends RefCounted
+extends "card_view_base.gd"
 
 ## Scene-node builder for the main SmartXR card view.
 ##
