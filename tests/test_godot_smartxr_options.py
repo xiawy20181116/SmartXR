@@ -60,7 +60,10 @@ class GodotSmartXROptionsTests(unittest.TestCase):
         self.assertIn("return _options.control_ws_url(WS_URL)", source)
         self.assertIn("return _options.proxy_targets_ws_url(PROXY_TARGETS_WS_URL)", source)
         self.assertIn("return _options.proxy_targets_ws_enabled(PROXY_TARGETS_WS_ENABLED)", source)
-        self.assertIn("var vst_calibration := _options.vst_camera_calibration(BBOX_HORIZONTAL_FOV_DEG, BBOX_VERTICAL_FOV_DEG)", source)
+        self.assertIn(
+            "var vst_calibration: Dictionary = _options.vst_camera_calibration(BBOX_HORIZONTAL_FOV_DEG, BBOX_VERTICAL_FOV_DEG)",
+            source,
+        )
         self.assertIn("_vst_capture.set_camera_calibration(", source)
         # Direct enable-flag checks must go through the options-backed helper.
         self.assertNotIn("if not PROXY_TARGETS_WS_ENABLED:", source)

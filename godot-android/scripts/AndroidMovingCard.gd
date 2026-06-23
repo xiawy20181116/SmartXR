@@ -901,7 +901,7 @@ func _exit_tree() -> void:
 
 
 func _setup_vst_capture() -> void:
-	var vst_calibration := _options.vst_camera_calibration(BBOX_HORIZONTAL_FOV_DEG, BBOX_VERTICAL_FOV_DEG)
+	var vst_calibration: Dictionary = _options.vst_camera_calibration(BBOX_HORIZONTAL_FOV_DEG, BBOX_VERTICAL_FOV_DEG)
 	_vst_capture.set_camera_calibration(
 		float(vst_calibration.get("horizontal_fov_deg", BBOX_HORIZONTAL_FOV_DEG)),
 		float(vst_calibration.get("vertical_fov_deg", BBOX_VERTICAL_FOV_DEG)),
