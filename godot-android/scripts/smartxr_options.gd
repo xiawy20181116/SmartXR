@@ -24,6 +24,7 @@ const ENV_VST_PRINCIPAL_POINT_X := "SMARTXR_VST_PRINCIPAL_POINT_X"
 const ENV_VST_PRINCIPAL_POINT_Y := "SMARTXR_VST_PRINCIPAL_POINT_Y"
 const ENV_VST_FOCAL_LENGTH_X := "SMARTXR_VST_FOCAL_LENGTH_X"
 const ENV_VST_FOCAL_LENGTH_Y := "SMARTXR_VST_FOCAL_LENGTH_Y"
+const ENV_STATUS_HUD_VISIBLE := "SMARTXR_STATUS_HUD_VISIBLE"
 
 var _config := {}
 var _config_loaded := false
@@ -104,6 +105,11 @@ func proxy_targets_ws_url(default_url: String) -> String:
 ## Whether the proxy_targets live WebSocket consumer should run.
 func proxy_targets_ws_enabled(default_enabled: bool) -> bool:
 	return resolve_bool("proxy_targets_ws_enabled", ENV_PROXY_TARGETS_WS_ENABLED, default_enabled)
+
+
+## Whether the in-headset diagnostic Label3D is visible.
+func status_hud_visible(default_visible: bool) -> bool:
+	return resolve_bool("status_hud_visible", ENV_STATUS_HUD_VISIBLE, default_visible)
 
 
 ## Right-eye VST camera calibration for bbox->head projection.

@@ -19,6 +19,7 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("[double]$ProxyTargetsTimeoutSeconds = 15.0", source)
         self.assertIn("PROXY_TARGETS_WS_URL", source)
         self.assertIn("SMARTXR_USE_PASSTHROUGH_OVERLAY", source)
+        self.assertIn("SMARTXR_STATUS_HUD_VISIBLE", source)
         self.assertIn("passthrough_overlay_status.json", source)
         self.assertIn("proxy_targets_live_status.json", source)
         self.assertIn("validate_proxy_targets_live_status.py", source)
@@ -27,7 +28,13 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("SmartXR-PCMR proxy_targets live validation", source)
         self.assertIn("SmartXR-PCMR Antman passthrough overlay", source)
         self.assertIn("Restore-EnvVar -Name \"SMARTXR_USE_PASSTHROUGH_OVERLAY\"", source)
+        self.assertIn("Restore-EnvVar -Name \"SMARTXR_STATUS_HUD_VISIBLE\"", source)
         self.assertIn("Restore-EnvVar -Name \"PROXY_TARGETS_WS_URL\"", source)
+
+    def test_validate_proxy_targets_hides_in_headset_status_hud(self):
+        source = RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn('$env:SMARTXR_STATUS_HUD_VISIBLE = "0"', source)
 
     def test_runner_copies_proxy_targets_status_into_work_dir(self):
         source = RUNNER.read_text(encoding="utf-8")

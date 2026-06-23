@@ -37,6 +37,7 @@ const PROXY_TARGETS_VALIDATION_ENABLED := true
 const PROXY_TARGETS_SAMPLE_RES := "res://fixtures/proxy_targets_sample.json"
 const PROXY_TARGETS_WS_ENABLED := true
 const PROXY_TARGETS_WS_URL := "ws://127.0.0.1:8766/proxy_targets"
+const STATUS_HUD_VISIBLE := true
 const PASSTHROUGH_OVERLAY_ENV := "SMARTXR_USE_PASSTHROUGH_OVERLAY"
 const PASSTHROUGH_OVERLAY_VIEWPORT_SIZE := Vector2i(512, 256)
 const PASSTHROUGH_OVERLAY_QUAD_SIZE_M := Vector2(0.42, 0.20)
@@ -307,7 +308,8 @@ func _build_status_hud() -> void:
 	_status_hud = StatusHudScript.new()
 	_status_hud.name = "StatusHud"
 	add_child(_status_hud)
-	_status_hud.build_status_label(_card_anchor)
+	var status_label: Label3D = _status_hud.build_status_label(_card_anchor)
+	status_label.visible = _status_hud_visible()
 	_status_hud.update_status_label(_build_status_snapshot())
 
 
@@ -371,6 +373,10 @@ func _proxy_targets_ws_url() -> String:
 
 func _control_ws_url() -> String:
 	return _options.control_ws_url(WS_URL)
+
+
+func _status_hud_visible() -> bool:
+	return _options.status_hud_visible(STATUS_HUD_VISIBLE)
 
 
 func _poll_proxy_targets_ws(delta: float) -> void:
