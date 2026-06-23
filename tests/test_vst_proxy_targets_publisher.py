@@ -73,6 +73,80 @@ class VSTProxyTargetsPublisherTests(unittest.TestCase):
         self.assertAlmostEqual(sum(component * component for component in position) ** 0.5, 2.0, places=6)
         self.assertEqual(message["targets"][0]["source_coordinate"]["source_frame"]["horizontal_fov_deg"], 70.0)
 
+    def test_vst_bbox_projection_uses_calibrated_principal_point(self):
+        publisher = load_module(PUBLISHER, "vst_proxy_targets_publisher")
+
+        message = publisher.normalize_source_payload(
+            {
+                "source": "vst",
+                "timestamp_ms": 1780911169157,
+                "image": {
+                    "w": 880,
+                    "h": 660,
+                    "camera": {
+                        "principal_point_x": 430.0,
+                        "principal_point_y": 340.0,
+                    },
+                },
+                "detections": [
+                    {
+                        "id": "person-calibrated-center",
+                        "confidence": 0.9,
+                        "depth_m": 2.0,
+                        "bbox": {"cx": 430.0, "cy": 340.0, "w": 100.0, "h": 200.0},
+                    }
+                ],
+            }
+        )
+
+        target = message["targets"][0]
+        position = target["transform"]["position"]
+        source_frame = target["source_coordinate"]["source_frame"]
+        self.assertAlmostEqual(position[0], 0.0, places=6)
+        self.assertAlmostEqual(position[1], 0.0, places=6)
+        self.assertAlmostEqual(position[2], -2.0, places=6)
+        self.assertEqual(source_frame["principal_point_x"], 430.0)
+        self.assertEqual(source_frame["principal_point_y"], 340.0)
+
+    def test_vst_bbox_projection_prefers_calibrated_focal_lengths(self):
+        publisher = load_module(PUBLISHER, "vst_proxy_targets_publisher")
+
+        message = publisher.normalize_source_payload(
+            {
+                "source": "vst",
+                "timestamp_ms": 1780911169157,
+                "image": {
+                    "w": 640,
+                    "h": 480,
+                    "camera": {
+                        "fx": 241.14032906751385,
+                        "fy": 241.60074879502008,
+                        "cx": 318.6850230882512,
+                        "cy": 240.9308751924166,
+                    },
+                },
+                "detections": [
+                    {
+                        "id": "person-rb-principal",
+                        "confidence": 0.9,
+                        "depth_m": 2.0,
+                        "bbox": {"cx": 318.6850230882512, "cy": 240.9308751924166, "w": 100.0, "h": 200.0},
+                    }
+                ],
+            }
+        )
+
+        target = message["targets"][0]
+        position = target["transform"]["position"]
+        source_frame = target["source_coordinate"]["source_frame"]
+        self.assertAlmostEqual(position[0], 0.0, places=6)
+        self.assertAlmostEqual(position[1], 0.0, places=6)
+        self.assertAlmostEqual(position[2], -2.0, places=6)
+        self.assertEqual(source_frame["focal_length_x"], 241.14032906751385)
+        self.assertEqual(source_frame["focal_length_y"], 241.60074879502008)
+        self.assertEqual(source_frame["principal_point_x"], 318.6850230882512)
+        self.assertEqual(source_frame["principal_point_y"], 240.9308751924166)
+
     def test_vst_bbox_without_depth_uses_five_meter_default(self):
         publisher = load_module(PUBLISHER, "vst_proxy_targets_publisher")
 

@@ -94,6 +94,28 @@ def _fov_degrees(detection: dict[str, Any], root_image: dict[str, Any]) -> tuple
     )
 
 
+def _principal_point(detection: dict[str, Any], root_image: dict[str, Any], image_w: float, image_h: float) -> tuple[float, float]:
+    camera = detection.get("camera", root_image.get("camera", {}))
+    if not isinstance(camera, dict):
+        camera = {}
+    return (
+        as_float(camera.get("principal_point_x", camera.get("cx")), image_w * 0.5),
+        as_float(camera.get("principal_point_y", camera.get("cy")), image_h * 0.5),
+    )
+
+
+def _focal_lengths(detection: dict[str, Any], root_image: dict[str, Any]) -> tuple[float | None, float | None]:
+    camera = detection.get("camera", root_image.get("camera", {}))
+    if not isinstance(camera, dict):
+        camera = {}
+    fx = as_float(camera.get("focal_length_x", camera.get("fx")), -1.0)
+    fy = as_float(camera.get("focal_length_y", camera.get("fy")), -1.0)
+    return (
+        fx if fx > 0.0 else None,
+        fy if fy > 0.0 else None,
+    )
+
+
 def _right_eye_to_head_matrix(detection: dict[str, Any], root_image: dict[str, Any]) -> list[float] | None:
     camera = detection.get("camera", root_image.get("camera", {}))
     if not isinstance(camera, dict):
@@ -140,14 +162,40 @@ def _camera_point_from_bbox(
     cx = as_float(bbox.get("cx"), image_w * 0.5)
     cy = as_float(bbox.get("cy"), image_h * 0.5)
     horizontal_fov_deg, vertical_fov_deg = _fov_degrees(detection, root_image)
+    principal_point_x, principal_point_y = _principal_point(detection, root_image, image_w, image_h)
+    focal_length_x, focal_length_y = _focal_lengths(detection, root_image)
+    resolved_focal_length_x = (
+        focal_length_x
+        if focal_length_x is not None
+        else (image_w * 0.5) / math.tan(math.radians(horizontal_fov_deg) * 0.5)
+    )
+    resolved_focal_length_y = (
+        focal_length_y
+        if focal_length_y is not None
+        else (image_h * 0.5) / math.tan(math.radians(vertical_fov_deg) * 0.5)
+    )
     point_vst = project_bbox_center_to_camera_point(
-        cx, cy, image_w, image_h, horizontal_fov_deg, vertical_fov_deg, depth_m
+        cx,
+        cy,
+        image_w,
+        image_h,
+        horizontal_fov_deg,
+        vertical_fov_deg,
+        depth_m,
+        principal_point_x,
+        principal_point_y,
+        focal_length_x,
+        focal_length_y,
     )
     return point_vst, {
         "image_w": image_w,
         "image_h": image_h,
         "cx": cx,
         "cy": cy,
+        "principal_point_x": principal_point_x,
+        "principal_point_y": principal_point_y,
+        "focal_length_x": resolved_focal_length_x,
+        "focal_length_y": resolved_focal_length_y,
         "depth_m": depth_m,
         "horizontal_fov_deg": horizontal_fov_deg,
         "vertical_fov_deg": vertical_fov_deg,
@@ -180,6 +228,10 @@ def _source_coordinate_diagnostics(
             "h": camera["image_h"],
             "center_x": camera["cx"],
             "center_y": camera["cy"],
+            "principal_point_x": camera["principal_point_x"],
+            "principal_point_y": camera["principal_point_y"],
+            "focal_length_x": camera["focal_length_x"],
+            "focal_length_y": camera["focal_length_y"],
             "anchor_depth": camera["depth_m"],
             "horizontal_fov_deg": camera["horizontal_fov_deg"],
             "vertical_fov_deg": camera["vertical_fov_deg"],

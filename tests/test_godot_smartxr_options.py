@@ -35,9 +35,18 @@ class GodotSmartXROptionsTests(unittest.TestCase):
         # Historical env var name is preserved for the proxy_targets stream.
         self.assertIn('const ENV_PROXY_TARGETS_WS_URL := "PROXY_TARGETS_WS_URL"', source)
         self.assertIn('const ENV_PROXY_TARGETS_WS_ENABLED := "SMARTXR_PROXY_TARGETS_WS_ENABLED"', source)
+        self.assertIn('const ENV_VST_HORIZONTAL_FOV_DEG := "SMARTXR_VST_HORIZONTAL_FOV_DEG"', source)
+        self.assertIn('const ENV_VST_VERTICAL_FOV_DEG := "SMARTXR_VST_VERTICAL_FOV_DEG"', source)
+        self.assertIn('const ENV_VST_PRINCIPAL_POINT_X := "SMARTXR_VST_PRINCIPAL_POINT_X"', source)
+        self.assertIn('const ENV_VST_PRINCIPAL_POINT_Y := "SMARTXR_VST_PRINCIPAL_POINT_Y"', source)
+        self.assertIn('const ENV_VST_FOCAL_LENGTH_X := "SMARTXR_VST_FOCAL_LENGTH_X"', source)
+        self.assertIn('const ENV_VST_FOCAL_LENGTH_Y := "SMARTXR_VST_FOCAL_LENGTH_Y"', source)
+        self.assertIn('const ENV_STATUS_HUD_VISIBLE := "SMARTXR_STATUS_HUD_VISIBLE"', source)
         self.assertIn("func control_ws_url(default_url: String) -> String:", source)
         self.assertIn("func proxy_targets_ws_url(default_url: String) -> String:", source)
         self.assertIn("func proxy_targets_ws_enabled(default_enabled: bool) -> bool:", source)
+        self.assertIn("func status_hud_visible(default_visible: bool) -> bool:", source)
+        self.assertIn("func vst_camera_calibration(default_hfov_deg: float, default_vfov_deg: float) -> Dictionary:", source)
 
     def test_moving_card_routes_ws_config_through_options(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -53,6 +62,13 @@ class GodotSmartXROptionsTests(unittest.TestCase):
         self.assertIn("return _options.control_ws_url(WS_URL)", source)
         self.assertIn("return _options.proxy_targets_ws_url(PROXY_TARGETS_WS_URL)", source)
         self.assertIn("return _options.proxy_targets_ws_enabled(PROXY_TARGETS_WS_ENABLED)", source)
+        self.assertIn("return _options.status_hud_visible(STATUS_HUD_VISIBLE)", source)
+        self.assertIn("status_label.visible = _status_hud_visible()", source)
+        self.assertIn(
+            "var vst_calibration: Dictionary = _options.vst_camera_calibration(BBOX_HORIZONTAL_FOV_DEG, BBOX_VERTICAL_FOV_DEG)",
+            source,
+        )
+        self.assertIn("_vst_capture.set_camera_calibration(", source)
         # Direct enable-flag checks must go through the options-backed helper.
         self.assertNotIn("if not PROXY_TARGETS_WS_ENABLED:", source)
 
@@ -63,6 +79,10 @@ class GodotSmartXROptionsTests(unittest.TestCase):
         self.assertIn("SMARTXR_CONTROL_WS_URL", doc)
         self.assertIn("PROXY_TARGETS_WS_URL", doc)
         self.assertIn("SMARTXR_PROXY_TARGETS_WS_ENABLED", doc)
+        self.assertIn("SMARTXR_STATUS_HUD_VISIBLE", doc)
+        self.assertIn("SMARTXR_VST_HORIZONTAL_FOV_DEG", doc)
+        self.assertIn("SMARTXR_VST_FOCAL_LENGTH_X", doc)
+        self.assertIn("principal_point_px", doc)
         self.assertIn("run_godot_smartxr_options_probe.ps1", doc)
 
     def test_runtime_probe_and_runner_exist(self):

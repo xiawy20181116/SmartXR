@@ -22,7 +22,7 @@ def as_int(value: Any, fallback: int) -> int:
     return fallback
 
 
-def _image_from_frame(frame: dict[str, Any]) -> dict[str, int]:
+def _image_from_frame(frame: dict[str, Any]) -> dict[str, Any]:
     image = frame.get("image")
     if isinstance(image, dict):
         width = as_int(image.get("w", image.get("width")), 0)
@@ -35,6 +35,9 @@ def _image_from_frame(frame: dict[str, Any]) -> dict[str, int]:
         result["w"] = width
     if height > 0:
         result["h"] = height
+    camera = frame.get("camera")
+    if isinstance(camera, dict):
+        result["camera"] = dict(camera)
     return result
 
 

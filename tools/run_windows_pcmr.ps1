@@ -81,10 +81,14 @@ if ($UseAntmanPassthroughOverlay) {
 $ExitCode = 0
 $OldProxyTargetsWsUrl = $env:PROXY_TARGETS_WS_URL
 $OldPassthroughOverlay = $env:SMARTXR_USE_PASSTHROUGH_OVERLAY
+$OldStatusHudVisible = $env:SMARTXR_STATUS_HUD_VISIBLE
 $GodotProcess = $null
 
 try {
     $env:PROXY_TARGETS_WS_URL = $ProxyTargetsWsUrl
+    if ($ValidateProxyTargets -and [string]::IsNullOrWhiteSpace($env:SMARTXR_STATUS_HUD_VISIBLE)) {
+        $env:SMARTXR_STATUS_HUD_VISIBLE = "0"
+    }
     if ($UseAntmanPassthroughOverlay) {
         $env:SMARTXR_USE_PASSTHROUGH_OVERLAY = "1"
         Remove-Item -LiteralPath $PassthroughOverlayStatusFile -Force -ErrorAction SilentlyContinue
@@ -128,6 +132,7 @@ try {
     Stop-ChildProcess -Process $GodotProcess
     Restore-EnvVar -Name "PROXY_TARGETS_WS_URL" -Value $OldProxyTargetsWsUrl
     Restore-EnvVar -Name "SMARTXR_USE_PASSTHROUGH_OVERLAY" -Value $OldPassthroughOverlay
+    Restore-EnvVar -Name "SMARTXR_STATUS_HUD_VISIBLE" -Value $OldStatusHudVisible
     & $GxrExtensionSwitch -Mode enable -ProjectDir $ProjectDir
 
     if ($ValidateProxyTargets -or $UseAntmanPassthroughOverlay) {

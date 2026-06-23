@@ -37,6 +37,7 @@ const PROXY_TARGETS_VALIDATION_ENABLED := true
 const PROXY_TARGETS_SAMPLE_RES := "res://fixtures/proxy_targets_sample.json"
 const PROXY_TARGETS_WS_ENABLED := true
 const PROXY_TARGETS_WS_URL := "ws://127.0.0.1:8766/proxy_targets"
+const STATUS_HUD_VISIBLE := true
 const PASSTHROUGH_OVERLAY_ENV := "SMARTXR_USE_PASSTHROUGH_OVERLAY"
 const PASSTHROUGH_OVERLAY_VIEWPORT_SIZE := Vector2i(512, 256)
 const PASSTHROUGH_OVERLAY_QUAD_SIZE_M := Vector2(0.42, 0.20)
@@ -324,8 +325,9 @@ func _build_status_hud() -> void:
 	_status_hud = StatusHudScript.new()
 	_status_hud.name = "StatusHud"
 	add_child(_status_hud)
-	_status_hud.build_status_label(_card_anchor)
-	_status_hud.update_status_label(_build_status_snapshot())
+	var status_label: Label3D = _status_hud.build_status_label(_card_anchor)
+	status_label.visible = _status_hud_visible()
+	_status_hud.update_status_label(_build_status_snapshot(), 0.0, true)
 
 
 func _build_debug_target_marker() -> void:
@@ -380,6 +382,10 @@ func _proxy_targets_ws_url() -> String:
 
 func _control_ws_url() -> String:
 	return _options.control_ws_url(WS_URL)
+
+
+func _status_hud_visible() -> bool:
+	return _options.status_hud_visible(STATUS_HUD_VISIBLE)
 
 
 func _proxy_targets_head_to_world_info() -> Dictionary:
@@ -806,7 +812,7 @@ func _update_status_hud(delta: float) -> void:
 		return
 	var snapshot := _build_status_snapshot()
 	if _card_anchor != null:
-		_status_hud.update_status_label(snapshot)
+		_status_hud.update_status_label(snapshot, delta)
 	_status_hud.write_status_files(snapshot, delta)
 
 
@@ -883,6 +889,13 @@ func _exit_tree() -> void:
 
 
 func _setup_vst_capture() -> void:
+	var vst_calibration: Dictionary = _options.vst_camera_calibration(BBOX_HORIZONTAL_FOV_DEG, BBOX_VERTICAL_FOV_DEG)
+	_vst_capture.set_camera_calibration(
+		float(vst_calibration.get("horizontal_fov_deg", BBOX_HORIZONTAL_FOV_DEG)),
+		float(vst_calibration.get("vertical_fov_deg", BBOX_VERTICAL_FOV_DEG)),
+		Vector2(vst_calibration.get("principal_point_px", Vector2(-1.0, -1.0))),
+		Vector2(vst_calibration.get("focal_length_px", Vector2(-1.0, -1.0)))
+	)
 	_vst_capture.set_raw_image_callback(_on_vst_raw_right_image)
 	_vst_capture.set_boxes_callback(_on_vst_tracker_boxes)
 	_vst_capture.set_anchor_callback(_on_vst_tracker_anchor)

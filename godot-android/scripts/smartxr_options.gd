@@ -18,6 +18,13 @@ const CONFIG_RES := "user://smartxr_options.json"
 const ENV_CONTROL_WS_URL := "SMARTXR_CONTROL_WS_URL"
 const ENV_PROXY_TARGETS_WS_URL := "PROXY_TARGETS_WS_URL"
 const ENV_PROXY_TARGETS_WS_ENABLED := "SMARTXR_PROXY_TARGETS_WS_ENABLED"
+const ENV_VST_HORIZONTAL_FOV_DEG := "SMARTXR_VST_HORIZONTAL_FOV_DEG"
+const ENV_VST_VERTICAL_FOV_DEG := "SMARTXR_VST_VERTICAL_FOV_DEG"
+const ENV_VST_PRINCIPAL_POINT_X := "SMARTXR_VST_PRINCIPAL_POINT_X"
+const ENV_VST_PRINCIPAL_POINT_Y := "SMARTXR_VST_PRINCIPAL_POINT_Y"
+const ENV_VST_FOCAL_LENGTH_X := "SMARTXR_VST_FOCAL_LENGTH_X"
+const ENV_VST_FOCAL_LENGTH_Y := "SMARTXR_VST_FOCAL_LENGTH_Y"
+const ENV_STATUS_HUD_VISIBLE := "SMARTXR_STATUS_HUD_VISIBLE"
 
 var _config := {}
 var _config_loaded := false
@@ -75,6 +82,15 @@ func resolve_bool(config_key: String, env_name: String, default_value: bool) -> 
 	return default_value
 
 
+func resolve_float(config_key: String, env_name: String, default_value: float) -> float:
+	var env_value := OS.get_environment(env_name).strip_edges()
+	if not env_value.is_empty():
+		return float(env_value)
+	if _config.has(config_key) and (typeof(_config[config_key]) == TYPE_FLOAT or typeof(_config[config_key]) == TYPE_INT):
+		return float(_config[config_key])
+	return default_value
+
+
 ## Control channel (keyboard ws_control server). Overridable so the URL is
 ## no longer pinned to one development machine's LAN address.
 func control_ws_url(default_url: String) -> String:
@@ -89,3 +105,24 @@ func proxy_targets_ws_url(default_url: String) -> String:
 ## Whether the proxy_targets live WebSocket consumer should run.
 func proxy_targets_ws_enabled(default_enabled: bool) -> bool:
 	return resolve_bool("proxy_targets_ws_enabled", ENV_PROXY_TARGETS_WS_ENABLED, default_enabled)
+
+
+## Whether the in-headset diagnostic Label3D is visible.
+func status_hud_visible(default_visible: bool) -> bool:
+	return resolve_bool("status_hud_visible", ENV_STATUS_HUD_VISIBLE, default_visible)
+
+
+## Right-eye VST camera calibration for bbox->head projection.
+func vst_camera_calibration(default_hfov_deg: float, default_vfov_deg: float) -> Dictionary:
+	return {
+		"horizontal_fov_deg": resolve_float("vst_horizontal_fov_deg", ENV_VST_HORIZONTAL_FOV_DEG, default_hfov_deg),
+		"vertical_fov_deg": resolve_float("vst_vertical_fov_deg", ENV_VST_VERTICAL_FOV_DEG, default_vfov_deg),
+		"principal_point_px": Vector2(
+			resolve_float("vst_principal_point_x", ENV_VST_PRINCIPAL_POINT_X, -1.0),
+			resolve_float("vst_principal_point_y", ENV_VST_PRINCIPAL_POINT_Y, -1.0)
+		),
+		"focal_length_px": Vector2(
+			resolve_float("vst_focal_length_x", ENV_VST_FOCAL_LENGTH_X, -1.0),
+			resolve_float("vst_focal_length_y", ENV_VST_FOCAL_LENGTH_Y, -1.0)
+		),
+	}
