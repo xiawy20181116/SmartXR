@@ -46,6 +46,8 @@ def _make_detector(args):
 
 
 def _session_dirs(capture_root: Path) -> list[Path]:
+    if (capture_root / "nv12_packets").is_dir():
+        return [capture_root]
     captures = capture_root / "captures"
     base = captures if captures.is_dir() else capture_root
     return sorted(p for p in base.iterdir() if p.is_dir() and (p / "nv12_packets").is_dir())
