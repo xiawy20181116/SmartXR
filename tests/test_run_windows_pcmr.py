@@ -34,7 +34,9 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
     def test_validate_proxy_targets_hides_in_headset_status_hud(self):
         source = RUNNER.read_text(encoding="utf-8")
 
+        self.assertIn('if ($ValidateProxyTargets -and [string]::IsNullOrWhiteSpace($env:SMARTXR_STATUS_HUD_VISIBLE)) {', source)
         self.assertIn('$env:SMARTXR_STATUS_HUD_VISIBLE = "0"', source)
+        self.assertNotIn('if ($ValidateProxyTargets) {\n        $env:SMARTXR_STATUS_HUD_VISIBLE = "0"\n    }', source)
 
     def test_runner_copies_proxy_targets_status_into_work_dir(self):
         source = RUNNER.read_text(encoding="utf-8")

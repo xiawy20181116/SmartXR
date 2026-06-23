@@ -86,7 +86,7 @@ $GodotProcess = $null
 
 try {
     $env:PROXY_TARGETS_WS_URL = $ProxyTargetsWsUrl
-    if ($ValidateProxyTargets) {
+    if ($ValidateProxyTargets -and [string]::IsNullOrWhiteSpace($env:SMARTXR_STATUS_HUD_VISIBLE)) {
         $env:SMARTXR_STATUS_HUD_VISIBLE = "0"
     }
     if ($UseAntmanPassthroughOverlay) {
