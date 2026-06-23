@@ -55,6 +55,12 @@ class ExtractedNv12Frame:
         self.conversion = conversion
 
 
+class FrameTimestamp:
+    def __init__(self, *, timestamp_us: int, source: str) -> None:
+        self.timestamp_us = int(timestamp_us)
+        self.source = source
+
+
 def _value(obj: Any, names: tuple[str, ...], default: Any = None) -> Any:
     if isinstance(obj, dict):
         for name in names:
@@ -269,14 +275,20 @@ def extract_nv12_frame(frame: Any, *, decoded_color_order: str = "BGR") -> Extra
     )
 
 
-def frame_timestamp_us(frame: Any, fallback_frame_id: int) -> int:
+def frame_timestamp_us(
+    frame: Any,
+    *,
+    capture_monotonic_s: float,
+    start_monotonic_s: float,
+) -> FrameTimestamp:
     value = _value(frame, ("timestamp_us", "capture_timestamp_us", "ts_us", "timestampUsec"))
     if value is not None:
-        return int(value)
+        return FrameTimestamp(timestamp_us=int(value), source="frame_timestamp_us")
     value_ms = _value(frame, ("timestamp_ms", "capture_timestamp_ms", "ts_ms"))
     if value_ms is not None:
-        return int(float(value_ms) * 1000)
-    return int(fallback_frame_id)
+        return FrameTimestamp(timestamp_us=int(float(value_ms) * 1000), source="frame_timestamp_ms")
+    fallback_us = int(max(0.0, capture_monotonic_s - start_monotonic_s) * 1_000_000)
+    return FrameTimestamp(timestamp_us=fallback_us, source="recorder_monotonic_fallback")
 
 
 class CaptureSessionWriter:
@@ -424,10 +436,14 @@ def record_vst_capture(
     last_frame_id: int | None = None
     first_timestamp_us: int | None = None
     last_timestamp_us: int | None = None
+    timestamp_source: str | None = None
     reason = "duration_elapsed"
 
     try:
-        while clock() - start < duration_seconds:
+        while True:
+            now = clock()
+            if now - start >= duration_seconds:
+                break
             ok, frame_id, frame = reader.read_latest()
             if not ok:
                 reason = "source_read_failed"
@@ -443,7 +459,16 @@ def record_vst_capture(
                     time.sleep(sleep_seconds)
                 continue
 
-            timestamp_us = frame_timestamp_us(frame, frame_id)
+            timestamp = frame_timestamp_us(
+                frame,
+                capture_monotonic_s=now,
+                start_monotonic_s=start,
+            )
+            timestamp_us = timestamp.timestamp_us
+            if timestamp_source is None:
+                timestamp_source = timestamp.source
+            elif timestamp_source != timestamp.source:
+                timestamp_source = "mixed"
             if first_timestamp_us is None:
                 first_timestamp_us = timestamp_us
             at_ms = (timestamp_us - first_timestamp_us) / 1000.0
@@ -466,7 +491,7 @@ def record_vst_capture(
     elapsed_s = 0.0
     if first_timestamp_us is not None and last_timestamp_us is not None:
         elapsed_s = max(0.0, (last_timestamp_us - first_timestamp_us) / 1_000_000.0)
-    fps = frames_written / elapsed_s if elapsed_s > 0 else 0.0
+    fps = (frames_written - 1) / elapsed_s if elapsed_s > 0 and frames_written > 1 else 0.0
     status = {
         "source_alive": frames_written > 0,
         "frames_written": frames_written,
@@ -474,6 +499,7 @@ def record_vst_capture(
         "reason": reason if frames_written > 0 else "no_frames_seen",
         "last_frame_id": -1 if last_frame_id is None else last_frame_id,
         "observed_fps": round(fps, 3),
+        "timestamp_source": timestamp_source,
         "source_frame_format": writer.source_frame_format,
         "conversion": writer.conversion,
         "output_dir": str(Path(session_dir).resolve()),

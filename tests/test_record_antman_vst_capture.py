@@ -57,6 +57,12 @@ class FakeDecodedBgrFrame:
         return self.pixels[y][x][c]
 
 
+class FakeDecodedBgrFrameNoTimestamp(FakeDecodedBgrFrame):
+    def __init__(self):
+        super().__init__()
+        self.timestamp_us = None
+
+
 class RecordAntmanVstCaptureTests(unittest.TestCase):
     def make_tmp_dir(self) -> Path:
         path = TMP / uuid.uuid4().hex
@@ -197,6 +203,45 @@ class RecordAntmanVstCaptureTests(unittest.TestCase):
         self.assertEqual([f.timestamp_us for f in iter_session(session_dir)], [2_000_000, 2_033_000])
         timeline = json.loads((session_dir / "timeline.json").read_text(encoding="utf-8"))
         self.assertEqual([frame["at_ms"] for frame in timeline["frames"]], [0.0, 33.0])
+
+    def test_recorder_uses_monotonic_timestamp_fallback_when_decoded_frame_has_no_timestamp(self):
+        recorder = load_module(RECORDER, "record_antman_vst_capture")
+
+        class FakeReader:
+            def __init__(self):
+                self.index = 0
+
+            def read_latest(self):
+                frames = [
+                    (True, 100, FakeDecodedBgrFrameNoTimestamp()),
+                    (True, 101, FakeDecodedBgrFrameNoTimestamp()),
+                ]
+                item = frames[self.index]
+                self.index += 1
+                return item
+
+        clock_values = iter([10.0, 10.0, 10.033001])
+        session_dir = self.make_tmp_dir()
+        status = recorder.record_vst_capture(
+            reader=FakeReader(),
+            session_dir=session_dir,
+            duration_seconds=30.0,
+            max_frames=2,
+            shm_name="Antman.VST.AI.v1",
+            shm_eye="Right",
+            resolved_shm_name="Antman.VST.AI.v1.Right",
+            antman_root=Path("E:/xia/Antman_smart"),
+            source_version="test-source",
+            sleep_seconds=0.0,
+            clock=lambda: next(clock_values),
+        )
+
+        self.assertEqual(status["timestamp_source"], "recorder_monotonic_fallback")
+        self.assertGreater(status["observed_fps"], 30.0)
+        self.assertLess(status["observed_fps"], 31.0)
+        self.assertEqual([f.timestamp_us for f in iter_session(session_dir)], [0, 33001])
+        timeline = json.loads((session_dir / "timeline.json").read_text(encoding="utf-8"))
+        self.assertEqual([frame["at_ms"] for frame in timeline["frames"]], [0.0, 33.001])
 
     def test_runner_invokes_recorder_with_antman_python(self):
         source = RUNNER.read_text(encoding="utf-8")
