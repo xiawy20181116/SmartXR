@@ -113,6 +113,12 @@ func _clear_probe_env() -> void:
 	OS.set_environment("SMARTXR_CONTROL_WS_URL", "")
 	OS.set_environment("PROXY_TARGETS_WS_URL", "")
 	OS.set_environment("SMARTXR_PROXY_TARGETS_WS_ENABLED", "")
+	OS.set_environment("SMARTXR_VST_HORIZONTAL_FOV_DEG", "")
+	OS.set_environment("SMARTXR_VST_VERTICAL_FOV_DEG", "")
+	OS.set_environment("SMARTXR_VST_PRINCIPAL_POINT_X", "")
+	OS.set_environment("SMARTXR_VST_PRINCIPAL_POINT_Y", "")
+	OS.set_environment("SMARTXR_VST_FOCAL_LENGTH_X", "")
+	OS.set_environment("SMARTXR_VST_FOCAL_LENGTH_Y", "")
 
 
 func _remove_config_file() -> void:

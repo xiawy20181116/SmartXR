@@ -84,6 +84,8 @@ def build_proxy_targets_message_from_live_frame(
     vertical_fov_deg: float | None = None,
     principal_point_x: float | None = None,
     principal_point_y: float | None = None,
+    focal_length_x: float | None = None,
+    focal_length_y: float | None = None,
     source_stats: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     record = build_frame_record(
@@ -103,6 +105,10 @@ def build_proxy_targets_message_from_live_frame(
         camera["principal_point_x"] = float(principal_point_x)
     if principal_point_y is not None:
         camera["principal_point_y"] = float(principal_point_y)
+    if focal_length_x is not None:
+        camera["fx"] = float(focal_length_x)
+    if focal_length_y is not None:
+        camera["fy"] = float(focal_length_y)
     if camera:
         normalized.setdefault("image", {})["camera"] = camera
     message = normalize_source_payload(
@@ -128,6 +134,8 @@ def next_live_proxy_targets_message(
     vertical_fov_deg: float | None = None,
     principal_point_x: float | None = None,
     principal_point_y: float | None = None,
+    focal_length_x: float | None = None,
+    focal_length_y: float | None = None,
     max_empty_reads: int = 120,
     sleep_seconds: float = 0.005,
 ) -> dict[str, Any] | None:
@@ -142,6 +150,8 @@ def next_live_proxy_targets_message(
         vertical_fov_deg=vertical_fov_deg,
         principal_point_x=principal_point_x,
         principal_point_y=principal_point_y,
+        focal_length_x=focal_length_x,
+        focal_length_y=focal_length_y,
         max_empty_reads=max_empty_reads,
         sleep_seconds=sleep_seconds,
     )
@@ -160,6 +170,8 @@ def next_live_proxy_targets_message_with_diagnostics(
     vertical_fov_deg: float | None = None,
     principal_point_x: float | None = None,
     principal_point_y: float | None = None,
+    focal_length_x: float | None = None,
+    focal_length_y: float | None = None,
     max_empty_reads: int = 120,
     sleep_seconds: float = 0.005,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
@@ -196,6 +208,8 @@ def next_live_proxy_targets_message_with_diagnostics(
             vertical_fov_deg=vertical_fov_deg,
             principal_point_x=principal_point_x,
             principal_point_y=principal_point_y,
+            focal_length_x=focal_length_x,
+            focal_length_y=focal_length_y,
             source_stats=source_stats,
         )
         if message is not None:
@@ -219,6 +233,8 @@ def _publish_loop(
     vertical_fov_deg: float | None,
     principal_point_x: float | None,
     principal_point_y: float | None,
+    focal_length_x: float | None,
+    focal_length_y: float | None,
     log_every: int,
     max_empty_reads: int,
 ) -> None:
@@ -238,6 +254,8 @@ def _publish_loop(
             vertical_fov_deg=vertical_fov_deg,
             principal_point_x=principal_point_x,
             principal_point_y=principal_point_y,
+            focal_length_x=focal_length_x,
+            focal_length_y=focal_length_y,
             max_empty_reads=max_empty_reads,
         )
         if message is None:
@@ -299,6 +317,8 @@ def serve(args: argparse.Namespace) -> int:
                             vertical_fov_deg=args.vertical_fov_deg,
                             principal_point_x=args.principal_point_x,
                             principal_point_y=args.principal_point_y,
+                            focal_length_x=args.focal_length_x,
+                            focal_length_y=args.focal_length_y,
                             log_every=args.log_every,
                             max_empty_reads=args.max_empty_reads,
                         )
@@ -322,6 +342,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--vertical-fov-deg", type=float, default=None)
     parser.add_argument("--principal-point-x", type=float, default=None)
     parser.add_argument("--principal-point-y", type=float, default=None)
+    parser.add_argument("--focal-length-x", type=float, default=None)
+    parser.add_argument("--focal-length-y", type=float, default=None)
     parser.add_argument("--max-empty-reads", type=int, default=120)
     parser.add_argument("--shm-name", default="Antman.VST.AI.v1")
     parser.add_argument("--shm-eye", default="Right", help='VST eye suffix: "Right", "Left", or "" for legacy unsuffixed SHM')

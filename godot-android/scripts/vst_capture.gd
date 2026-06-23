@@ -36,6 +36,7 @@ var _right_tracker_frame_stride := DEFAULT_RIGHT_TRACKER_FRAME_STRIDE
 var _horizontal_fov_deg := DEFAULT_HORIZONTAL_FOV_DEG
 var _vertical_fov_deg := DEFAULT_VERTICAL_FOV_DEG
 var _principal_point_px := Vector2(-1.0, -1.0)
+var _focal_length_px := Vector2(-1.0, -1.0)
 var _min_depth_m := DEFAULT_MIN_DEPTH_M
 var _max_depth_m := DEFAULT_MAX_DEPTH_M
 var _depth_m := DEFAULT_START_DEPTH_M
@@ -70,6 +71,7 @@ func _init(config: Dictionary = {}) -> void:
 	_horizontal_fov_deg = float(config.get("horizontal_fov_deg", _horizontal_fov_deg))
 	_vertical_fov_deg = float(config.get("vertical_fov_deg", _vertical_fov_deg))
 	_principal_point_px = Vector2(config.get("principal_point_px", _principal_point_px))
+	_focal_length_px = Vector2(config.get("focal_length_px", _focal_length_px))
 	_min_depth_m = float(config.get("min_depth_m", _min_depth_m))
 	_max_depth_m = float(config.get("max_depth_m", _max_depth_m))
 	_depth_m = float(config.get("start_depth_m", _depth_m))
@@ -87,10 +89,11 @@ func set_anchor_callback(on_anchor: Callable) -> void:
 	_on_anchor = on_anchor
 
 
-func set_camera_calibration(horizontal_fov_deg: float, vertical_fov_deg: float, principal_point_px: Vector2 = Vector2(-1.0, -1.0)) -> void:
+func set_camera_calibration(horizontal_fov_deg: float, vertical_fov_deg: float, principal_point_px: Vector2 = Vector2(-1.0, -1.0), focal_length_px: Vector2 = Vector2(-1.0, -1.0)) -> void:
 	_horizontal_fov_deg = clampf(horizontal_fov_deg, 1.0, 179.0)
 	_vertical_fov_deg = clampf(vertical_fov_deg, 1.0, 179.0)
 	_principal_point_px = principal_point_px
+	_focal_length_px = focal_length_px
 
 
 func setup_capture(xr_active: bool) -> void:
@@ -163,6 +166,7 @@ func status_snapshot() -> Dictionary:
 		"horizontal_fov_deg": _horizontal_fov_deg,
 		"vertical_fov_deg": _vertical_fov_deg,
 		"principal_point_px": _principal_point_px,
+		"focal_length_px": _focal_length_px,
 		"uses_eye_to_head_anchor": _uses_eye_to_head_anchor,
 		"eye_to_head_status": _eye_to_head_status,
 		"calibration_status": _calibration_status,
@@ -190,8 +194,9 @@ func uses_eye_to_head_anchor() -> bool:
 
 
 func anchor_from_bbox(center_px: Vector2, size_px: Vector2, image_size: Vector2, depth_m: float) -> Dictionary:
-	var fx := (image_size.x * 0.5) / tan(deg_to_rad(_horizontal_fov_deg) * 0.5)
-	var fy := (image_size.y * 0.5) / tan(deg_to_rad(_vertical_fov_deg) * 0.5)
+	var focal := _focal_lengths_for_image(image_size)
+	var fx := focal.x
+	var fy := focal.y
 	var principal := _principal_point_for_image(image_size)
 	var nx := (center_px.x - principal.x) / fx
 	var ny := (center_px.y - principal.y) / fy
@@ -232,6 +237,15 @@ func _principal_point_for_image(image_size: Vector2) -> Vector2:
 	if _principal_point_px.x >= 0.0 and _principal_point_px.y >= 0.0:
 		return _principal_point_px
 	return image_size * 0.5
+
+
+func _focal_lengths_for_image(image_size: Vector2) -> Vector2:
+	if _focal_length_px.x > 0.0 and _focal_length_px.y > 0.0:
+		return _focal_length_px
+	return Vector2(
+		(image_size.x * 0.5) / tan(deg_to_rad(_horizontal_fov_deg) * 0.5),
+		(image_size.y * 0.5) / tan(deg_to_rad(_vertical_fov_deg) * 0.5)
+	)
 
 
 func transform_right_vst_point_to_head(point: Vector3) -> Vector3:

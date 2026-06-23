@@ -39,6 +39,8 @@ class GodotSmartXROptionsTests(unittest.TestCase):
         self.assertIn('const ENV_VST_VERTICAL_FOV_DEG := "SMARTXR_VST_VERTICAL_FOV_DEG"', source)
         self.assertIn('const ENV_VST_PRINCIPAL_POINT_X := "SMARTXR_VST_PRINCIPAL_POINT_X"', source)
         self.assertIn('const ENV_VST_PRINCIPAL_POINT_Y := "SMARTXR_VST_PRINCIPAL_POINT_Y"', source)
+        self.assertIn('const ENV_VST_FOCAL_LENGTH_X := "SMARTXR_VST_FOCAL_LENGTH_X"', source)
+        self.assertIn('const ENV_VST_FOCAL_LENGTH_Y := "SMARTXR_VST_FOCAL_LENGTH_Y"', source)
         self.assertIn("func control_ws_url(default_url: String) -> String:", source)
         self.assertIn("func proxy_targets_ws_url(default_url: String) -> String:", source)
         self.assertIn("func proxy_targets_ws_enabled(default_enabled: bool) -> bool:", source)
@@ -71,6 +73,7 @@ class GodotSmartXROptionsTests(unittest.TestCase):
         self.assertIn("PROXY_TARGETS_WS_URL", doc)
         self.assertIn("SMARTXR_PROXY_TARGETS_WS_ENABLED", doc)
         self.assertIn("SMARTXR_VST_HORIZONTAL_FOV_DEG", doc)
+        self.assertIn("SMARTXR_VST_FOCAL_LENGTH_X", doc)
         self.assertIn("principal_point_px", doc)
         self.assertIn("run_godot_smartxr_options_probe.ps1", doc)
 

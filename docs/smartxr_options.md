@@ -26,6 +26,8 @@ For every setting, highest priority first:
 | `vst_vertical_fov_deg` | `SMARTXR_VST_VERTICAL_FOV_DEG` | `BBOX_VERTICAL_FOV_DEG` const | Right-eye VST vertical FOV for bbox projection |
 | `vst_principal_point_x` | `SMARTXR_VST_PRINCIPAL_POINT_X` | image center fallback | Right-eye principal point X in pixels |
 | `vst_principal_point_y` | `SMARTXR_VST_PRINCIPAL_POINT_Y` | image center fallback | Right-eye principal point Y in pixels |
+| `vst_focal_length_x` | `SMARTXR_VST_FOCAL_LENGTH_X` | FOV-derived fallback | Right-eye focal length X in pixels; preferred when runtime calibration provides `fx` |
+| `vst_focal_length_y` | `SMARTXR_VST_FOCAL_LENGTH_Y` | FOV-derived fallback | Right-eye focal length Y in pixels; preferred when runtime calibration provides `fy` |
 
 `PROXY_TARGETS_WS_URL` keeps its historical environment-variable name (it
 predates this class and is referenced by existing harnesses); new settings use
@@ -46,14 +48,37 @@ other non-empty value is false.
   "vst_horizontal_fov_deg": 70.0,
   "vst_vertical_fov_deg": 43.0,
   "vst_principal_point_x": 436.0,
-  "vst_principal_point_y": 326.0
+  "vst_principal_point_y": 326.0,
+  "vst_focal_length_x": 0.0,
+  "vst_focal_length_y": 0.0
 }
 ```
 
 `VSTCapture.status_snapshot()` reports `horizontal_fov_deg`,
-`vertical_fov_deg`, and `principal_point_px`, so
+`vertical_fov_deg`, `principal_point_px`, and `focal_length_px`, so
 `proxy_targets_live_status.json` can show whether a run used the default image
-center or calibrated right-eye principal point.
+center/FOV fallback or calibrated right-eye intrinsics.
+
+For the June 23, 2026 Antman dump on YAN-115, choose the calibration matching
+the live frame source:
+
+```powershell
+# camerapara_RB, 640x480 equidistant stream
+powershell -File tools\run_antman_vst_proxy_targets_live_publisher.ps1 `
+  -ShmEye Right `
+  -PrincipalPointX 318.6850230882512 `
+  -PrincipalPointY 240.9308751924166 `
+  -FocalLengthX 241.14032906751385 `
+  -FocalLengthY 241.60074879502008
+
+# camerapara_Scene_R, 2328x1744 no-distortion scene stream
+powershell -File tools\run_antman_vst_proxy_targets_live_publisher.ps1 `
+  -ShmEye Right `
+  -PrincipalPointX 1164 `
+  -PrincipalPointY 872 `
+  -FocalLengthX 872 `
+  -FocalLengthY 872
+```
 
 On Android, `user://` resolves under the app's files directory, e.g.
 `/sdcard/Android/data/com.smartxr.godotcontrol/files/`.

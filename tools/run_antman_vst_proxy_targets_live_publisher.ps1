@@ -19,6 +19,8 @@ param(
     [double]$VerticalFovDeg = 0.0,
     [double]$PrincipalPointX = -1.0,
     [double]$PrincipalPointY = -1.0,
+    [double]$FocalLengthX = 0.0,
+    [double]$FocalLengthY = 0.0,
     [string]$Device = "",
     [string]$PythonExe = ""
 )
@@ -51,8 +53,8 @@ Write-Host "WebSocket:   ws://${HostName}:${Port}/proxy_targets"
 Write-Host "Python:      $PythonExe"
 Write-Host "Source:      VST SHM + HumanTrackor"
 Write-Host "VST eye:     $ShmEye"
-if ($HorizontalFovDeg -gt 0.0 -or $VerticalFovDeg -gt 0.0 -or $PrincipalPointX -ge 0.0 -or $PrincipalPointY -ge 0.0) {
-    Write-Host "Calibration: hfov=$HorizontalFovDeg vfov=$VerticalFovDeg pp=($PrincipalPointX,$PrincipalPointY)"
+if ($HorizontalFovDeg -gt 0.0 -or $VerticalFovDeg -gt 0.0 -or $PrincipalPointX -ge 0.0 -or $PrincipalPointY -ge 0.0 -or $FocalLengthX -gt 0.0 -or $FocalLengthY -gt 0.0) {
+    Write-Host "Calibration: hfov=$HorizontalFovDeg vfov=$VerticalFovDeg pp=($PrincipalPointX,$PrincipalPointY) focal=($FocalLengthX,$FocalLengthY)"
 }
 Write-Host "Need headset: connect/start the headset VST producer before expecting frames."
 Write-Host "Seq appears after a WebSocket client connects and a target frame passes confidence gate."
@@ -93,6 +95,12 @@ if ($PrincipalPointX -ge 0.0) {
 }
 if ($PrincipalPointY -ge 0.0) {
     $publisherArgs += @("--principal-point-y", "$PrincipalPointY")
+}
+if ($FocalLengthX -gt 0.0) {
+    $publisherArgs += @("--focal-length-x", "$FocalLengthX")
+}
+if ($FocalLengthY -gt 0.0) {
+    $publisherArgs += @("--focal-length-y", "$FocalLengthY")
 }
 
 & $PythonExe @publisherArgs

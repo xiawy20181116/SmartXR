@@ -22,6 +22,8 @@ const ENV_VST_HORIZONTAL_FOV_DEG := "SMARTXR_VST_HORIZONTAL_FOV_DEG"
 const ENV_VST_VERTICAL_FOV_DEG := "SMARTXR_VST_VERTICAL_FOV_DEG"
 const ENV_VST_PRINCIPAL_POINT_X := "SMARTXR_VST_PRINCIPAL_POINT_X"
 const ENV_VST_PRINCIPAL_POINT_Y := "SMARTXR_VST_PRINCIPAL_POINT_Y"
+const ENV_VST_FOCAL_LENGTH_X := "SMARTXR_VST_FOCAL_LENGTH_X"
+const ENV_VST_FOCAL_LENGTH_Y := "SMARTXR_VST_FOCAL_LENGTH_Y"
 
 var _config := {}
 var _config_loaded := false
@@ -112,5 +114,9 @@ func vst_camera_calibration(default_hfov_deg: float, default_vfov_deg: float) ->
 		"principal_point_px": Vector2(
 			resolve_float("vst_principal_point_x", ENV_VST_PRINCIPAL_POINT_X, -1.0),
 			resolve_float("vst_principal_point_y", ENV_VST_PRINCIPAL_POINT_Y, -1.0)
+		),
+		"focal_length_px": Vector2(
+			resolve_float("vst_focal_length_x", ENV_VST_FOCAL_LENGTH_X, -1.0),
+			resolve_float("vst_focal_length_y", ENV_VST_FOCAL_LENGTH_Y, -1.0)
 		),
 	}
