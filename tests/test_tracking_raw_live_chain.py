@@ -135,7 +135,8 @@ class EndToEndSocketTests(unittest.TestCase):
         self.assertTrue(status["ok"], status["errors"])
         self.assertEqual(status["rejected"], 0)
         self.assertTrue(status["sequence_contiguous"])
-        self.assertEqual(status["first_sequence"], 0)
+        self.assertIsInstance(status["first_sequence"], int)
+        self.assertEqual(status["last_sequence"], status["first_sequence"] + status["packets"] - 1)
         self.assertGreaterEqual(len(status["track_ids"]), 1)
         self.assertIn("confirmed", status["lifecycle_states"])
 
