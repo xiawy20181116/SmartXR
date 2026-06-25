@@ -6,6 +6,10 @@ import uuid
 import unittest
 from pathlib import Path
 
+from smartxr.live_stereo_recorder import CapturedNv12Frame, write_mono_nv12_session
+from smartxr.stereo_depth import SCENE_STEREO_28, build_stereo_session_metadata
+from smartxr.stereo_package import LEFT_EYE_DIR, RIGHT_EYE_DIR
+
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "tools" / "collect_stereo_bbox_pairs.py"
@@ -68,6 +72,17 @@ class FakeTracker:
         people = self.people_by_call[self.calls]
         self.calls += 1
         return FakeTrackingResult(people)
+
+
+def make_nv12_frame(frame_id: int, timestamp_us: int) -> CapturedNv12Frame:
+    return CapturedNv12Frame(
+        frame_id=frame_id,
+        width=4,
+        height=2,
+        stride=4,
+        timestamp_us=timestamp_us,
+        payload=bytes([0x10]) * 12,
+    )
 
 
 class CollectStereoBboxPairsTests(unittest.TestCase):
@@ -183,6 +198,55 @@ class CollectStereoBboxPairsTests(unittest.TestCase):
         self.assertEqual(status["pair_count"], 0)
         self.assertEqual(status["dropped_no_target_pairs"], 1)
         self.assertFalse(status["target_observed"])
+
+    def test_builds_pairs_from_existing_stereo_record_package(self):
+        collector = load_module(TOOL, "collect_stereo_bbox_pairs")
+        package_dir = self.tmp_path / "package"
+        left_frames = [
+            make_nv12_frame(100, 100_000),
+            make_nv12_frame(101, 101_000),
+            make_nv12_frame(102, 102_000),
+        ]
+        right_frames = [
+            make_nv12_frame(100, 100_100),
+            make_nv12_frame(102, 102_100),
+            make_nv12_frame(103, 103_100),
+        ]
+        write_mono_nv12_session(package_dir / LEFT_EYE_DIR, left_frames)
+        write_mono_nv12_session(package_dir / RIGHT_EYE_DIR, right_frames)
+        metadata = build_stereo_session_metadata(
+            SCENE_STEREO_28.scaled_to(1164, 872),
+            pair_count=2,
+            dropped_unpaired_left=1,
+            dropped_unpaired_right=1,
+            max_skew_frames=1,
+        )
+        (package_dir / "stereo.json").write_text(json.dumps(metadata), encoding="utf-8")
+        tracker = FakeTracker(
+            [
+                [FakePerson(1, (640, 240, 720, 520), 0.91)],
+                [FakePerson(2, (608, 240, 688, 520), 0.90)],
+                [FakePerson(3, (644, 240, 724, 520), 0.92)],
+                [FakePerson(4, (612, 240, 692, 520), 0.88)],
+            ]
+        )
+
+        out_path = self.tmp_path / "from_package.jsonl"
+        status = collector.build_stereo_bbox_pairs_from_package(
+            package_dir=package_dir,
+            tracker=tracker,
+            out_path=out_path,
+            frame_decoder=lambda _frame: FakeFrame(),
+        )
+
+        records = [json.loads(line) for line in out_path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(status["source"], "stereo_record_package")
+        self.assertEqual(status["pair_count"], 2)
+        self.assertEqual(status["dropped_unpaired_left"], 1)
+        self.assertEqual(status["dropped_unpaired_right"], 1)
+        self.assertEqual([record["frame_id"] for record in records], [100, 102])
+        self.assertEqual(records[0]["left_bbox_xyxy"], [640, 240, 720, 520])
+        self.assertEqual(records[1]["right_bbox_xyxy"], [612, 240, 692, 520])
 
 
 if __name__ == "__main__":

@@ -22,6 +22,8 @@ from dump_antman_vst_humantrackor_jsonl import (  # noqa: E402
     _shape_width_height,
     resolve_vst_shm_name,
 )
+from smartxr.nv12_reader import Nv12Frame, read_packet_file  # noqa: E402
+from smartxr.stereo_package import load_stereo_package  # noqa: E402
 
 
 def _people_from_tracking_result(tracking_result: Any) -> list[dict[str, Any]]:
@@ -174,6 +176,7 @@ def collect_stereo_bbox_pairs(
         _release_reader(right_reader)
 
     return {
+        "source": "live_vst_shm",
         "source_alive": bool(seen_left or seen_right),
         "frames_seen_left": len(seen_left),
         "frames_seen_right": len(seen_right),
@@ -186,6 +189,87 @@ def collect_stereo_bbox_pairs(
         "last_pair_frame_id": last_pair_frame_id,
         "output_jsonl": str(out_path),
     }
+
+
+def build_stereo_bbox_pairs_from_package(
+    *,
+    package_dir: Path,
+    tracker: Any,
+    out_path: Path,
+    frame_decoder: Callable[[Nv12Frame], Any] | None = None,
+    stop_after_pairs: int | None = None,
+) -> dict[str, Any]:
+    package_dir = Path(package_dir)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    summary = load_stereo_package(package_dir)
+    if frame_decoder is None:
+        frame_decoder = nv12_frame_to_bgr
+
+    pair_count = 0
+    dropped_no_target_pairs = 0
+    last_pair_frame_id = -1
+    with out_path.open("w", encoding="utf-8", newline="\n") as handle:
+        for pair in summary.pairs:
+            left_frame = frame_decoder(read_packet_file(pair.left.path, index=pair.left.index))
+            right_frame = frame_decoder(read_packet_file(pair.right.path, index=pair.right.index))
+            left_tracking_result = tracker.process_frame(left_frame)
+            right_tracking_result = tracker.process_frame(right_frame)
+            timestamp_ms = min(pair.left.timestamp_us, pair.right.timestamp_us) // 1000
+            record = build_stereo_bbox_pair_record(
+                frame_id=pair.frame_id,
+                left_frame=left_frame,
+                right_frame=right_frame,
+                left_tracking_result=left_tracking_result,
+                right_tracking_result=right_tracking_result,
+                timestamp_ms=timestamp_ms,
+                left_source_stats={
+                    "record_package": str(package_dir),
+                    "packet_index": pair.left.index,
+                    "timestamp_us": pair.left.timestamp_us,
+                },
+                right_source_stats={
+                    "record_package": str(package_dir),
+                    "packet_index": pair.right.index,
+                    "timestamp_us": pair.right.timestamp_us,
+                },
+            )
+            if record is None:
+                dropped_no_target_pairs += 1
+                continue
+            handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+            pair_count += 1
+            last_pair_frame_id = pair.frame_id
+            if stop_after_pairs is not None and pair_count >= max(1, int(stop_after_pairs)):
+                break
+
+    return {
+        "source": "stereo_record_package",
+        "input_package_dir": str(package_dir),
+        "output_jsonl": str(out_path),
+        "package_pair_count": summary.pair_count,
+        "pair_count": pair_count,
+        "target_observed": pair_count > 0,
+        "dropped_unpaired_left": summary.dropped_unpaired_left,
+        "dropped_unpaired_right": summary.dropped_unpaired_right,
+        "dropped_no_target_pairs": dropped_no_target_pairs,
+        "last_pair_frame_id": last_pair_frame_id,
+    }
+
+
+def nv12_frame_to_bgr(frame: Nv12Frame) -> Any:
+    try:
+        import cv2
+        import numpy as np
+    except Exception as exc:
+        raise RuntimeError(
+            "record-package mode needs numpy and opencv-python-headless to decode NV12 frames"
+        ) from exc
+
+    payload = frame.y_plane + frame.uv_plane
+    yuv = np.frombuffer(payload, dtype=np.uint8).reshape((frame.height * 3 // 2, frame.stride))
+    bgr = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV12)
+    return bgr[:, : frame.width]
 
 
 def _read_one_eye(reader: Any, pending: dict[int, Any], seen_frame_ids: set[int]) -> int:
@@ -237,6 +321,19 @@ def _create_stereo_readers_and_tracker(args: argparse.Namespace) -> tuple[Any, A
     return left_reader, right_reader, tracker
 
 
+def _create_tracker(args: argparse.Namespace) -> Any:
+    _install_antman_paths(args.antman_root)
+    from human_trackor.api import HumanTrackor
+
+    return HumanTrackor(
+        model=args.model,
+        backend=args.backend,
+        imgsz=args.imgsz,
+        conf=args.min_confidence,
+        device=args.device,
+    )
+
+
 def startup_error_status(exc: Exception, out_path: Path) -> tuple[dict[str, Any], int]:
     if isinstance(exc, ModuleNotFoundError):
         reason = "dependency_unavailable"
@@ -265,6 +362,12 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--antman-root", type=Path, default=DEFAULT_ANTMAN_ROOT)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--input-package",
+        type=Path,
+        default=None,
+        help="Existing stereo record package directory; when set, build bbox pairs offline from the record instead of reading live SHM.",
+    )
     parser.add_argument("--duration-seconds", type=float, default=30.0)
     parser.add_argument("--max-read-attempts", type=int, default=6000)
     parser.add_argument("--stop-after-pairs", type=int, default=None)
@@ -284,6 +387,32 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+    if args.input_package is not None:
+        try:
+            tracker = _create_tracker(args)
+            status = build_stereo_bbox_pairs_from_package(
+                package_dir=args.input_package,
+                tracker=tracker,
+                out_path=args.out,
+                stop_after_pairs=args.stop_after_pairs,
+            )
+        except Exception as exc:
+            status = {
+                "source": "stereo_record_package",
+                "target_observed": False,
+                "pair_count": 0,
+                "reason": "record_package_failed",
+                "error": str(exc),
+                "input_package_dir": str(args.input_package),
+                "output_jsonl": str(args.out.resolve()),
+            }
+            print(json.dumps(status, ensure_ascii=False, separators=(",", ":")))
+            return 1
+        print(json.dumps(status, ensure_ascii=False, separators=(",", ":")))
+        if args.require_target and not status["target_observed"]:
+            return 2
+        return 0 if status["pair_count"] > 0 else 1
+
     try:
         left_reader, right_reader, tracker = _create_stereo_readers_and_tracker(args)
     except Exception as exc:
