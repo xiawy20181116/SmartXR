@@ -12,6 +12,8 @@ import unittest
 
 from smartxr.detection_backend import detections_from_records
 from smartxr.stereo_depth import (
+    ANCHOR_KIND_BBOX_CENTER,
+    ANCHOR_KIND_BBOX_TOP_CENTER,
     DEPTH_SOURCE_KNOWN_DISTANCE_GT,
     DEPTH_SOURCE_POV_STEREO,
     DEPTH_SOURCE_RAW_STEREO,
@@ -87,9 +89,39 @@ class StereoTriangulationTests(unittest.TestCase):
         self.assertEqual(record["pose_quality"], POSE_QUALITY_STEREO)
         self.assertEqual(record["calibration_ref"], scaled.calibration_id)
         self.assertAlmostEqual(record["depth_m"], 0.8706375, places=7)
+        self.assertEqual(record["anchor_kind"], ANCHOR_KIND_BBOX_CENTER)
+        self.assertEqual(record["left_anchor_px"], [680.0, 380.0])
+        self.assertEqual(record["right_anchor_px"], [648.0, 380.0])
         self.assertAlmostEqual(record["validation"]["known_distance_m"], 0.8706375)
         self.assertAlmostEqual(record["validation"]["depth_error_m"], 0.0)
         self.assertTrue(record["validation"]["within_tolerance"])
+        self.assertAlmostEqual(record["position"][2], record["depth_m"])
+
+    def test_triangulates_bbox_top_center_anchor_and_emits_diagnostics(self):
+        scaled = SCENE_STEREO_28.scaled_to(1164, 872)
+        pair = StereoDetectionPair(
+            pair_id="pair-000044",
+            frame_id=44,
+            person_id="person-1",
+            left_bbox_xyxy=(640.0, 240.0, 720.0, 520.0),
+            right_bbox_xyxy=(608.0, 250.0, 688.0, 530.0),
+            confidence=0.91,
+        )
+
+        record = triangulate_detection_pair(
+            pair,
+            scaled,
+            anchor_kind=ANCHOR_KIND_BBOX_TOP_CENTER,
+        )
+
+        self.assertEqual(record["anchor_kind"], ANCHOR_KIND_BBOX_TOP_CENTER)
+        self.assertEqual(record["left_anchor_px"], [680.0, 240.0])
+        self.assertEqual(record["right_anchor_px"], [648.0, 250.0])
+        self.assertAlmostEqual(record["disparity_px"], 32.0)
+        self.assertAlmostEqual(record["vertical_error_px"], -10.0)
+        self.assertAlmostEqual(record["depth_m"], 0.8706375, places=7)
+        self.assertAlmostEqual(record["position"][0], 0.19569375)
+        self.assertAlmostEqual(record["position"][1], -0.3913875)
         self.assertAlmostEqual(record["position"][2], record["depth_m"])
 
     def test_rejects_zero_or_negative_disparity(self):

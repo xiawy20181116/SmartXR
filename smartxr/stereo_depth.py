@@ -31,6 +31,9 @@ POSE_QUALITY_STEREO = "stereo"
 PAIR_ID_SCHEME = "pair-{frame_id:06d}"
 FRAME_ID_SOURCE = "shared_vst_shm_frame_id"
 
+ANCHOR_KIND_BBOX_CENTER = "bbox_center"
+ANCHOR_KIND_BBOX_TOP_CENTER = "bbox_top_center"
+
 
 def _require_positive(value: float, name: str) -> float:
     value = float(value)
@@ -216,6 +219,14 @@ class StereoDetectionPair:
     def right_center_px(self) -> tuple[float, float]:
         return _bbox_center(self.right_bbox_xyxy)
 
+    @property
+    def left_top_center_px(self) -> tuple[float, float]:
+        return _bbox_top_center(self.left_bbox_xyxy)
+
+    @property
+    def right_top_center_px(self) -> tuple[float, float]:
+        return _bbox_top_center(self.right_bbox_xyxy)
+
 
 class StereoDepthSource:
     """C1 producer DepthSource backed by stereo depth records keyed by track id."""
@@ -242,6 +253,29 @@ def _bbox_center(bbox_xyxy: Sequence[float]) -> tuple[float, float]:
     if x2 <= x1 or y2 <= y1:
         raise ValueError(f"invalid xyxy bbox {tuple(bbox_xyxy)!r}")
     return ((x1 + x2) * 0.5, (y1 + y2) * 0.5)
+
+
+def _bbox_top_center(bbox_xyxy: Sequence[float]) -> tuple[float, float]:
+    if len(bbox_xyxy) != 4:
+        raise ValueError("bbox must contain four xyxy values")
+    x1, y1, x2, y2 = (float(v) for v in bbox_xyxy)
+    if x2 <= x1 or y2 <= y1:
+        raise ValueError(f"invalid xyxy bbox {tuple(bbox_xyxy)!r}")
+    return ((x1 + x2) * 0.5, y1)
+
+
+def _detection_pair_anchor_px(
+    pair: StereoDetectionPair,
+    anchor_kind: str,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    if anchor_kind == ANCHOR_KIND_BBOX_CENTER:
+        return (pair.left_center_px, pair.right_center_px)
+    if anchor_kind == ANCHOR_KIND_BBOX_TOP_CENTER:
+        return (pair.left_top_center_px, pair.right_top_center_px)
+    raise ValueError(
+        f"anchor_kind must be {ANCHOR_KIND_BBOX_CENTER!r} or "
+        f"{ANCHOR_KIND_BBOX_TOP_CENTER!r}, got {anchor_kind!r}"
+    )
 
 
 def depth_from_disparity(disparity_px: float, calibration: StereoCalibration) -> float:
@@ -277,11 +311,13 @@ def triangulate_detection_pair(
     pair: StereoDetectionPair,
     calibration: StereoCalibration,
     *,
+    anchor_kind: str = ANCHOR_KIND_BBOX_CENTER,
     known_distance_m: float | None = None,
     tolerance_m: float | None = None,
 ) -> dict[str, Any]:
-    left_x, left_y = pair.left_center_px
-    right_x, _right_y = pair.right_center_px
+    left_anchor_px, right_anchor_px = _detection_pair_anchor_px(pair, anchor_kind)
+    left_x, left_y = left_anchor_px
+    right_x, right_y = right_anchor_px
     disparity_px = left_x - right_x
     depth_m = depth_from_disparity(disparity_px, calibration)
     position = calibration.left.unproject(left_x, left_y, depth_m)
@@ -297,7 +333,11 @@ def triangulate_detection_pair(
             "right_xyxy": list(pair.right_bbox_xyxy),
         },
         "confidence": float(pair.confidence),
+        "anchor_kind": anchor_kind,
+        "left_anchor_px": [left_x, left_y],
+        "right_anchor_px": [right_x, right_y],
         "disparity_px": disparity_px,
+        "vertical_error_px": left_y - right_y,
         "depth_source": DEPTH_SOURCE_POV_STEREO,
         "is_ground_truth": False,
         "depth_m": depth_m,
