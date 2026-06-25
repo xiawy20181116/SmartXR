@@ -146,6 +146,34 @@ class StereoMultitargetDepthEvaluatorTests(unittest.TestCase):
         self.assertEqual(summary["keypoint_association"]["unassociated_count"], 1)
         self.assertEqual(summary["targets"]["rank_1_near"]["keypoint"]["ok_count"], 0)
 
+    def test_anchor_kind_gate_fallback_is_used_for_keypoint_metric(self):
+        evaluator = load_module(TOOL, "evaluate_stereo_multitarget_depth")
+        bbox_path = self.tmp_path / "bbox.jsonl"
+        keypoint_path = self.tmp_path / "keypoint.jsonl"
+        out_dir = self.tmp_path / "eval"
+        keypoint = keypoint_pair_record(1)
+        keypoint["selected_anchor"]["kind"] = "mixed"
+        keypoint["selected_anchor"]["left_px"] = [500, 260]
+        keypoint["selected_anchor"]["right_px"] = [479, 340]
+        write_jsonl(bbox_path, [bbox_pair_record(1)])
+        write_jsonl(keypoint_path, [keypoint])
+
+        evaluator.evaluate_stereo_multitarget_depth(
+            bbox_input_path=bbox_path,
+            keypoint_input_path=keypoint_path,
+            out_dir=out_dir,
+            max_vertical_error_px=20.0,
+            require_anchor_kind="shoulder_midpoint",
+            anchor_mismatch_policy="fallback_bbox",
+        )
+
+        summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(summary["targets"]["rank_1_near"]["keypoint"]["ok_count"], 1)
+        self.assertEqual(summary["targets"]["rank_1_near"]["keypoint"]["top_rejection_reasons"], [])
+
+        per_frame = json.loads((out_dir / "per_frame.jsonl").read_text(encoding="utf-8").strip())
+        self.assertEqual(per_frame["keypoint"]["anchor_consistency_gate"]["policy"], "fallback_bbox")
+
     def test_cli_accepts_bbox_and_keypoint_inputs(self):
         bbox_path = self.tmp_path / "bbox.jsonl"
         keypoint_path = self.tmp_path / "keypoint.jsonl"

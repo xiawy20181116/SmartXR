@@ -16,7 +16,7 @@ TOOLS_DIR = Path(__file__).resolve().parent
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from evaluate_stereo_keypoint_depth import _depth_from_anchor  # noqa: E402
+from evaluate_stereo_keypoint_depth import evaluate_keypoint_anchor_depth  # noqa: E402
 from smartxr.stereo_depth import (  # noqa: E402
     ANCHOR_KIND_BBOX_TOP_CENTER,
     SCENE_STEREO_28,
@@ -313,6 +313,8 @@ def evaluate_stereo_multitarget_depth(
     association_margin_px: float = 8.0,
     max_association_distance_px: float | None = 120.0,
     min_keypoint_score: float = 0.5,
+    require_anchor_kind: str | None = None,
+    anchor_mismatch_policy: str = "reject",
 ) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     calibration = SCENE_STEREO_28.scaled_to(recorded_width, recorded_height)
@@ -373,8 +375,20 @@ def evaluate_stereo_multitarget_depth(
             keypoint_eval = None
             if keypoint_record is not None:
                 selected_bbox_label = _find_selected_bbox_label(keypoint_record, raw_candidates)
+                effective_anchor, candidate_keypoint_eval = evaluate_keypoint_anchor_depth(
+                    keypoint_record,
+                    calibration=calibration,
+                    min_keypoint_score=min_keypoint_score,
+                    min_depth_m=min_depth_m,
+                    max_depth_m=max_depth_m,
+                    max_vertical_error_px=max_vertical_error_px,
+                    require_anchor_kind=require_anchor_kind,
+                    anchor_mismatch_policy=anchor_mismatch_policy,
+                )
+                association_record = dict(keypoint_record)
+                association_record["selected_anchor"] = effective_anchor
                 associated_label = _find_keypoint_candidate_label(
-                    keypoint_record=keypoint_record,
+                    keypoint_record=association_record,
                     candidates=raw_candidates,
                     margin_px=association_margin_px,
                     max_distance_px=max_association_distance_px,
@@ -385,17 +399,7 @@ def evaluate_stereo_multitarget_depth(
                     association_counts["associated"] += 1
                     if selected_bbox_label is not None and associated_label != selected_bbox_label:
                         mismatch_count += 1
-                    anchor = keypoint_record.get("selected_anchor") if isinstance(keypoint_record.get("selected_anchor"), dict) else {}
-                    keypoint_eval = _depth_from_anchor(
-                        left_px=anchor.get("left_px"),
-                        right_px=anchor.get("right_px"),
-                        score=float(anchor.get("score", 0.0)),
-                        calibration=calibration,
-                        min_score=min_keypoint_score,
-                        min_depth_m=min_depth_m,
-                        max_depth_m=max_depth_m,
-                        max_vertical_error_px=max_vertical_error_px,
-                    )
+                    keypoint_eval = candidate_keypoint_eval
                     keypoint_eval["target_label"] = associated_label
                     keypoint_eval["selected_bbox_target_label"] = selected_bbox_label
                     target_keypoint_records[associated_label].append(keypoint_eval)
@@ -464,6 +468,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--association-margin-px", type=float, default=8.0)
     parser.add_argument("--max-association-distance-px", type=float, default=120.0)
     parser.add_argument("--min-keypoint-score", type=float, default=0.5)
+    parser.add_argument("--require-anchor-kind", default=None)
+    parser.add_argument("--anchor-mismatch-policy", choices=["reject", "fallback_bbox"], default="reject")
     return parser.parse_args()
 
 
@@ -485,6 +491,8 @@ def main() -> int:
         association_margin_px=args.association_margin_px,
         max_association_distance_px=args.max_association_distance_px,
         min_keypoint_score=args.min_keypoint_score,
+        require_anchor_kind=args.require_anchor_kind,
+        anchor_mismatch_policy=args.anchor_mismatch_policy,
     )
     print(json.dumps(status, ensure_ascii=False, separators=(",", ":")))
     return 0 if status["frames_seen"] > 0 else 1
