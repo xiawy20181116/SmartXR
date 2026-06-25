@@ -140,6 +140,38 @@ class StereoKeypointDepthEvaluatorTests(unittest.TestCase):
             ],
         )
 
+    def test_anchor_kind_gate_can_fallback_to_bbox_top_center(self):
+        evaluator = load_module(TOOL, "evaluate_stereo_keypoint_depth")
+        record = keypoint_record(
+            25,
+            left_px=[680, 300],
+            right_px=[648, 360],
+            kind="mixed",
+            bbox_left_px=[680, 240],
+            bbox_right_px=[648, 242],
+        )
+        input_path = self.tmp_path / "anchor_gate.jsonl"
+        out_dir = self.tmp_path / "anchor_gate_eval"
+        write_jsonl(input_path, [record])
+
+        status = evaluator.evaluate_stereo_keypoint_depth(
+            input_path=input_path,
+            out_dir=out_dir,
+            max_vertical_error_px=20.0,
+            require_anchor_kind="shoulder_midpoint",
+            anchor_mismatch_policy="fallback_bbox",
+        )
+
+        self.assertEqual(status["keypoint_ok_count"], 1)
+        summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(summary["keypoint_anchor_kinds"], [{"kind": "bbox_top_center_fallback", "count": 1}])
+        self.assertEqual(summary["top_rejection_reasons"], [])
+
+        per_frame = json.loads((out_dir / "per_frame.jsonl").read_text(encoding="utf-8").strip())
+        self.assertEqual(per_frame["selected_anchor"]["kind"], "bbox_top_center_fallback")
+        self.assertEqual(per_frame["keypoint"]["anchor_consistency_gate"]["actual_kind"], "mixed")
+        self.assertEqual(per_frame["keypoint"]["anchor_consistency_gate"]["policy"], "fallback_bbox")
+
     def test_cli_accepts_input_and_output_paths(self):
         records = [keypoint_record(30, left_px=[680, 300], right_px=[648, 301])]
         input_path = self.tmp_path / "input.jsonl"

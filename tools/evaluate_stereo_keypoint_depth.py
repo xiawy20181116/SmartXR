@@ -119,6 +119,82 @@ def _depth_from_anchor(
     return record
 
 
+def _anchor_gate_rejection(anchor: dict[str, Any], gate: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "left_anchor_px": anchor.get("left_px"),
+        "right_anchor_px": anchor.get("right_px"),
+        "score": float(anchor.get("score", 0.0)),
+        "stereo_ok": False,
+        "rejection_reason": "anchor_kind_mismatch",
+        "anchor_consistency_gate": gate,
+    }
+
+
+def _resolve_anchor_for_depth(
+    record: dict[str, Any],
+    *,
+    require_anchor_kind: str | None,
+    anchor_mismatch_policy: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None, bool]:
+    anchor = record.get("selected_anchor") if isinstance(record.get("selected_anchor"), dict) else {}
+    effective_anchor = dict(anchor)
+    if require_anchor_kind is None or str(anchor.get("kind")) == str(require_anchor_kind):
+        return effective_anchor, None, False
+
+    gate = {
+        "required_kind": str(require_anchor_kind),
+        "actual_kind": str(anchor.get("kind", "missing")),
+        "policy": str(anchor_mismatch_policy),
+    }
+    bbox = record.get("bbox_baseline") if isinstance(record.get("bbox_baseline"), dict) else None
+    if anchor_mismatch_policy == "fallback_bbox" and bbox is not None:
+        effective_anchor = {
+            "kind": "bbox_top_center_fallback",
+            "keypoints": [],
+            "left_px": bbox.get("left_anchor_px"),
+            "right_px": bbox.get("right_anchor_px"),
+            "score": min(float(anchor.get("score", 0.0)), float(bbox.get("score", 1.0))),
+        }
+        return effective_anchor, gate, False
+
+    gate["policy"] = "reject"
+    return effective_anchor, gate, True
+
+
+def evaluate_keypoint_anchor_depth(
+    record: dict[str, Any],
+    *,
+    calibration: Any,
+    min_keypoint_score: float,
+    min_depth_m: float,
+    max_depth_m: float,
+    max_vertical_error_px: float | None,
+    require_anchor_kind: str | None = None,
+    anchor_mismatch_policy: str = "reject",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    effective_anchor, gate, reject_for_gate = _resolve_anchor_for_depth(
+        record,
+        require_anchor_kind=require_anchor_kind,
+        anchor_mismatch_policy=anchor_mismatch_policy,
+    )
+    if reject_for_gate:
+        keypoint = _anchor_gate_rejection(effective_anchor, gate or {})
+    else:
+        keypoint = _depth_from_anchor(
+            left_px=effective_anchor.get("left_px"),
+            right_px=effective_anchor.get("right_px"),
+            score=float(effective_anchor.get("score", 0.0)),
+            calibration=calibration,
+            min_score=min_keypoint_score,
+            min_depth_m=min_depth_m,
+            max_depth_m=max_depth_m,
+            max_vertical_error_px=max_vertical_error_px,
+        )
+        if gate is not None:
+            keypoint["anchor_consistency_gate"] = gate
+    return effective_anchor, keypoint
+
+
 def _record_to_evaluated(
     record: dict[str, Any],
     *,
@@ -127,24 +203,26 @@ def _record_to_evaluated(
     min_depth_m: float,
     max_depth_m: float,
     max_vertical_error_px: float | None,
+    require_anchor_kind: str | None = None,
+    anchor_mismatch_policy: str = "reject",
 ) -> dict[str, Any]:
-    anchor = record.get("selected_anchor") if isinstance(record.get("selected_anchor"), dict) else {}
+    anchor, keypoint = evaluate_keypoint_anchor_depth(
+        record,
+        calibration=calibration,
+        min_keypoint_score=min_keypoint_score,
+        min_depth_m=min_depth_m,
+        max_depth_m=max_depth_m,
+        max_vertical_error_px=max_vertical_error_px,
+        require_anchor_kind=require_anchor_kind,
+        anchor_mismatch_policy=anchor_mismatch_policy,
+    )
     evaluated = {
         "schema_version": 1,
         "pair_id": record.get("pair_id"),
         "frame_id": record.get("frame_id"),
         "person_id": record.get("person_id"),
         "selected_anchor": anchor,
-        "keypoint": _depth_from_anchor(
-            left_px=anchor.get("left_px"),
-            right_px=anchor.get("right_px"),
-            score=float(anchor.get("score", 0.0)),
-            calibration=calibration,
-            min_score=min_keypoint_score,
-            min_depth_m=min_depth_m,
-            max_depth_m=max_depth_m,
-            max_vertical_error_px=max_vertical_error_px,
-        ),
+        "keypoint": keypoint,
     }
     bbox = record.get("bbox_baseline") if isinstance(record.get("bbox_baseline"), dict) else None
     if bbox is not None:
@@ -225,6 +303,8 @@ def evaluate_stereo_keypoint_depth(
     min_depth_m: float = 0.2,
     max_depth_m: float = 5.0,
     max_vertical_error_px: float | None = None,
+    require_anchor_kind: str | None = None,
+    anchor_mismatch_policy: str = "reject",
 ) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     calibration = SCENE_STEREO_28.scaled_to(recorded_width, recorded_height)
@@ -239,6 +319,8 @@ def evaluate_stereo_keypoint_depth(
                 min_depth_m=min_depth_m,
                 max_depth_m=max_depth_m,
                 max_vertical_error_px=max_vertical_error_px,
+                require_anchor_kind=require_anchor_kind,
+                anchor_mismatch_policy=anchor_mismatch_policy,
             )
             records.append(evaluated)
             handle.write(json.dumps(evaluated, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -270,6 +352,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--min-depth-m", type=float, default=0.2)
     parser.add_argument("--max-depth-m", type=float, default=5.0)
     parser.add_argument("--max-vertical-error-px", type=float, default=None)
+    parser.add_argument("--require-anchor-kind", default=None)
+    parser.add_argument("--anchor-mismatch-policy", choices=["reject", "fallback_bbox"], default="reject")
     return parser.parse_args()
 
 
@@ -284,6 +368,8 @@ def main() -> int:
         min_depth_m=args.min_depth_m,
         max_depth_m=args.max_depth_m,
         max_vertical_error_px=args.max_vertical_error_px,
+        require_anchor_kind=args.require_anchor_kind,
+        anchor_mismatch_policy=args.anchor_mismatch_policy,
     )
     print(json.dumps(status, ensure_ascii=False, separators=(",", ":")))
     return 0 if status["frames_seen"] > 0 else 1
