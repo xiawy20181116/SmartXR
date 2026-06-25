@@ -112,7 +112,9 @@ def collect_stereo_bbox_pairs(
     *,
     left_reader: Any,
     right_reader: Any,
-    tracker: Any,
+    tracker: Any | None = None,
+    left_tracker: Any | None = None,
+    right_tracker: Any | None = None,
     out_path: Path,
     duration_seconds: float = 30.0,
     max_read_attempts: int = 6000,
@@ -120,6 +122,11 @@ def collect_stereo_bbox_pairs(
     sleep_seconds: float = 0.005,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
+    left_tracker = left_tracker or tracker
+    right_tracker = right_tracker or tracker
+    if left_tracker is None or right_tracker is None:
+        raise ValueError("collect_stereo_bbox_pairs needs tracker or left_tracker/right_tracker")
+
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     started = clock()
@@ -144,8 +151,8 @@ def collect_stereo_bbox_pairs(
                     left_frame = pending_left.pop(frame_id)
                     right_frame = pending_right.pop(frame_id)
                     timestamp_ms = int(time.time() * 1000)
-                    left_tracking_result = tracker.process_frame(left_frame)
-                    right_tracking_result = tracker.process_frame(right_frame)
+                    left_tracking_result = left_tracker.process_frame(left_frame)
+                    right_tracking_result = right_tracker.process_frame(right_frame)
                     left_stats = left_reader.get_stats() if hasattr(left_reader, "get_stats") else {}
                     right_stats = right_reader.get_stats() if hasattr(right_reader, "get_stats") else {}
                     record = build_stereo_bbox_pair_record(
@@ -194,11 +201,18 @@ def collect_stereo_bbox_pairs(
 def build_stereo_bbox_pairs_from_package(
     *,
     package_dir: Path,
-    tracker: Any,
+    tracker: Any | None = None,
+    left_tracker: Any | None = None,
+    right_tracker: Any | None = None,
     out_path: Path,
     frame_decoder: Callable[[Nv12Frame], Any] | None = None,
     stop_after_pairs: int | None = None,
 ) -> dict[str, Any]:
+    left_tracker = left_tracker or tracker
+    right_tracker = right_tracker or tracker
+    if left_tracker is None or right_tracker is None:
+        raise ValueError("build_stereo_bbox_pairs_from_package needs tracker or left_tracker/right_tracker")
+
     package_dir = Path(package_dir)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -213,8 +227,8 @@ def build_stereo_bbox_pairs_from_package(
         for pair in summary.pairs:
             left_frame = frame_decoder(read_packet_file(pair.left.path, index=pair.left.index))
             right_frame = frame_decoder(read_packet_file(pair.right.path, index=pair.right.index))
-            left_tracking_result = tracker.process_frame(left_frame)
-            right_tracking_result = tracker.process_frame(right_frame)
+            left_tracking_result = left_tracker.process_frame(left_frame)
+            right_tracking_result = right_tracker.process_frame(right_frame)
             timestamp_ms = min(pair.left.timestamp_us, pair.right.timestamp_us) // 1000
             record = build_stereo_bbox_pair_record(
                 frame_id=pair.frame_id,
@@ -298,7 +312,7 @@ def build_stereo_shm_names(base_name: str) -> tuple[str, str]:
     )
 
 
-def _create_stereo_readers_and_tracker(args: argparse.Namespace) -> tuple[Any, Any, Any]:
+def _create_stereo_readers_and_trackers(args: argparse.Namespace) -> tuple[Any, Any, Any, Any]:
     _install_antman_paths(args.antman_root)
     from human_face_visualizer.async_runtime import VstAiShmReader
     from human_trackor.api import HumanTrackor
@@ -311,14 +325,21 @@ def _create_stereo_readers_and_tracker(args: argparse.Namespace) -> tuple[Any, A
     }
     left_reader = VstAiShmReader(name=left_name, **reader_kwargs)
     right_reader = VstAiShmReader(name=right_name, **reader_kwargs)
-    tracker = HumanTrackor(
+    left_tracker = HumanTrackor(
         model=args.model,
         backend=args.backend,
         imgsz=args.imgsz,
         conf=args.min_confidence,
         device=args.device,
     )
-    return left_reader, right_reader, tracker
+    right_tracker = HumanTrackor(
+        model=args.model,
+        backend=args.backend,
+        imgsz=args.imgsz,
+        conf=args.min_confidence,
+        device=args.device,
+    )
+    return left_reader, right_reader, left_tracker, right_tracker
 
 
 def _create_tracker(args: argparse.Namespace) -> Any:
@@ -332,6 +353,10 @@ def _create_tracker(args: argparse.Namespace) -> Any:
         conf=args.min_confidence,
         device=args.device,
     )
+
+
+def _create_eye_trackers(args: argparse.Namespace) -> tuple[Any, Any]:
+    return _create_tracker(args), _create_tracker(args)
 
 
 def startup_error_status(exc: Exception, out_path: Path) -> tuple[dict[str, Any], int]:
@@ -389,10 +414,11 @@ def main() -> int:
     args = _parse_args()
     if args.input_package is not None:
         try:
-            tracker = _create_tracker(args)
+            left_tracker, right_tracker = _create_eye_trackers(args)
             status = build_stereo_bbox_pairs_from_package(
                 package_dir=args.input_package,
-                tracker=tracker,
+                left_tracker=left_tracker,
+                right_tracker=right_tracker,
                 out_path=args.out,
                 stop_after_pairs=args.stop_after_pairs,
             )
@@ -414,7 +440,7 @@ def main() -> int:
         return 0 if status["pair_count"] > 0 else 1
 
     try:
-        left_reader, right_reader, tracker = _create_stereo_readers_and_tracker(args)
+        left_reader, right_reader, left_tracker, right_tracker = _create_stereo_readers_and_trackers(args)
     except Exception as exc:
         status, exit_code = startup_error_status(exc, args.out)
         print(json.dumps(status, ensure_ascii=False, separators=(",", ":")))
@@ -423,7 +449,8 @@ def main() -> int:
     status = collect_stereo_bbox_pairs(
         left_reader=left_reader,
         right_reader=right_reader,
-        tracker=tracker,
+        left_tracker=left_tracker,
+        right_tracker=right_tracker,
         out_path=args.out,
         duration_seconds=args.duration_seconds,
         max_read_attempts=args.max_read_attempts,

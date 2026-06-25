@@ -169,6 +169,57 @@ class CollectStereoBboxPairsTests(unittest.TestCase):
         self.assertEqual(records[0]["left_bbox_xyxy"], [640, 240, 720, 520])
         self.assertEqual(records[1]["right_bbox_xyxy"], [612, 240, 692, 520])
 
+    def test_builds_pairs_from_package_with_independent_eye_trackers(self):
+        collector = load_module(TOOL, "collect_stereo_bbox_pairs")
+        package_dir = self.tmp_path / "package"
+        left_frames = [
+            make_nv12_frame(100, 100_000),
+            make_nv12_frame(101, 101_000),
+        ]
+        right_frames = [
+            make_nv12_frame(100, 100_100),
+            make_nv12_frame(101, 101_100),
+        ]
+        write_mono_nv12_session(package_dir / LEFT_EYE_DIR, left_frames)
+        write_mono_nv12_session(package_dir / RIGHT_EYE_DIR, right_frames)
+        metadata = build_stereo_session_metadata(
+            SCENE_STEREO_28.scaled_to(1164, 872),
+            pair_count=2,
+            dropped_unpaired_left=0,
+            dropped_unpaired_right=0,
+            max_skew_frames=1,
+        )
+        (package_dir / "stereo.json").write_text(json.dumps(metadata), encoding="utf-8")
+        left_tracker = FakeTracker(
+            [
+                [FakePerson(1, (640, 240, 720, 520), 0.91)],
+                [FakePerson(1, (641, 240, 721, 520), 0.92)],
+            ]
+        )
+        right_tracker = FakeTracker(
+            [
+                [FakePerson(2, (608, 240, 688, 520), 0.90)],
+                [FakePerson(2, (609, 240, 689, 520), 0.88)],
+            ]
+        )
+
+        out_path = self.tmp_path / "from_package_independent.jsonl"
+        status = collector.build_stereo_bbox_pairs_from_package(
+            package_dir=package_dir,
+            left_tracker=left_tracker,
+            right_tracker=right_tracker,
+            out_path=out_path,
+            frame_decoder=lambda _frame: FakeFrame(),
+        )
+
+        records = [json.loads(line) for line in out_path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(status["pair_count"], 2)
+        self.assertEqual(left_tracker.calls, 2)
+        self.assertEqual(right_tracker.calls, 2)
+        self.assertEqual(records[0]["person_id"], "person-1-2")
+        self.assertEqual(records[1]["left_bbox_xyxy"], [641, 240, 721, 520])
+        self.assertEqual(records[1]["right_bbox_xyxy"], [609, 240, 689, 520])
+
     def test_skips_pairs_without_target(self):
         collector = load_module(TOOL, "collect_stereo_bbox_pairs")
 
