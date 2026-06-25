@@ -128,7 +128,60 @@ def _distance(a: list[float], b: list[float]) -> float:
     return math.sqrt(sum((float(av) - float(bv)) ** 2 for av, bv in zip(a, b, strict=True)))
 
 
-def _summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
+def _series_summary(values: list[float]) -> dict[str, Any]:
+    return {
+        "count": len(values),
+        "min": min(values) if values else None,
+        "max": max(values) if values else None,
+        "p10": _percentile(values, 0.10),
+        "median": _percentile(values, 0.50),
+        "p90": _percentile(values, 0.90),
+    }
+
+
+def _median_position(positions: list[list[float]]) -> list[float]:
+    return [
+        float(_percentile([float(position[axis]) for position in positions], 0.50))
+        for axis in range(3)
+    ]
+
+
+def _temporal_median_positions(
+    positions: list[list[float]],
+    *,
+    window: int,
+    outlier_max_delta_m: float | None,
+) -> tuple[list[list[float]], int]:
+    if not positions:
+        return ([], 0)
+    window = max(1, int(window))
+    smoothed: list[list[float]] = []
+    outlier_rejected_count = 0
+    for index, position in enumerate(positions):
+        start = max(0, index - window + 1)
+        median_position = _median_position(positions[start : index + 1])
+        if (
+            outlier_max_delta_m is not None
+            and _distance(position, median_position) > float(outlier_max_delta_m)
+        ):
+            outlier_rejected_count += 1
+        smoothed.append(median_position)
+    return (smoothed, outlier_rejected_count)
+
+
+def _max_drift_from_first(positions: list[list[float]]) -> float:
+    if not positions:
+        return 0.0
+    first_position = positions[0]
+    return max(_distance(first_position, position) for position in positions)
+
+
+def _summarize(
+    records: list[dict[str, Any]],
+    *,
+    temporal_median_window: int = 1,
+    temporal_outlier_max_delta_m: float | None = None,
+) -> dict[str, Any]:
     frames_seen = len(records)
     ok_records = [record for record in records if record.get("stereo_ok") is True]
     rejected_records = [record for record in records if record.get("stereo_ok") is False]
@@ -138,26 +191,45 @@ def _summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         str(record.get("rejection_reason") or "unknown")
         for record in rejected_records
     )
-    first_position = positions[0] if positions else None
-    position_drift_m = 0.0
-    if first_position is not None:
-        position_drift_m = max(_distance(first_position, position) for position in positions)
+    raw_position_drift_m = _max_drift_from_first(positions)
+    smoothed_positions, outlier_rejected_count = _temporal_median_positions(
+        positions,
+        window=temporal_median_window,
+        outlier_max_delta_m=temporal_outlier_max_delta_m,
+    )
+    smoothed_position_drift_m = _max_drift_from_first(smoothed_positions)
+    disparity_values = [
+        float(record["disparity_px"]) for record in records if "disparity_px" in record
+    ]
+    vertical_error_values = [
+        float(record["vertical_error_px"]) for record in records if "vertical_error_px" in record
+    ]
+    box_width_ratio_values = [
+        float(record["box_width_ratio"]) for record in records if "box_width_ratio" in record
+    ]
+    box_height_ratio_values = [
+        float(record["box_height_ratio"]) for record in records if "box_height_ratio" in record
+    ]
 
     return {
         "frames_seen": frames_seen,
         "stereo_ok_count": len(ok_records),
         "stereo_rejected_count": len(rejected_records),
         "stereo_ok_ratio": 0.0 if frames_seen == 0 else len(ok_records) / frames_seen,
-        "depth_m": {
-            "count": len(depths),
-            "min": min(depths) if depths else None,
-            "max": max(depths) if depths else None,
-            "p10": _percentile(depths, 0.10),
-            "median": _percentile(depths, 0.50),
-            "p90": _percentile(depths, 0.90),
+        "depth_m": _series_summary(depths),
+        "disparity_px": _series_summary(disparity_values),
+        "vertical_error_px": _series_summary(vertical_error_values),
+        "box_width_ratio": _series_summary(box_width_ratio_values),
+        "box_height_ratio": _series_summary(box_height_ratio_values),
+        "raw_position_drift_m": raw_position_drift_m,
+        "smoothed_position_drift_m": smoothed_position_drift_m,
+        "position_drift_m": smoothed_position_drift_m,
+        "target_head_point_drift_m": smoothed_position_drift_m,
+        "temporal_filter": {
+            "median_window": max(1, int(temporal_median_window)),
+            "outlier_max_delta_m": temporal_outlier_max_delta_m,
+            "outlier_rejected_count": outlier_rejected_count,
         },
-        "position_drift_m": position_drift_m,
-        "target_head_point_drift_m": position_drift_m,
         "top_rejection_reasons": [
             {"reason": reason, "count": count}
             for reason, count in rejection_counts.most_common()
@@ -181,6 +253,8 @@ def evaluate_stereo_bbox_depth(
     min_box_ratio: float = 0.5,
     max_box_ratio: float = 2.0,
     max_vertical_error_px: float | None = None,
+    temporal_median_window: int = 1,
+    temporal_outlier_max_delta_m: float | None = None,
 ) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     calibration = SCENE_STEREO_28.scaled_to(recorded_width, recorded_height)
@@ -191,6 +265,7 @@ def evaluate_stereo_bbox_depth(
         min_box_ratio=min_box_ratio,
         max_box_ratio=max_box_ratio,
         max_vertical_error_px=max_vertical_error_px,
+        gate_box_height_ratio=False,
     )
     per_frame_path = out_dir / PER_FRAME_FILE
     records: list[dict[str, Any]] = []
@@ -206,7 +281,11 @@ def evaluate_stereo_bbox_depth(
             records.append(evaluated)
             handle.write(json.dumps(evaluated, ensure_ascii=False, separators=(",", ":")) + "\n")
 
-    summary = _summarize(records)
+    summary = _summarize(
+        records,
+        temporal_median_window=temporal_median_window,
+        temporal_outlier_max_delta_m=temporal_outlier_max_delta_m,
+    )
     summary_path = out_dir / SUMMARY_FILE
     _write_json(summary_path, summary)
     status = {
@@ -235,6 +314,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--min-box-ratio", type=float, default=0.5)
     parser.add_argument("--max-box-ratio", type=float, default=2.0)
     parser.add_argument("--max-vertical-error-px", type=float, default=None)
+    parser.add_argument("--temporal-median-window", type=int, default=1)
+    parser.add_argument("--temporal-outlier-max-delta-m", type=float, default=None)
     return parser.parse_args()
 
 
@@ -251,6 +332,8 @@ def main() -> int:
         min_box_ratio=args.min_box_ratio,
         max_box_ratio=args.max_box_ratio,
         max_vertical_error_px=args.max_vertical_error_px,
+        temporal_median_window=args.temporal_median_window,
+        temporal_outlier_max_delta_m=args.temporal_outlier_max_delta_m,
     )
     print(json.dumps(status, ensure_ascii=False, separators=(",", ":")))
     return 0 if status["frames_seen"] > 0 else 1
