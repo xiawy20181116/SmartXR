@@ -28,6 +28,8 @@ from smartxr.stereo_depth import (  # noqa: E402
 
 PER_FRAME_FILE = "per_frame.jsonl"
 SUMMARY_FILE = "summary.json"
+DIAGNOSTICS_DIR = "diagnostics"
+DEFAULT_DIAGNOSTIC_REASONS = ("anchor_kind_mismatch", "vertical_error_too_large")
 
 
 def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
@@ -355,6 +357,174 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _anchor_vertical_error(anchor: dict[str, Any]) -> float | None:
+    left_px = anchor.get("left_px")
+    right_px = anchor.get("right_px")
+    if not (
+        isinstance(left_px, list)
+        and len(left_px) == 2
+        and isinstance(right_px, list)
+        and len(right_px) == 2
+    ):
+        return None
+    return float(left_px[1]) - float(right_px[1])
+
+
+def _candidate_for_label(candidates: list[dict[str, Any]], label: str | None) -> dict[str, Any] | None:
+    if label is None:
+        return None
+    for candidate in candidates:
+        if str(candidate.get("target_label")) == str(label):
+            return candidate
+    return None
+
+
+def _diagnostic_from_rejection(
+    *,
+    keypoint_record: dict[str, Any],
+    keypoint_eval: dict[str, Any],
+    target_label: str,
+    candidate: dict[str, Any] | None,
+) -> dict[str, Any]:
+    anchor = keypoint_record.get("selected_anchor") if isinstance(keypoint_record.get("selected_anchor"), dict) else {}
+    vertical_error = keypoint_eval.get("vertical_error_px")
+    if vertical_error is None:
+        vertical_error = _anchor_vertical_error(anchor)
+    diagnostic: dict[str, Any] = {
+        "schema_version": 1,
+        "frame_id": keypoint_record.get("frame_id"),
+        "pair_id": keypoint_record.get("source_pair_id", keypoint_record.get("pair_id")),
+        "keypoint_pair_id": keypoint_record.get("pair_id"),
+        "target_label": target_label,
+        "rejection_reason": keypoint_eval.get("rejection_reason"),
+        "left_anchor_kind": anchor.get("left_kind", anchor.get("kind", "unknown")),
+        "right_anchor_kind": anchor.get("right_kind", anchor.get("kind", "unknown")),
+        "anchor_kind": anchor.get("kind", "unknown"),
+        "selected_keypoints": {
+            "left": list(anchor.get("left_keypoints", anchor.get("keypoints", []))),
+            "right": list(anchor.get("right_keypoints", anchor.get("keypoints", []))),
+            "combined": list(anchor.get("keypoints", [])),
+        },
+        "selected_anchor_px": {
+            "left": anchor.get("left_px"),
+            "right": anchor.get("right_px"),
+        },
+        "scores": {
+            "left": anchor.get("left_score", anchor.get("score")),
+            "right": anchor.get("right_score", anchor.get("score")),
+            "combined": anchor.get("score"),
+        },
+        "vertical_error_px": None if vertical_error is None else float(vertical_error),
+        "candidate_source": None if candidate is None else candidate.get("candidate_source"),
+        "bbox": None if candidate is None else {
+            "left_xyxy": candidate.get("left_bbox_xyxy"),
+            "right_xyxy": candidate.get("right_bbox_xyxy"),
+            "stereo_ok": bool(candidate.get("stereo_ok") is True),
+            "depth_m": candidate.get("depth_m"),
+        },
+    }
+    gate = keypoint_eval.get("anchor_consistency_gate")
+    if isinstance(gate, dict):
+        diagnostic["anchor_consistency_gate"] = gate
+    return diagnostic
+
+
+def _diagnostic_sort_value(record: dict[str, Any]) -> tuple[float, int]:
+    vertical = record.get("vertical_error_px")
+    if vertical is not None:
+        return (abs(float(vertical)), int(record.get("frame_id") or 0))
+    score = record.get("scores", {}).get("combined") if isinstance(record.get("scores"), dict) else None
+    return (0.0 if score is None else float(score), int(record.get("frame_id") or 0))
+
+
+def _write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        for record in records:
+            handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def _write_diagnostic_samples(
+    *,
+    out_dir: Path,
+    diagnostics: list[dict[str, Any]],
+    reasons: list[str],
+    top_n: int,
+) -> dict[str, str]:
+    paths: dict[str, str] = {}
+    diagnostics_dir = out_dir / DIAGNOSTICS_DIR
+    all_path = diagnostics_dir / "rejected_keypoint_diagnostics.jsonl"
+    _write_jsonl(all_path, diagnostics)
+    paths["all"] = str(all_path)
+    for reason in reasons:
+        records = [
+            record
+            for record in diagnostics
+            if str(record.get("rejection_reason")) == str(reason)
+        ]
+        selected = sorted(records, key=_diagnostic_sort_value, reverse=True)[: max(0, int(top_n))]
+        path = diagnostics_dir / f"{reason}_top.jsonl"
+        _write_jsonl(path, selected)
+        paths[reason] = str(path)
+    return paths
+
+
+def _svg_point(point: Any, color: str) -> str:
+    if not isinstance(point, list) or len(point) != 2:
+        return ""
+    return (
+        f'<circle cx="{float(point[0]):.2f}" cy="{float(point[1]):.2f}" '
+        f'r="5" fill="{color}" stroke="white" stroke-width="2" />'
+    )
+
+
+def _svg_bbox(bbox: Any, color: str) -> str:
+    if not isinstance(bbox, list) or len(bbox) != 4:
+        return ""
+    x1, y1, x2, y2 = (float(value) for value in bbox)
+    return (
+        f'<rect x="{x1:.2f}" y="{y1:.2f}" width="{max(0.0, x2 - x1):.2f}" '
+        f'height="{max(0.0, y2 - y1):.2f}" fill="none" stroke="{color}" stroke-width="3" />'
+    )
+
+
+def _write_overlay_svgs(
+    *,
+    overlay_dir: Path,
+    diagnostics: list[dict[str, Any]],
+    limit: int,
+    recorded_width: int,
+    recorded_height: int,
+) -> list[str]:
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[str] = []
+    selected = sorted(diagnostics, key=_diagnostic_sort_value, reverse=True)[: max(0, int(limit))]
+    for index, record in enumerate(selected, start=1):
+        bbox = record.get("bbox") if isinstance(record.get("bbox"), dict) else {}
+        anchor = record.get("selected_anchor_px") if isinstance(record.get("selected_anchor_px"), dict) else {}
+        path = overlay_dir / f"{index:02d}_frame_{record.get('frame_id')}_{record.get('target_label')}.svg"
+        left_bbox = _svg_bbox(bbox.get("left_xyxy"), "#22c55e")
+        right_bbox = _svg_bbox(bbox.get("right_xyxy"), "#3b82f6")
+        left_point = _svg_point(anchor.get("left"), "#16a34a")
+        right_point = _svg_point(anchor.get("right"), "#2563eb")
+        label = (
+            f"{record.get('rejection_reason')} frame={record.get('frame_id')} "
+            f"target={record.get('target_label')} vertical={record.get('vertical_error_px')}"
+        )
+        svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{recorded_width}" height="{recorded_height}" viewBox="0 0 {recorded_width} {recorded_height}">
+<rect width="100%" height="100%" fill="#111827"/>
+{left_bbox}
+{right_bbox}
+{left_point}
+{right_point}
+<text x="12" y="24" fill="white" font-family="monospace" font-size="18">{label}</text>
+</svg>
+"""
+        path.write_text(svg, encoding="utf-8")
+        paths.append(str(path))
+    return paths
+
+
 def _load_keypoint_records(
     keypoint_input_path: Path | None,
 ) -> tuple[list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -392,6 +562,10 @@ def evaluate_stereo_multitarget_depth(
     min_keypoint_score: float = 0.5,
     require_anchor_kind: str | None = None,
     anchor_mismatch_policy: str = "reject",
+    diagnostic_reasons: list[str] | None = None,
+    diagnostic_top_n: int = 10,
+    diagnostic_overlay_dir: Path | None = None,
+    diagnostic_overlay_limit: int = 10,
 ) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     calibration = SCENE_STEREO_28.scaled_to(recorded_width, recorded_height)
@@ -413,6 +587,8 @@ def evaluate_stereo_multitarget_depth(
     association_counts = Counter()
     mismatch_count = 0
     bbox_candidate_count = 0
+    diagnostics: list[dict[str, Any]] = []
+    reasons_to_sample = list(diagnostic_reasons or DEFAULT_DIAGNOSTIC_REASONS)
 
     with per_frame_path.open("w", encoding="utf-8", newline="\n") as handle:
         for index, source in enumerate(_iter_jsonl(bbox_input_path), start=1):
@@ -487,6 +663,15 @@ def evaluate_stereo_multitarget_depth(
                         mismatch_count += 1
                     candidate_keypoint_eval["target_label"] = associated_label
                     candidate_keypoint_eval["selected_bbox_target_label"] = selected_bbox_label
+                    if str(candidate_keypoint_eval.get("rejection_reason")) in reasons_to_sample:
+                        diagnostic = _diagnostic_from_rejection(
+                            keypoint_record=keypoint_record,
+                            keypoint_eval=candidate_keypoint_eval,
+                            target_label=selected_bbox_label,
+                            candidate=_candidate_for_label(raw_candidates, selected_bbox_label),
+                        )
+                        candidate_keypoint_eval["diagnostic"] = diagnostic
+                        diagnostics.append(diagnostic)
                     target_keypoint_records[associated_label].append(candidate_keypoint_eval)
                     if keypoint_eval is None:
                         keypoint_eval = candidate_keypoint_eval
@@ -520,6 +705,15 @@ def evaluate_stereo_multitarget_depth(
                     keypoint_eval = candidate_keypoint_eval
                     keypoint_eval["target_label"] = associated_label
                     keypoint_eval["selected_bbox_target_label"] = selected_bbox_label
+                    if str(candidate_keypoint_eval.get("rejection_reason")) in reasons_to_sample:
+                        diagnostic = _diagnostic_from_rejection(
+                            keypoint_record=keypoint_record,
+                            keypoint_eval=candidate_keypoint_eval,
+                            target_label=selected_bbox_label or associated_label,
+                            candidate=_candidate_for_label(raw_candidates, selected_bbox_label or associated_label),
+                        )
+                        candidate_keypoint_eval["diagnostic"] = diagnostic
+                        diagnostics.append(diagnostic)
                     target_keypoint_records[associated_label].append(keypoint_eval)
 
             frame_record = {
@@ -563,11 +757,28 @@ def evaluate_stereo_multitarget_depth(
     }
     summary_path = out_dir / SUMMARY_FILE
     _write_json(summary_path, summary)
+    diagnostic_paths = _write_diagnostic_samples(
+        out_dir=out_dir,
+        diagnostics=diagnostics,
+        reasons=reasons_to_sample,
+        top_n=diagnostic_top_n,
+    )
+    overlay_paths: list[str] = []
+    if diagnostic_overlay_dir is not None:
+        overlay_paths = _write_overlay_svgs(
+            overlay_dir=diagnostic_overlay_dir,
+            diagnostics=diagnostics,
+            limit=diagnostic_overlay_limit,
+            recorded_width=recorded_width,
+            recorded_height=recorded_height,
+        )
     return {
         "bbox_input_jsonl": str(bbox_input_path),
         "keypoint_input_jsonl": None if keypoint_input_path is None else str(keypoint_input_path),
         "per_frame_jsonl": str(per_frame_path),
         "summary_json": str(summary_path),
+        "diagnostics_jsonl": diagnostic_paths,
+        "diagnostic_overlay_files": overlay_paths,
         "frames_seen": summary["frames_seen"],
         "bbox_candidate_count": bbox_candidate_count,
     }
@@ -594,6 +805,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--min-keypoint-score", type=float, default=0.5)
     parser.add_argument("--require-anchor-kind", default=None)
     parser.add_argument("--anchor-mismatch-policy", choices=["reject", "fallback_bbox"], default="reject")
+    parser.add_argument(
+        "--diagnostic-reason",
+        action="append",
+        dest="diagnostic_reasons",
+        default=None,
+        help="Rejected keypoint reason to export as top-N diagnostics. Repeatable.",
+    )
+    parser.add_argument("--diagnostic-top-n", type=int, default=10)
+    parser.add_argument("--diagnostic-overlay-dir", type=Path, default=None)
+    parser.add_argument("--diagnostic-overlay-limit", type=int, default=10)
     return parser.parse_args()
 
 
@@ -617,6 +838,10 @@ def main() -> int:
         min_keypoint_score=args.min_keypoint_score,
         require_anchor_kind=args.require_anchor_kind,
         anchor_mismatch_policy=args.anchor_mismatch_policy,
+        diagnostic_reasons=args.diagnostic_reasons,
+        diagnostic_top_n=args.diagnostic_top_n,
+        diagnostic_overlay_dir=args.diagnostic_overlay_dir,
+        diagnostic_overlay_limit=args.diagnostic_overlay_limit,
     )
     print(json.dumps(status, ensure_ascii=False, separators=(",", ":")))
     return 0 if status["frames_seen"] > 0 else 1

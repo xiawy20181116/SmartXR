@@ -187,8 +187,14 @@ def build_stereo_keypoint_pair_record(
         "selected_anchor": {
             "kind": anchor_kind,
             "keypoints": anchor_keypoints,
+            "left_kind": left_anchor["kind"],
+            "right_kind": right_anchor["kind"],
+            "left_keypoints": list(left_anchor.get("keypoints", [])),
+            "right_keypoints": list(right_anchor.get("keypoints", [])),
             "left_px": left_anchor["xy"],
             "right_px": right_anchor["xy"],
+            "left_score": float(left_anchor.get("score", 0.0)),
+            "right_score": float(right_anchor.get("score", 0.0)),
             "score": anchor_score,
         },
     }
