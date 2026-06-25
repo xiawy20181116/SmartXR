@@ -35,6 +35,62 @@ ANCHOR_KIND_BBOX_CENTER = "bbox_center"
 ANCHOR_KIND_BBOX_TOP_CENTER = "bbox_top_center"
 
 
+@dataclass(frozen=True)
+class StereoGateConfig:
+    min_confidence: float | None = None
+    min_depth_m: float | None = None
+    max_depth_m: float | None = None
+    min_box_ratio: float | None = None
+    max_box_ratio: float | None = None
+    max_vertical_error_px: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.min_confidence is not None:
+            min_confidence = float(self.min_confidence)
+            if not 0.0 <= min_confidence <= 1.0:
+                raise ValueError(f"min_confidence must be in [0, 1], got {min_confidence}")
+        if self.min_depth_m is not None:
+            _require_positive(self.min_depth_m, "min_depth_m")
+        if self.max_depth_m is not None:
+            _require_positive(self.max_depth_m, "max_depth_m")
+        if (
+            self.min_depth_m is not None
+            and self.max_depth_m is not None
+            and float(self.max_depth_m) < float(self.min_depth_m)
+        ):
+            raise ValueError("max_depth_m must be >= min_depth_m")
+        if self.min_box_ratio is not None:
+            _require_positive(self.min_box_ratio, "min_box_ratio")
+        if self.max_box_ratio is not None:
+            _require_positive(self.max_box_ratio, "max_box_ratio")
+        if (
+            self.min_box_ratio is not None
+            and self.max_box_ratio is not None
+            and float(self.max_box_ratio) < float(self.min_box_ratio)
+        ):
+            raise ValueError("max_box_ratio must be >= min_box_ratio")
+        if self.max_vertical_error_px is not None and float(self.max_vertical_error_px) < 0.0:
+            raise ValueError("max_vertical_error_px must be non-negative")
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {}
+        if self.min_confidence is not None:
+            data["confidence_min"] = float(self.min_confidence)
+        if self.min_depth_m is not None or self.max_depth_m is not None:
+            data["depth_range_m"] = [
+                None if self.min_depth_m is None else float(self.min_depth_m),
+                None if self.max_depth_m is None else float(self.max_depth_m),
+            ]
+        if self.min_box_ratio is not None or self.max_box_ratio is not None:
+            data["box_ratio_range"] = [
+                None if self.min_box_ratio is None else float(self.min_box_ratio),
+                None if self.max_box_ratio is None else float(self.max_box_ratio),
+            ]
+        if self.max_vertical_error_px is not None:
+            data["vertical_error_max_px"] = float(self.max_vertical_error_px)
+        return data
+
+
 def _require_positive(value: float, name: str) -> float:
     value = float(value)
     if value <= 0.0:
@@ -264,6 +320,15 @@ def _bbox_top_center(bbox_xyxy: Sequence[float]) -> tuple[float, float]:
     return ((x1 + x2) * 0.5, y1)
 
 
+def _bbox_size(bbox_xyxy: Sequence[float]) -> tuple[float, float]:
+    if len(bbox_xyxy) != 4:
+        raise ValueError("bbox must contain four xyxy values")
+    x1, y1, x2, y2 = (float(v) for v in bbox_xyxy)
+    if x2 <= x1 or y2 <= y1:
+        raise ValueError(f"invalid xyxy bbox {tuple(bbox_xyxy)!r}")
+    return (x2 - x1, y2 - y1)
+
+
 def _detection_pair_anchor_px(
     pair: StereoDetectionPair,
     anchor_kind: str,
@@ -275,6 +340,81 @@ def _detection_pair_anchor_px(
     raise ValueError(
         f"anchor_kind must be {ANCHOR_KIND_BBOX_CENTER!r} or "
         f"{ANCHOR_KIND_BBOX_TOP_CENTER!r}, got {anchor_kind!r}"
+    )
+
+
+def _base_stereo_record(
+    pair: StereoDetectionPair,
+    calibration: StereoCalibration,
+    *,
+    anchor_kind: str,
+    left_anchor_px: tuple[float, float],
+    right_anchor_px: tuple[float, float],
+    disparity_px: float,
+    vertical_error_px: float,
+    box_width_ratio: float,
+    box_height_ratio: float,
+    gate_config: StereoGateConfig | None,
+    stereo_ok: bool,
+    rejection_reason: str | None,
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "pair_id": pair.pair_id,
+        "frame_id": pair.frame_id,
+        "frame_provenance": calibration.frame_provenance,
+        "person_id": pair.person_id,
+        "bbox": {
+            "left_xyxy": list(pair.left_bbox_xyxy),
+            "right_xyxy": list(pair.right_bbox_xyxy),
+        },
+        "confidence": float(pair.confidence),
+        "anchor_kind": anchor_kind,
+        "left_anchor_px": [left_anchor_px[0], left_anchor_px[1]],
+        "right_anchor_px": [right_anchor_px[0], right_anchor_px[1]],
+        "disparity_px": disparity_px,
+        "vertical_error_px": vertical_error_px,
+        "box_width_ratio": box_width_ratio,
+        "box_height_ratio": box_height_ratio,
+        "depth_source": DEPTH_SOURCE_POV_STEREO,
+        "is_ground_truth": False,
+        "pose_quality": POSE_QUALITY_STEREO,
+        "calibration_ref": calibration.calibration_id,
+    }
+    if gate_config is not None:
+        record["stereo_ok"] = stereo_ok
+        record["rejection_reason"] = rejection_reason
+        record["gates"] = gate_config.to_dict()
+    return record
+
+
+def _reject_stereo_record(
+    pair: StereoDetectionPair,
+    calibration: StereoCalibration,
+    *,
+    anchor_kind: str,
+    left_anchor_px: tuple[float, float],
+    right_anchor_px: tuple[float, float],
+    disparity_px: float,
+    vertical_error_px: float,
+    box_width_ratio: float,
+    box_height_ratio: float,
+    gate_config: StereoGateConfig,
+    rejection_reason: str,
+) -> dict[str, Any]:
+    return _base_stereo_record(
+        pair,
+        calibration,
+        anchor_kind=anchor_kind,
+        left_anchor_px=left_anchor_px,
+        right_anchor_px=right_anchor_px,
+        disparity_px=disparity_px,
+        vertical_error_px=vertical_error_px,
+        box_width_ratio=box_width_ratio,
+        box_height_ratio=box_height_ratio,
+        gate_config=gate_config,
+        stereo_ok=False,
+        rejection_reason=rejection_reason,
     )
 
 
@@ -312,6 +452,7 @@ def triangulate_detection_pair(
     calibration: StereoCalibration,
     *,
     anchor_kind: str = ANCHOR_KIND_BBOX_CENTER,
+    gate_config: StereoGateConfig | None = None,
     known_distance_m: float | None = None,
     tolerance_m: float | None = None,
 ) -> dict[str, Any]:
@@ -319,32 +460,143 @@ def triangulate_detection_pair(
     left_x, left_y = left_anchor_px
     right_x, right_y = right_anchor_px
     disparity_px = left_x - right_x
+    vertical_error_px = left_y - right_y
+    left_width, left_height = _bbox_size(pair.left_bbox_xyxy)
+    right_width, right_height = _bbox_size(pair.right_bbox_xyxy)
+    box_width_ratio = left_width / right_width
+    box_height_ratio = left_height / right_height
+
+    if gate_config is not None:
+        if (
+            gate_config.min_confidence is not None
+            and float(pair.confidence) < float(gate_config.min_confidence)
+        ):
+            return _reject_stereo_record(
+                pair,
+                calibration,
+                anchor_kind=anchor_kind,
+                left_anchor_px=left_anchor_px,
+                right_anchor_px=right_anchor_px,
+                disparity_px=disparity_px,
+                vertical_error_px=vertical_error_px,
+                box_width_ratio=box_width_ratio,
+                box_height_ratio=box_height_ratio,
+                gate_config=gate_config,
+                rejection_reason="low_confidence",
+            )
+        if (
+            gate_config.min_box_ratio is not None
+            and box_width_ratio < float(gate_config.min_box_ratio)
+        ) or (
+            gate_config.max_box_ratio is not None
+            and box_width_ratio > float(gate_config.max_box_ratio)
+        ):
+            return _reject_stereo_record(
+                pair,
+                calibration,
+                anchor_kind=anchor_kind,
+                left_anchor_px=left_anchor_px,
+                right_anchor_px=right_anchor_px,
+                disparity_px=disparity_px,
+                vertical_error_px=vertical_error_px,
+                box_width_ratio=box_width_ratio,
+                box_height_ratio=box_height_ratio,
+                gate_config=gate_config,
+                rejection_reason="box_width_ratio_out_of_range",
+            )
+        if (
+            gate_config.min_box_ratio is not None
+            and box_height_ratio < float(gate_config.min_box_ratio)
+        ) or (
+            gate_config.max_box_ratio is not None
+            and box_height_ratio > float(gate_config.max_box_ratio)
+        ):
+            return _reject_stereo_record(
+                pair,
+                calibration,
+                anchor_kind=anchor_kind,
+                left_anchor_px=left_anchor_px,
+                right_anchor_px=right_anchor_px,
+                disparity_px=disparity_px,
+                vertical_error_px=vertical_error_px,
+                box_width_ratio=box_width_ratio,
+                box_height_ratio=box_height_ratio,
+                gate_config=gate_config,
+                rejection_reason="box_height_ratio_out_of_range",
+            )
+        if (
+            gate_config.max_vertical_error_px is not None
+            and abs(vertical_error_px) > float(gate_config.max_vertical_error_px)
+        ):
+            return _reject_stereo_record(
+                pair,
+                calibration,
+                anchor_kind=anchor_kind,
+                left_anchor_px=left_anchor_px,
+                right_anchor_px=right_anchor_px,
+                disparity_px=disparity_px,
+                vertical_error_px=vertical_error_px,
+                box_width_ratio=box_width_ratio,
+                box_height_ratio=box_height_ratio,
+                gate_config=gate_config,
+                rejection_reason="vertical_error_too_large",
+            )
+        if disparity_px <= 0.0:
+            return _reject_stereo_record(
+                pair,
+                calibration,
+                anchor_kind=anchor_kind,
+                left_anchor_px=left_anchor_px,
+                right_anchor_px=right_anchor_px,
+                disparity_px=disparity_px,
+                vertical_error_px=vertical_error_px,
+                box_width_ratio=box_width_ratio,
+                box_height_ratio=box_height_ratio,
+                gate_config=gate_config,
+                rejection_reason="non_positive_disparity",
+            )
+
     depth_m = depth_from_disparity(disparity_px, calibration)
+    if gate_config is not None:
+        if (
+            gate_config.min_depth_m is not None
+            and depth_m < float(gate_config.min_depth_m)
+        ) or (
+            gate_config.max_depth_m is not None
+            and depth_m > float(gate_config.max_depth_m)
+        ):
+            return _reject_stereo_record(
+                pair,
+                calibration,
+                anchor_kind=anchor_kind,
+                left_anchor_px=left_anchor_px,
+                right_anchor_px=right_anchor_px,
+                disparity_px=disparity_px,
+                vertical_error_px=vertical_error_px,
+                box_width_ratio=box_width_ratio,
+                box_height_ratio=box_height_ratio,
+                gate_config=gate_config,
+                rejection_reason="depth_out_of_range",
+            )
+
     position = calibration.left.unproject(left_x, left_y, depth_m)
 
-    record = {
-        "schema_version": SCHEMA_VERSION,
-        "pair_id": pair.pair_id,
-        "frame_id": pair.frame_id,
-        "frame_provenance": calibration.frame_provenance,
-        "person_id": pair.person_id,
-        "bbox": {
-            "left_xyxy": list(pair.left_bbox_xyxy),
-            "right_xyxy": list(pair.right_bbox_xyxy),
-        },
-        "confidence": float(pair.confidence),
-        "anchor_kind": anchor_kind,
-        "left_anchor_px": [left_x, left_y],
-        "right_anchor_px": [right_x, right_y],
-        "disparity_px": disparity_px,
-        "vertical_error_px": left_y - right_y,
-        "depth_source": DEPTH_SOURCE_POV_STEREO,
-        "is_ground_truth": False,
-        "depth_m": depth_m,
-        "position": position,
-        "pose_quality": POSE_QUALITY_STEREO,
-        "calibration_ref": calibration.calibration_id,
-    }
+    record = _base_stereo_record(
+        pair,
+        calibration,
+        anchor_kind=anchor_kind,
+        left_anchor_px=left_anchor_px,
+        right_anchor_px=right_anchor_px,
+        disparity_px=disparity_px,
+        vertical_error_px=vertical_error_px,
+        box_width_ratio=box_width_ratio,
+        box_height_ratio=box_height_ratio,
+        gate_config=gate_config,
+        stereo_ok=True,
+        rejection_reason=None,
+    )
+    record["depth_m"] = depth_m
+    record["position"] = position
     if known_distance_m is not None:
         record["validation"] = validate_known_distance(
             depth_m,
