@@ -12,7 +12,7 @@ import json
 import importlib.util
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from smartxr.live_stereo_recorder import (
     CapturedNv12Frame,
@@ -213,8 +213,8 @@ class LiveStereoRecorderTests(unittest.TestCase):
         tool = load_module(ANTMAN_TOOL, "record_antman_vst_stereo_package")
 
         self.assertEqual(
-            str(tool.DEFAULT_VST_AI_SHM_ROOT),
-            "E:\\xia\\Antman\\0422\\0527\\P1\\vst_ai_shm",
+            PureWindowsPath(str(tool.DEFAULT_VST_AI_SHM_ROOT)),
+            PureWindowsPath("E:\\xia\\Antman\\0422\\0527\\P1\\vst_ai_shm"),
         )
         tool_source = ANTMAN_TOOL.read_text(encoding="utf-8")
         self.assertIn("VstAiShmConsumer", tool_source)
