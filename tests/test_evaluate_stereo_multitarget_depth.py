@@ -51,6 +51,26 @@ def bbox_pair_record(frame_id: int) -> dict:
     }
 
 
+def selected_bbox_outside_multitarget_match_record(frame_id: int) -> dict:
+    return {
+        "pair_id": f"pair-{frame_id:06d}",
+        "frame_id": frame_id,
+        "left_bbox_xyxy": [443, 151, 587, 369],
+        "right_bbox_xyxy": [416, 205, 583, 521],
+        "left": {
+            "people": [
+                {"track_id": 10, "bbox": [443, 151, 587, 369], "confidence": 0.72},
+            ]
+        },
+        "right": {
+            "people": [
+                {"track_id": 20, "bbox": [416, 205, 583, 521], "confidence": 0.68},
+            ]
+        },
+        "confidence": 0.68,
+    }
+
+
 def keypoint_pair_record(frame_id: int) -> dict:
     return {
         "pair_id": f"pair-{frame_id:06d}",
@@ -69,6 +89,23 @@ def keypoint_pair_record(frame_id: int) -> dict:
             "left_anchor_px": [500, 260],
             "right_anchor_px": [479, 261],
             "score": 0.88,
+        },
+    }
+
+
+def target_keypoint_pair_record(frame_id: int, target_label: str, left_px: list[float], right_px: list[float]) -> dict:
+    return {
+        "pair_id": f"pair-{frame_id:06d}:{target_label}",
+        "source_pair_id": f"pair-{frame_id:06d}",
+        "frame_id": frame_id,
+        "person_id": f"{target_label}-person",
+        "target_label": target_label,
+        "selected_anchor": {
+            "kind": "shoulder_midpoint",
+            "keypoints": ["left_shoulder", "right_shoulder"],
+            "left_px": left_px,
+            "right_px": right_px,
+            "score": 0.81,
         },
     }
 
@@ -100,6 +137,34 @@ class StereoMultitargetDepthEvaluatorTests(unittest.TestCase):
             summary["targets"]["rank_1_near"]["bbox"]["depth_m"]["median"],
             summary["targets"]["rank_2_far"]["bbox"]["depth_m"]["median"],
         )
+        self.assertEqual(summary["input_frames"], 2)
+        self.assertEqual(summary["matched_candidate_count"], 4)
+        self.assertEqual(summary["frames_with_candidate"], 2)
+        self.assertEqual(summary["target_coverage_ratio"], 1.0)
+
+    def test_selected_bbox_fallback_counts_as_candidate_coverage(self):
+        evaluator = load_module(TOOL, "evaluate_stereo_multitarget_depth")
+        input_path = self.tmp_path / "bbox.jsonl"
+        out_dir = self.tmp_path / "eval"
+        write_jsonl(input_path, [selected_bbox_outside_multitarget_match_record(1)])
+
+        evaluator.evaluate_stereo_multitarget_depth(
+            bbox_input_path=input_path,
+            keypoint_input_path=None,
+            out_dir=out_dir,
+            max_vertical_error_px=None,
+            max_center_y_delta_px=80.0,
+        )
+
+        summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(summary["input_frames"], 1)
+        self.assertEqual(summary["matched_candidate_count"], 1)
+        self.assertEqual(summary["frames_with_candidate"], 1)
+        self.assertEqual(summary["target_coverage_ratio"], 1.0)
+        self.assertEqual(summary["targets"]["rank_1_near"]["bbox"]["ok_count"], 1)
+
+        per_frame = json.loads((out_dir / "per_frame.jsonl").read_text(encoding="utf-8").strip())
+        self.assertEqual(per_frame["bbox_candidates"][0]["candidate_source"], "selected_bbox_fallback")
 
     def test_associates_keypoint_to_matching_target_and_reports_mismatch(self):
         evaluator = load_module(TOOL, "evaluate_stereo_multitarget_depth")
@@ -145,6 +210,34 @@ class StereoMultitargetDepthEvaluatorTests(unittest.TestCase):
         self.assertEqual(summary["keypoint_association"]["associated_count"], 0)
         self.assertEqual(summary["keypoint_association"]["unassociated_count"], 1)
         self.assertEqual(summary["targets"]["rank_1_near"]["keypoint"]["ok_count"], 0)
+
+    def test_summarizes_multitarget_keypoints_by_source_pair_and_target_label(self):
+        evaluator = load_module(TOOL, "evaluate_stereo_multitarget_depth")
+        bbox_path = self.tmp_path / "bbox.jsonl"
+        keypoint_path = self.tmp_path / "keypoint.jsonl"
+        out_dir = self.tmp_path / "eval"
+        write_jsonl(bbox_path, [bbox_pair_record(1)])
+        write_jsonl(
+            keypoint_path,
+            [
+                target_keypoint_pair_record(1, "rank_1_near", [500, 330], [479, 331]),
+                target_keypoint_pair_record(1, "rank_2_far", [300, 190], [292, 191]),
+            ],
+        )
+
+        evaluator.evaluate_stereo_multitarget_depth(
+            bbox_input_path=bbox_path,
+            keypoint_input_path=keypoint_path,
+            out_dir=out_dir,
+            max_vertical_error_px=20.0,
+        )
+
+        summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(summary["keypoint_association"]["input_count"], 2)
+        self.assertEqual(summary["keypoint_association"]["associated_count"], 2)
+        self.assertEqual(summary["keypoint_association"]["bbox_target_mismatch_count"], 0)
+        self.assertEqual(summary["targets"]["rank_1_near"]["keypoint"]["ok_count"], 1)
+        self.assertEqual(summary["targets"]["rank_2_far"]["keypoint"]["ok_count"], 1)
 
     def test_anchor_kind_gate_fallback_is_used_for_keypoint_metric(self):
         evaluator = load_module(TOOL, "evaluate_stereo_multitarget_depth")

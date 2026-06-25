@@ -123,6 +123,65 @@ def _match_bbox_candidates(
     return matched
 
 
+def _same_bbox(
+    first: tuple[float, float, float, float],
+    second: tuple[float, float, float, float],
+    *,
+    tolerance_px: float = 1.0,
+) -> bool:
+    return all(abs(left - right) <= tolerance_px for left, right in zip(first, second))
+
+
+def _selected_bbox_fallback_candidate(
+    record: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], tuple[float, float, float, float], tuple[float, float, float, float]] | None:
+    left_value = record.get("left_bbox_xyxy")
+    right_value = record.get("right_bbox_xyxy")
+    if left_value is None or right_value is None:
+        return None
+    left_bbox = _bbox_xyxy(left_value)
+    right_bbox = _bbox_xyxy(right_value)
+    left_det = {
+        "track_id": record.get("person_id", "selected"),
+        "bbox": list(left_bbox),
+        "confidence": record.get("confidence", 1.0),
+    }
+    right_det = {
+        "track_id": record.get("person_id", "selected"),
+        "bbox": list(right_bbox),
+        "confidence": record.get("confidence", 1.0),
+    }
+    return left_det, right_det, left_bbox, right_bbox
+
+
+def _match_bbox_candidates_with_selected_fallback(
+    record: dict[str, Any],
+    *,
+    max_center_y_delta_px: float,
+) -> list[
+    tuple[
+        dict[str, Any],
+        dict[str, Any],
+        tuple[float, float, float, float],
+        tuple[float, float, float, float],
+        str,
+    ]
+]:
+    matched = [
+        (*candidate, "matched_bbox")
+        for candidate in _match_bbox_candidates(record, max_center_y_delta_px=max_center_y_delta_px)
+    ]
+    fallback = _selected_bbox_fallback_candidate(record)
+    if fallback is None:
+        return matched
+    _left_det, _right_det, fallback_left_bbox, fallback_right_bbox = fallback
+    for _left_det, _right_det, left_bbox, right_bbox, _source in matched:
+        if _same_bbox(left_bbox, fallback_left_bbox) and _same_bbox(right_bbox, fallback_right_bbox):
+            return matched
+    matched.append((*fallback, "selected_bbox_fallback"))
+    return matched
+
+
 def _candidate_pair(
     source: dict[str, Any],
     index: int,
@@ -296,6 +355,24 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _load_keypoint_records(
+    keypoint_input_path: Path | None,
+) -> tuple[list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]], dict[str, dict[str, Any]]]:
+    if keypoint_input_path is None:
+        return [], {}, {}
+    records = list(_iter_jsonl(keypoint_input_path))
+    by_target: dict[tuple[str, str], dict[str, Any]] = {}
+    legacy_by_pair_id: dict[str, dict[str, Any]] = {}
+    for record in records:
+        target_label = record.get("target_label")
+        if target_label is not None:
+            source_pair_id = str(record.get("source_pair_id", record.get("pair_id")))
+            by_target[(source_pair_id, str(target_label))] = record
+        else:
+            legacy_by_pair_id[str(record.get("pair_id"))] = record
+    return records, by_target, legacy_by_pair_id
+
+
 def evaluate_stereo_multitarget_depth(
     *,
     bbox_input_path: Path,
@@ -327,10 +404,7 @@ def evaluate_stereo_multitarget_depth(
         max_vertical_error_px=max_vertical_error_px,
         gate_box_height_ratio=False,
     )
-    keypoint_by_pair_id = {
-        str(record.get("pair_id")): record
-        for record in _iter_jsonl(keypoint_input_path)
-    } if keypoint_input_path is not None else {}
+    keypoint_records, keypoint_by_target, legacy_keypoint_by_pair_id = _load_keypoint_records(keypoint_input_path)
 
     per_frame_path = out_dir / PER_FRAME_FILE
     frame_records: list[dict[str, Any]] = []
@@ -343,7 +417,7 @@ def evaluate_stereo_multitarget_depth(
     with per_frame_path.open("w", encoding="utf-8", newline="\n") as handle:
         for index, source in enumerate(_iter_jsonl(bbox_input_path), start=1):
             raw_candidates = []
-            for left_det, right_det, left_bbox, right_bbox in _match_bbox_candidates(
+            for left_det, right_det, left_bbox, right_bbox, candidate_source in _match_bbox_candidates_with_selected_fallback(
                 source,
                 max_center_y_delta_px=max_center_y_delta_px,
             ):
@@ -356,10 +430,17 @@ def evaluate_stereo_multitarget_depth(
                 )
                 evaluated["left_bbox_xyxy"] = list(left_bbox)
                 evaluated["right_bbox_xyxy"] = list(right_bbox)
+                evaluated["candidate_source"] = candidate_source
                 raw_candidates.append(evaluated)
 
             ok_for_rank = [candidate for candidate in raw_candidates if candidate.get("stereo_ok") is True]
             ranked = sorted(ok_for_rank, key=lambda candidate: float(candidate["depth_m"]))
+            if not ranked:
+                ranked.extend([
+                    candidate
+                    for candidate in raw_candidates
+                    if candidate.get("candidate_source") == "selected_bbox_fallback"
+                ][:1])
             for rank_index, candidate in enumerate(ranked, start=1):
                 label = _target_label(rank_index, len(ranked))
                 candidate["target_label"] = label
@@ -371,9 +452,46 @@ def evaluate_stereo_multitarget_depth(
                     target_bbox_records["unranked_rejected"].append(candidate)
             bbox_candidate_count += len(raw_candidates)
 
-            keypoint_record = keypoint_by_pair_id.get(str(source.get("pair_id")))
+            source_pair_id = str(source.get("pair_id"))
             keypoint_eval = None
-            if keypoint_record is not None:
+            target_keypoint_records_for_frame = [
+                (str(candidate["target_label"]), keypoint_by_target[(source_pair_id, str(candidate["target_label"]))])
+                for candidate in raw_candidates
+                if (source_pair_id, str(candidate["target_label"])) in keypoint_by_target
+            ]
+            if target_keypoint_records_for_frame:
+                for selected_bbox_label, keypoint_record in target_keypoint_records_for_frame:
+                    effective_anchor, candidate_keypoint_eval = evaluate_keypoint_anchor_depth(
+                        keypoint_record,
+                        calibration=calibration,
+                        min_keypoint_score=min_keypoint_score,
+                        min_depth_m=min_depth_m,
+                        max_depth_m=max_depth_m,
+                        max_vertical_error_px=max_vertical_error_px,
+                        require_anchor_kind=require_anchor_kind,
+                        anchor_mismatch_policy=anchor_mismatch_policy,
+                    )
+                    association_record = dict(keypoint_record)
+                    association_record["selected_anchor"] = effective_anchor
+                    associated_label = _find_keypoint_candidate_label(
+                        keypoint_record=association_record,
+                        candidates=raw_candidates,
+                        margin_px=association_margin_px,
+                        max_distance_px=max_association_distance_px,
+                    )
+                    if associated_label is None:
+                        association_counts["unassociated"] += 1
+                        continue
+                    association_counts["associated"] += 1
+                    if associated_label != selected_bbox_label:
+                        mismatch_count += 1
+                    candidate_keypoint_eval["target_label"] = associated_label
+                    candidate_keypoint_eval["selected_bbox_target_label"] = selected_bbox_label
+                    target_keypoint_records[associated_label].append(candidate_keypoint_eval)
+                    if keypoint_eval is None:
+                        keypoint_eval = candidate_keypoint_eval
+            elif str(source.get("pair_id")) in legacy_keypoint_by_pair_id:
+                keypoint_record = legacy_keypoint_by_pair_id[str(source.get("pair_id"))]
                 selected_bbox_label = _find_selected_bbox_label(keypoint_record, raw_candidates)
                 effective_anchor, candidate_keypoint_eval = evaluate_keypoint_anchor_depth(
                     keypoint_record,
@@ -426,12 +544,18 @@ def evaluate_stereo_multitarget_depth(
         }
         for label in target_labels
     }
+    input_frames = len(frame_records)
+    frames_with_candidate = sum(1 for record in frame_records if record["bbox_candidates"])
     summary = {
-        "frames_seen": len(frame_records),
+        "input_frames": input_frames,
+        "matched_candidate_count": bbox_candidate_count,
+        "frames_with_candidate": frames_with_candidate,
+        "target_coverage_ratio": 0.0 if input_frames == 0 else frames_with_candidate / input_frames,
+        "frames_seen": input_frames,
         "bbox_candidate_count": bbox_candidate_count,
         "targets": targets,
         "keypoint_association": {
-            "input_count": len(keypoint_by_pair_id),
+            "input_count": len(keypoint_records),
             "associated_count": association_counts["associated"],
             "unassociated_count": association_counts["unassociated"],
             "bbox_target_mismatch_count": mismatch_count,
