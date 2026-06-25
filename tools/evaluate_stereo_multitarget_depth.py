@@ -296,6 +296,24 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _load_keypoint_records(
+    keypoint_input_path: Path | None,
+) -> tuple[list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]], dict[str, dict[str, Any]]]:
+    if keypoint_input_path is None:
+        return [], {}, {}
+    records = list(_iter_jsonl(keypoint_input_path))
+    by_target: dict[tuple[str, str], dict[str, Any]] = {}
+    legacy_by_pair_id: dict[str, dict[str, Any]] = {}
+    for record in records:
+        target_label = record.get("target_label")
+        if target_label is not None:
+            source_pair_id = str(record.get("source_pair_id", record.get("pair_id")))
+            by_target[(source_pair_id, str(target_label))] = record
+        else:
+            legacy_by_pair_id[str(record.get("pair_id"))] = record
+    return records, by_target, legacy_by_pair_id
+
+
 def evaluate_stereo_multitarget_depth(
     *,
     bbox_input_path: Path,
@@ -327,10 +345,7 @@ def evaluate_stereo_multitarget_depth(
         max_vertical_error_px=max_vertical_error_px,
         gate_box_height_ratio=False,
     )
-    keypoint_by_pair_id = {
-        str(record.get("pair_id")): record
-        for record in _iter_jsonl(keypoint_input_path)
-    } if keypoint_input_path is not None else {}
+    keypoint_records, keypoint_by_target, legacy_keypoint_by_pair_id = _load_keypoint_records(keypoint_input_path)
 
     per_frame_path = out_dir / PER_FRAME_FILE
     frame_records: list[dict[str, Any]] = []
@@ -371,9 +386,46 @@ def evaluate_stereo_multitarget_depth(
                     target_bbox_records["unranked_rejected"].append(candidate)
             bbox_candidate_count += len(raw_candidates)
 
-            keypoint_record = keypoint_by_pair_id.get(str(source.get("pair_id")))
+            source_pair_id = str(source.get("pair_id"))
             keypoint_eval = None
-            if keypoint_record is not None:
+            target_keypoint_records_for_frame = [
+                (str(candidate["target_label"]), keypoint_by_target[(source_pair_id, str(candidate["target_label"]))])
+                for candidate in raw_candidates
+                if (source_pair_id, str(candidate["target_label"])) in keypoint_by_target
+            ]
+            if target_keypoint_records_for_frame:
+                for selected_bbox_label, keypoint_record in target_keypoint_records_for_frame:
+                    effective_anchor, candidate_keypoint_eval = evaluate_keypoint_anchor_depth(
+                        keypoint_record,
+                        calibration=calibration,
+                        min_keypoint_score=min_keypoint_score,
+                        min_depth_m=min_depth_m,
+                        max_depth_m=max_depth_m,
+                        max_vertical_error_px=max_vertical_error_px,
+                        require_anchor_kind=require_anchor_kind,
+                        anchor_mismatch_policy=anchor_mismatch_policy,
+                    )
+                    association_record = dict(keypoint_record)
+                    association_record["selected_anchor"] = effective_anchor
+                    associated_label = _find_keypoint_candidate_label(
+                        keypoint_record=association_record,
+                        candidates=raw_candidates,
+                        margin_px=association_margin_px,
+                        max_distance_px=max_association_distance_px,
+                    )
+                    if associated_label is None:
+                        association_counts["unassociated"] += 1
+                        continue
+                    association_counts["associated"] += 1
+                    if associated_label != selected_bbox_label:
+                        mismatch_count += 1
+                    candidate_keypoint_eval["target_label"] = associated_label
+                    candidate_keypoint_eval["selected_bbox_target_label"] = selected_bbox_label
+                    target_keypoint_records[associated_label].append(candidate_keypoint_eval)
+                    if keypoint_eval is None:
+                        keypoint_eval = candidate_keypoint_eval
+            elif str(source.get("pair_id")) in legacy_keypoint_by_pair_id:
+                keypoint_record = legacy_keypoint_by_pair_id[str(source.get("pair_id"))]
                 selected_bbox_label = _find_selected_bbox_label(keypoint_record, raw_candidates)
                 effective_anchor, candidate_keypoint_eval = evaluate_keypoint_anchor_depth(
                     keypoint_record,
@@ -431,7 +483,7 @@ def evaluate_stereo_multitarget_depth(
         "bbox_candidate_count": bbox_candidate_count,
         "targets": targets,
         "keypoint_association": {
-            "input_count": len(keypoint_by_pair_id),
+            "input_count": len(keypoint_records),
             "associated_count": association_counts["associated"],
             "unassociated_count": association_counts["unassociated"],
             "bbox_target_mismatch_count": mismatch_count,
