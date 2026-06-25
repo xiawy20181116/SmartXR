@@ -43,6 +43,7 @@ class StereoGateConfig:
     min_box_ratio: float | None = None
     max_box_ratio: float | None = None
     max_vertical_error_px: float | None = None
+    gate_box_height_ratio: bool = True
 
     def __post_init__(self) -> None:
         if self.min_confidence is not None:
@@ -86,6 +87,7 @@ class StereoGateConfig:
                 None if self.min_box_ratio is None else float(self.min_box_ratio),
                 None if self.max_box_ratio is None else float(self.max_box_ratio),
             ]
+            data["box_height_ratio_gate"] = bool(self.gate_box_height_ratio)
         if self.max_vertical_error_px is not None:
             data["vertical_error_max_px"] = float(self.max_vertical_error_px)
         return data
@@ -504,12 +506,14 @@ def triangulate_detection_pair(
                 gate_config=gate_config,
                 rejection_reason="box_width_ratio_out_of_range",
             )
-        if (
-            gate_config.min_box_ratio is not None
-            and box_height_ratio < float(gate_config.min_box_ratio)
-        ) or (
-            gate_config.max_box_ratio is not None
-            and box_height_ratio > float(gate_config.max_box_ratio)
+        if gate_config.gate_box_height_ratio and (
+            (
+                gate_config.min_box_ratio is not None
+                and box_height_ratio < float(gate_config.min_box_ratio)
+            ) or (
+                gate_config.max_box_ratio is not None
+                and box_height_ratio > float(gate_config.max_box_ratio)
+            )
         ):
             return _reject_stereo_record(
                 pair,

@@ -132,6 +132,116 @@ class StereoBboxDepthEvaluatorTests(unittest.TestCase):
         self.assertEqual(status["stereo_ok_count"], 1)
         self.assertTrue((out_dir / "summary.json").exists())
 
+    def test_height_ratio_is_diagnostic_but_width_ratio_still_rejects(self):
+        evaluator = load_module(TOOL, "evaluate_stereo_bbox_depth")
+        records = [
+            {
+                "frame_id": 30,
+                "left_bbox_xyxy": [640, 240, 720, 380],
+                "right_bbox_xyxy": [608, 240, 688, 520],
+                "confidence": 0.91,
+            },
+            {
+                "frame_id": 31,
+                "left_bbox_xyxy": [640, 240, 680, 520],
+                "right_bbox_xyxy": [608, 240, 688, 520],
+                "confidence": 0.91,
+            },
+        ]
+
+        input_path = self.tmp_path / "height_ratio_input.jsonl"
+        out_dir = self.tmp_path / "height_ratio_eval"
+        write_jsonl(input_path, records)
+
+        status = evaluator.evaluate_stereo_bbox_depth(
+            input_path=input_path,
+            out_dir=out_dir,
+            min_box_ratio=0.8,
+            max_box_ratio=1.2,
+            max_vertical_error_px=20.0,
+        )
+
+        self.assertEqual(status["frames_seen"], 2)
+        self.assertEqual(status["stereo_ok_count"], 1)
+        self.assertEqual(status["stereo_rejected_count"], 1)
+
+        per_frame = [
+            json.loads(line)
+            for line in (out_dir / "per_frame.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertTrue(per_frame[0]["stereo_ok"])
+        self.assertAlmostEqual(per_frame[0]["box_height_ratio"], 0.5)
+        self.assertFalse(per_frame[1]["stereo_ok"])
+        self.assertEqual(per_frame[1]["rejection_reason"], "box_width_ratio_out_of_range")
+
+        summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(summary["box_height_ratio"]["count"], 2)
+        self.assertAlmostEqual(summary["box_height_ratio"]["min"], 0.5)
+        self.assertEqual(
+            summary["top_rejection_reasons"],
+            [{"reason": "box_width_ratio_out_of_range", "count": 1}],
+        )
+
+    def test_summary_reports_raw_and_smoothed_temporal_drift(self):
+        evaluator = load_module(TOOL, "evaluate_stereo_bbox_depth")
+        records = [
+            {
+                "frame_id": 40,
+                "left_bbox_xyxy": [640, 240, 720, 520],
+                "right_bbox_xyxy": [608, 240, 688, 520],
+                "confidence": 0.91,
+            },
+            {
+                "frame_id": 41,
+                "left_bbox_xyxy": [640, 240, 720, 520],
+                "right_bbox_xyxy": [608, 240, 688, 520],
+                "confidence": 0.91,
+            },
+            {
+                "frame_id": 42,
+                "left_bbox_xyxy": [640, 240, 720, 520],
+                "right_bbox_xyxy": [632, 240, 712, 520],
+                "confidence": 0.91,
+            },
+            {
+                "frame_id": 43,
+                "left_bbox_xyxy": [640, 240, 720, 520],
+                "right_bbox_xyxy": [608, 240, 688, 520],
+                "confidence": 0.91,
+            },
+            {
+                "frame_id": 44,
+                "left_bbox_xyxy": [640, 240, 720, 520],
+                "right_bbox_xyxy": [608, 240, 688, 520],
+                "confidence": 0.91,
+            },
+        ]
+
+        input_path = self.tmp_path / "smoothing_input.jsonl"
+        out_dir = self.tmp_path / "smoothing_eval"
+        write_jsonl(input_path, records)
+
+        evaluator.evaluate_stereo_bbox_depth(
+            input_path=input_path,
+            out_dir=out_dir,
+            max_depth_m=20.0,
+            temporal_median_window=3,
+            temporal_outlier_max_delta_m=0.75,
+        )
+
+        summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+        self.assertIn("raw_position_drift_m", summary)
+        self.assertIn("smoothed_position_drift_m", summary)
+        self.assertIn("temporal_filter", summary)
+        self.assertIn("disparity_px", summary)
+        self.assertIn("vertical_error_px", summary)
+        self.assertIn("box_width_ratio", summary)
+        self.assertIn("box_height_ratio", summary)
+        self.assertGreater(summary["raw_position_drift_m"], 0.0)
+        self.assertLess(summary["smoothed_position_drift_m"], summary["raw_position_drift_m"])
+        self.assertEqual(summary["temporal_filter"]["median_window"], 3)
+        self.assertEqual(summary["temporal_filter"]["outlier_rejected_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
