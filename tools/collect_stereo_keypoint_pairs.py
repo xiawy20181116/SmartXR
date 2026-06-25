@@ -151,6 +151,8 @@ def build_stereo_keypoint_pair_record(
     right_keypoints: dict[str, Any],
     bbox_pair: dict[str, Any] | None,
     min_score: float,
+    left_pose_association: dict[str, Any] | None = None,
+    right_pose_association: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     left_bbox = None if bbox_pair is None else bbox_pair.get("left_bbox_xyxy")
     right_bbox = None if bbox_pair is None else bbox_pair.get("right_bbox_xyxy")
@@ -200,6 +202,11 @@ def build_stereo_keypoint_pair_record(
             "right_anchor_px": _bbox_top_center(right_bbox_values),
             "score": float(bbox_pair.get("confidence", 1.0)) if bbox_pair is not None else 1.0,
         }
+    if left_pose_association is not None or right_pose_association is not None:
+        record["pose_association"] = {
+            "left": left_pose_association,
+            "right": right_pose_association,
+        }
     return record
 
 
@@ -233,29 +240,21 @@ def _to_list(value: Any) -> Any:
     return value
 
 
-def _normalize_pose_output(keypoints: Any, scores: Any) -> dict[str, dict[str, Any]]:
+def _coerce_pose_lists(keypoints: Any, scores: Any) -> tuple[list[Any], list[Any]]:
     keypoints = _to_list(keypoints)
     scores = _to_list(scores)
     if not keypoints:
-        return {}
+        return [], []
     if keypoints and isinstance(keypoints[0], (int, float)):
         keypoints = [keypoints]
         scores = [scores]
     if keypoints and keypoints[0] and isinstance(keypoints[0][0], (int, float)):
         keypoints = [keypoints]
         scores = [scores]
+    return list(keypoints), list(scores)
 
-    best_index = 0
-    best_score = -1.0
-    for person_index, person_scores in enumerate(scores):
-        valid_scores = [float(score) for score in person_scores if score is not None]
-        average_score = sum(valid_scores) / len(valid_scores) if valid_scores else 0.0
-        if average_score > best_score:
-            best_index = person_index
-            best_score = average_score
 
-    selected_keypoints = keypoints[best_index]
-    selected_scores = scores[best_index]
+def _normalize_single_pose(selected_keypoints: Any, selected_scores: Any) -> dict[str, dict[str, Any]]:
     normalized: dict[str, dict[str, Any]] = {}
     for index, name in KEYPOINT_NAMES.items():
         if index >= len(selected_keypoints) or index >= len(selected_scores):
@@ -268,6 +267,101 @@ def _normalize_pose_output(keypoints: Any, scores: Any) -> dict[str, dict[str, A
             "score": float(selected_scores[index]),
         }
     return normalized
+
+
+def _average_pose_score(person_scores: Any) -> float:
+    valid_scores = [float(score) for score in person_scores if score is not None]
+    return sum(valid_scores) / len(valid_scores) if valid_scores else 0.0
+
+
+def _normalize_pose_output(keypoints: Any, scores: Any) -> dict[str, dict[str, Any]]:
+    keypoints, scores = _coerce_pose_lists(keypoints, scores)
+    if not keypoints:
+        return {}
+
+    best_index = 0
+    best_score = -1.0
+    for person_index, person_scores in enumerate(scores):
+        average_score = _average_pose_score(person_scores)
+        if average_score > best_score:
+            best_index = person_index
+            best_score = average_score
+
+    return _normalize_single_pose(keypoints[best_index], scores[best_index])
+
+
+def _pose_bbox_match_stats(
+    normalized: dict[str, dict[str, Any]],
+    bbox_xyxy: list[float] | tuple[float, float, float, float],
+    *,
+    association_margin_px: float,
+) -> tuple[int, float]:
+    x1, y1, x2, y2 = (float(value) for value in bbox_xyxy)
+    margin = float(association_margin_px)
+    bbox_center_x = (x1 + x2) * 0.5
+    bbox_center_y = (y1 + y2) * 0.5
+
+    inside_count = 0
+    valid_points: list[tuple[float, float]] = []
+    for keypoint in normalized.values():
+        xy = keypoint.get("xy")
+        if not isinstance(xy, list) or len(xy) != 2:
+            continue
+        px = float(xy[0])
+        py = float(xy[1])
+        valid_points.append((px, py))
+        if x1 - margin <= px <= x2 + margin and y1 - margin <= py <= y2 + margin:
+            inside_count += 1
+
+    if not valid_points:
+        return 0, float("inf")
+    pose_center_x = sum(px for px, _py in valid_points) / len(valid_points)
+    pose_center_y = sum(py for _px, py in valid_points) / len(valid_points)
+    center_distance = ((pose_center_x - bbox_center_x) ** 2 + (pose_center_y - bbox_center_y) ** 2) ** 0.5
+    return inside_count, center_distance
+
+
+def _normalize_pose_output_for_bbox(
+    keypoints: Any,
+    scores: Any,
+    *,
+    target_bbox_xyxy: list[float] | tuple[float, float, float, float] | None,
+    association_margin_px: float,
+    max_association_distance_px: float,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    if target_bbox_xyxy is None:
+        return _normalize_pose_output(keypoints, scores), {"status": "not_requested"}
+
+    keypoints, scores = _coerce_pose_lists(keypoints, scores)
+    if not keypoints:
+        return {}, {"status": "no_pose"}
+
+    best: tuple[tuple[int, float, float], int, dict[str, dict[str, Any]], int, float] | None = None
+    for person_index, (person_keypoints, person_scores) in enumerate(zip(keypoints, scores)):
+        normalized = _normalize_single_pose(person_keypoints, person_scores)
+        inside_count, center_distance = _pose_bbox_match_stats(
+            normalized,
+            target_bbox_xyxy,
+            association_margin_px=association_margin_px,
+        )
+        if inside_count <= 0 and center_distance > float(max_association_distance_px):
+            continue
+        average_score = _average_pose_score(person_scores)
+        rank = (inside_count, -center_distance, average_score)
+        if best is None or rank > best[0]:
+            best = (rank, person_index, normalized, inside_count, center_distance)
+
+    if best is None:
+        return {}, {"status": "unassociated"}
+
+    _rank, person_index, normalized, inside_count, center_distance = best
+    return normalized, {
+        "status": "matched",
+        "method": "keypoints_inside_bbox_then_center_distance",
+        "selected_person_index": int(person_index),
+        "inside_keypoint_count": int(inside_count),
+        "center_distance_px": float(center_distance),
+    }
 
 
 def _load_bbox_pairs(path: Path | None) -> dict[int, dict[str, Any]]:
@@ -285,6 +379,8 @@ def build_stereo_keypoint_pairs_from_package(
     frame_decoder: Callable[[Any], Any] | None = None,
     min_score: float = 0.5,
     stop_after_pairs: int | None = None,
+    pose_association_margin_px: float = 8.0,
+    max_pose_association_distance_px: float = 120.0,
 ) -> dict[str, Any]:
     summary = load_stereo_package(package_dir)
     bbox_pairs = _load_bbox_pairs(bbox_pairs_input)
@@ -300,13 +396,32 @@ def build_stereo_keypoint_pairs_from_package(
             right_frame = frame_decoder(read_packet_file(pair.right.path, index=pair.right.index))
             left_keypoints, left_scores = pose_estimator(left_frame)
             right_keypoints, right_scores = pose_estimator(right_frame)
+            bbox_pair = bbox_pairs.get(pair.frame_id)
+            left_bbox = None if bbox_pair is None else bbox_pair.get("left_bbox_xyxy")
+            right_bbox = None if bbox_pair is None else bbox_pair.get("right_bbox_xyxy")
+            left_normalized, left_association = _normalize_pose_output_for_bbox(
+                left_keypoints,
+                left_scores,
+                target_bbox_xyxy=left_bbox,
+                association_margin_px=pose_association_margin_px,
+                max_association_distance_px=max_pose_association_distance_px,
+            )
+            right_normalized, right_association = _normalize_pose_output_for_bbox(
+                right_keypoints,
+                right_scores,
+                target_bbox_xyxy=right_bbox,
+                association_margin_px=pose_association_margin_px,
+                max_association_distance_px=max_pose_association_distance_px,
+            )
             record = build_stereo_keypoint_pair_record(
                 frame_id=pair.frame_id,
                 timestamp_ms=min(pair.left.timestamp_us, pair.right.timestamp_us) // 1000,
-                left_keypoints=_normalize_pose_output(left_keypoints, left_scores),
-                right_keypoints=_normalize_pose_output(right_keypoints, right_scores),
-                bbox_pair=bbox_pairs.get(pair.frame_id),
+                left_keypoints=left_normalized,
+                right_keypoints=right_normalized,
+                bbox_pair=bbox_pair,
                 min_score=min_score,
+                left_pose_association=left_association,
+                right_pose_association=right_association,
             )
             if record["selected_anchor"]["left_px"] is None or record["selected_anchor"]["right_px"] is None:
                 dropped_no_anchor_pairs += 1
@@ -361,6 +476,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", default="balanced")
     parser.add_argument("--backend", default="onnxruntime")
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--pose-association-margin-px", type=float, default=8.0)
+    parser.add_argument("--max-pose-association-distance-px", type=float, default=120.0)
     return parser.parse_args()
 
 
@@ -375,6 +492,8 @@ def main() -> int:
             bbox_pairs_input=args.bbox_pairs_input,
             min_score=args.min_keypoint_score,
             stop_after_pairs=args.stop_after_pairs,
+            pose_association_margin_px=args.pose_association_margin_px,
+            max_pose_association_distance_px=args.max_pose_association_distance_px,
         )
     except Exception as exc:
         status = {

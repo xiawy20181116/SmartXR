@@ -107,6 +107,40 @@ class StereoKeypointPairCollectorTests(unittest.TestCase):
         self.assertEqual(record["bbox_baseline"]["right_anchor_px"], [648.0, 242.0])
         self.assertEqual(record["left_bbox_xyxy"], bbox_pair["left_bbox_xyxy"])
 
+    def test_selects_pose_matching_bbox_target_over_highest_score_pose(self):
+        collector = load_module(TOOL, "collect_stereo_keypoint_pairs")
+        person_far = [[100.0, 90.0] for _ in range(17)]
+        person_target = [[500.0, 350.0] for _ in range(17)]
+        person_target[5] = [430.0, 300.0]
+        person_target[6] = [530.0, 300.0]
+
+        keypoints, association = collector._normalize_pose_output_for_bbox(
+            [person_far, person_target],
+            [[0.95] * 17, [0.65] * 17],
+            target_bbox_xyxy=[400.0, 240.0, 560.0, 430.0],
+            association_margin_px=8.0,
+            max_association_distance_px=120.0,
+        )
+
+        self.assertEqual(keypoints["left_shoulder"]["xy"], [430.0, 300.0])
+        self.assertEqual(keypoints["right_shoulder"]["xy"], [530.0, 300.0])
+        self.assertEqual(association["status"], "matched")
+        self.assertEqual(association["selected_person_index"], 1)
+        self.assertGreater(association["inside_keypoint_count"], 0)
+
+    def test_unmatched_bbox_target_does_not_fall_back_to_wrong_pose(self):
+        collector = load_module(TOOL, "collect_stereo_keypoint_pairs")
+        keypoints, association = collector._normalize_pose_output_for_bbox(
+            [[[100.0, 90.0] for _ in range(17)]],
+            [[0.95] * 17],
+            target_bbox_xyxy=[400.0, 240.0, 560.0, 430.0],
+            association_margin_px=8.0,
+            max_association_distance_px=120.0,
+        )
+
+        self.assertEqual(keypoints, {})
+        self.assertEqual(association["status"], "unassociated")
+
     def test_writes_jsonl_from_in_memory_records(self):
         collector = load_module(TOOL, "collect_stereo_keypoint_pairs")
         out_path = self.tmp_path / "keypoint_pairs.jsonl"
