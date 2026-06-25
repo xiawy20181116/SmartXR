@@ -23,6 +23,57 @@ from smartxr.live_stereo_recorder import record_live_stereo_package  # noqa: E40
 from smartxr.stereo_depth import SCENE_STEREO_28  # noqa: E402
 
 
+DEFAULT_VST_AI_SHM_ROOT = Path("E:/xia/Antman/0422/0527/P1/vst_ai_shm")
+
+
+class VstAiShmConsumerReader:
+    def __init__(
+        self,
+        *,
+        consumer: Any,
+        wait_timeout_ms: int,
+    ) -> None:
+        self.consumer = consumer
+        self.wait_timeout_ms = int(wait_timeout_ms)
+        self.frames_returned = 0
+        self.empty_waits = 0
+
+    def read_latest(self):
+        if not self.consumer.wait_for_frame(timeout_ms=self.wait_timeout_ms):
+            self.empty_waits += 1
+            return True, -1, None
+        result = self.consumer.read_latest_frame()
+        if result is None:
+            self.empty_waits += 1
+            return True, -1, None
+        header, nv12 = result
+        frame_id = int(header["frame_id"])
+        self.consumer.acknowledge(frame_id)
+        self.frames_returned += 1
+        return (
+            True,
+            frame_id,
+            {
+                "width": int(header["width"]),
+                "height": int(header["height"]),
+                "stride": int(header["stride"]),
+                "payload": nv12.tobytes(),
+            },
+        )
+
+    def get_stats(self) -> dict[str, Any]:
+        return {
+            "reader": "vst_ai_shm_consumer",
+            "frames_returned": self.frames_returned,
+            "empty_waits": self.empty_waits,
+            "shm_name": getattr(self.consumer, "shm_name", ""),
+            "event_name": getattr(self.consumer, "event_name", ""),
+        }
+
+    def release(self) -> None:
+        self.consumer.close()
+
+
 def build_stereo_shm_names(base_name: str) -> tuple[str, str]:
     return (
         resolve_vst_shm_name(base_name, "Left"),
@@ -31,6 +82,43 @@ def build_stereo_shm_names(base_name: str) -> tuple[str, str]:
 
 
 def _create_stereo_readers(args: argparse.Namespace) -> tuple[Any, Any]:
+    if args.vst_reader == "vst_ai_shm":
+        return _create_vst_ai_shm_readers(args)
+    return _create_legacy_stereo_readers(args)
+
+
+def _create_vst_ai_shm_readers(args: argparse.Namespace) -> tuple[Any, Any]:
+    root = Path(args.vst_ai_shm_root)
+    value = str(root.resolve())
+    if value not in sys.path:
+        sys.path.insert(0, value)
+    from vst_ai_shm_consumer import VstAiShmConsumer
+
+    left = VstAiShmConsumer(
+        base_name=args.shm_name,
+        namespace=args.shm_namespace,
+        eye="Left",
+    )
+    right = VstAiShmConsumer(
+        base_name=args.shm_name,
+        namespace=args.shm_namespace,
+        eye="Right",
+    )
+    left.open(wait_for_producer_seconds=args.wait_for_producer_seconds)
+    right.open(wait_for_producer_seconds=args.wait_for_producer_seconds)
+    return (
+        VstAiShmConsumerReader(
+            consumer=left,
+            wait_timeout_ms=args.wait_timeout_ms,
+        ),
+        VstAiShmConsumerReader(
+            consumer=right,
+            wait_timeout_ms=args.wait_timeout_ms,
+        ),
+    )
+
+
+def _create_legacy_stereo_readers(args: argparse.Namespace) -> tuple[Any, Any]:
     _install_antman_paths(args.antman_root)
     from human_face_visualizer.async_runtime import VstAiShmReader
 
@@ -72,6 +160,13 @@ def _parse_args() -> argparse.Namespace:
         description="Record Antman VST Left/Right SHM into a SmartXR stereo package."
     )
     parser.add_argument("--antman-root", type=Path, default=DEFAULT_ANTMAN_ROOT)
+    parser.add_argument("--vst-ai-shm-root", type=Path, default=DEFAULT_VST_AI_SHM_ROOT)
+    parser.add_argument(
+        "--vst-reader",
+        choices=("vst_ai_shm", "legacy"),
+        default="vst_ai_shm",
+        help="Use the standalone vst_ai_shm_consumer module by default; pass legacy for human_face_visualizer.async_runtime.",
+    )
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--shm-name", default="Antman.VST.AI.v1")
     parser.add_argument("--shm-namespace", default=None)

@@ -1,5 +1,8 @@
 param(
     [string]$AntmanRoot = "E:\xia\Antman_smart",
+    [string]$VstAiShmRoot = "E:\xia\Antman\0422\0527\P1\vst_ai_shm",
+    [ValidateSet("vst_ai_shm", "legacy")]
+    [string]$VstReader = "vst_ai_shm",
     [string]$OutDir = ".tmp\antman_vst_stereo_package",
     [string]$ShmName = "Antman.VST.AI.v1",
     [string]$ShmNamespace = "",
@@ -38,6 +41,8 @@ if ($PythonExe -eq "") {
 
 Write-Host "SmartXR Antman VST stereo package recorder"
 Write-Host "Antman root: $AntmanRoot"
+Write-Host "VST SHM root: $VstAiShmRoot"
+Write-Host "VST reader:   $VstReader"
 Write-Host "Output:      $OutDir"
 Write-Host "Python:      $PythonExe"
 Write-Host "Source:      Antman.VST.AI.v1 Left/Right SHM"
@@ -46,6 +51,8 @@ Write-Host "Need headset: connect/start the headset VST producer before expectin
 $recorderArgs = @(
     $Recorder,
     "--antman-root", $AntmanRoot,
+    "--vst-ai-shm-root", $VstAiShmRoot,
+    "--vst-reader", $VstReader,
     "--out-dir", $OutDir,
     "--shm-name", $ShmName,
     "--wait-timeout-ms", "$WaitTimeoutMs",

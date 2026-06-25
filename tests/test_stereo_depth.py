@@ -12,6 +12,8 @@ import unittest
 
 from smartxr.detection_backend import detections_from_records
 from smartxr.stereo_depth import (
+    ANCHOR_KIND_BBOX_CENTER,
+    ANCHOR_KIND_BBOX_TOP_CENTER,
     DEPTH_SOURCE_KNOWN_DISTANCE_GT,
     DEPTH_SOURCE_POV_STEREO,
     DEPTH_SOURCE_RAW_STEREO,
@@ -21,6 +23,7 @@ from smartxr.stereo_depth import (
     SCENE_STEREO_28,
     StereoDepthSource,
     StereoDetectionPair,
+    StereoGateConfig,
     build_known_distance_record,
     build_stereo_session_metadata,
     replace_depth_value,
@@ -87,10 +90,155 @@ class StereoTriangulationTests(unittest.TestCase):
         self.assertEqual(record["pose_quality"], POSE_QUALITY_STEREO)
         self.assertEqual(record["calibration_ref"], scaled.calibration_id)
         self.assertAlmostEqual(record["depth_m"], 0.8706375, places=7)
+        self.assertEqual(record["anchor_kind"], ANCHOR_KIND_BBOX_CENTER)
+        self.assertEqual(record["left_anchor_px"], [680.0, 380.0])
+        self.assertEqual(record["right_anchor_px"], [648.0, 380.0])
         self.assertAlmostEqual(record["validation"]["known_distance_m"], 0.8706375)
         self.assertAlmostEqual(record["validation"]["depth_error_m"], 0.0)
         self.assertTrue(record["validation"]["within_tolerance"])
         self.assertAlmostEqual(record["position"][2], record["depth_m"])
+
+    def test_triangulates_bbox_top_center_anchor_and_emits_diagnostics(self):
+        scaled = SCENE_STEREO_28.scaled_to(1164, 872)
+        pair = StereoDetectionPair(
+            pair_id="pair-000044",
+            frame_id=44,
+            person_id="person-1",
+            left_bbox_xyxy=(640.0, 240.0, 720.0, 520.0),
+            right_bbox_xyxy=(608.0, 250.0, 688.0, 530.0),
+            confidence=0.91,
+        )
+
+        record = triangulate_detection_pair(
+            pair,
+            scaled,
+            anchor_kind=ANCHOR_KIND_BBOX_TOP_CENTER,
+        )
+
+        self.assertEqual(record["anchor_kind"], ANCHOR_KIND_BBOX_TOP_CENTER)
+        self.assertEqual(record["left_anchor_px"], [680.0, 240.0])
+        self.assertEqual(record["right_anchor_px"], [648.0, 250.0])
+        self.assertAlmostEqual(record["disparity_px"], 32.0)
+        self.assertAlmostEqual(record["vertical_error_px"], -10.0)
+        self.assertAlmostEqual(record["depth_m"], 0.8706375, places=7)
+        self.assertAlmostEqual(record["position"][0], 0.19569375)
+        self.assertAlmostEqual(record["position"][1], -0.3913875)
+        self.assertAlmostEqual(record["position"][2], record["depth_m"])
+
+    def test_gate_success_emits_ok_and_gate_diagnostics(self):
+        scaled = SCENE_STEREO_28.scaled_to(1164, 872)
+        pair = StereoDetectionPair(
+            pair_id="pair-000045",
+            frame_id=45,
+            person_id="person-1",
+            left_bbox_xyxy=(640.0, 240.0, 720.0, 520.0),
+            right_bbox_xyxy=(608.0, 250.0, 688.0, 530.0),
+            confidence=0.91,
+        )
+
+        record = triangulate_detection_pair(
+            pair,
+            scaled,
+            anchor_kind=ANCHOR_KIND_BBOX_TOP_CENTER,
+            gate_config=StereoGateConfig(
+                min_confidence=0.4,
+                min_depth_m=0.2,
+                max_depth_m=5.0,
+                min_box_ratio=0.5,
+                max_box_ratio=2.0,
+                max_vertical_error_px=12.0,
+            ),
+        )
+
+        self.assertTrue(record["stereo_ok"])
+        self.assertIsNone(record["rejection_reason"])
+        self.assertEqual(record["gates"]["confidence_min"], 0.4)
+        self.assertEqual(record["gates"]["depth_range_m"], [0.2, 5.0])
+        self.assertEqual(record["gates"]["box_ratio_range"], [0.5, 2.0])
+        self.assertEqual(record["gates"]["vertical_error_max_px"], 12.0)
+        self.assertAlmostEqual(record["box_width_ratio"], 1.0)
+        self.assertAlmostEqual(record["box_height_ratio"], 1.0)
+
+    def test_gates_reject_with_rejection_reason(self):
+        scaled = SCENE_STEREO_28.scaled_to(1164, 872)
+
+        cases = [
+            (
+                "low_confidence",
+                StereoDetectionPair(
+                    pair_id="pair-000046",
+                    frame_id=46,
+                    person_id="person-1",
+                    left_bbox_xyxy=(640.0, 240.0, 720.0, 520.0),
+                    right_bbox_xyxy=(608.0, 240.0, 688.0, 520.0),
+                    confidence=0.39,
+                ),
+                StereoGateConfig(min_confidence=0.4),
+            ),
+            (
+                "box_width_ratio_out_of_range",
+                StereoDetectionPair(
+                    pair_id="pair-000047",
+                    frame_id=47,
+                    person_id="person-1",
+                    left_bbox_xyxy=(640.0, 240.0, 720.0, 520.0),
+                    right_bbox_xyxy=(608.0, 240.0, 648.0, 520.0),
+                    confidence=0.91,
+                ),
+                StereoGateConfig(min_box_ratio=0.75, max_box_ratio=1.5),
+            ),
+            (
+                "box_height_ratio_out_of_range",
+                StereoDetectionPair(
+                    pair_id="pair-000048",
+                    frame_id=48,
+                    person_id="person-1",
+                    left_bbox_xyxy=(640.0, 240.0, 720.0, 520.0),
+                    right_bbox_xyxy=(608.0, 240.0, 688.0, 380.0),
+                    confidence=0.91,
+                ),
+                StereoGateConfig(min_box_ratio=0.75, max_box_ratio=1.5),
+            ),
+            (
+                "vertical_error_too_large",
+                StereoDetectionPair(
+                    pair_id="pair-000049",
+                    frame_id=49,
+                    person_id="person-1",
+                    left_bbox_xyxy=(640.0, 240.0, 720.0, 520.0),
+                    right_bbox_xyxy=(608.0, 260.0, 688.0, 540.0),
+                    confidence=0.91,
+                ),
+                StereoGateConfig(max_vertical_error_px=12.0),
+            ),
+            (
+                "depth_out_of_range",
+                StereoDetectionPair(
+                    pair_id="pair-000050",
+                    frame_id=50,
+                    person_id="person-1",
+                    left_bbox_xyxy=(640.0, 240.0, 720.0, 520.0),
+                    right_bbox_xyxy=(636.0, 240.0, 716.0, 520.0),
+                    confidence=0.91,
+                ),
+                StereoGateConfig(min_depth_m=0.2, max_depth_m=5.0),
+            ),
+        ]
+
+        for expected_reason, pair, gate_config in cases:
+            with self.subTest(expected_reason):
+                record = triangulate_detection_pair(
+                    pair,
+                    scaled,
+                    anchor_kind=ANCHOR_KIND_BBOX_TOP_CENTER,
+                    gate_config=gate_config,
+                )
+
+                self.assertFalse(record["stereo_ok"])
+                self.assertEqual(record["rejection_reason"], expected_reason)
+                self.assertEqual(record["depth_source"], DEPTH_SOURCE_POV_STEREO)
+                self.assertNotIn("depth_m", record)
+                self.assertNotIn("position", record)
 
     def test_rejects_zero_or_negative_disparity(self):
         scaled = SCENE_STEREO_28.scaled_to(1164, 872)

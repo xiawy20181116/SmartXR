@@ -209,6 +209,17 @@ class LiveStereoRecorderTests(unittest.TestCase):
         self.assertIn("record_antman_vst_stereo_package.py", runner_source)
         self.assertIn("Antman.VST.AI.v1", runner_source)
 
+    def test_antman_tool_defaults_to_vst_ai_shm_consumer_module(self):
+        tool = load_module(ANTMAN_TOOL, "record_antman_vst_stereo_package")
+
+        self.assertEqual(
+            str(tool.DEFAULT_VST_AI_SHM_ROOT),
+            "E:\\xia\\Antman\\0422\\0527\\P1\\vst_ai_shm",
+        )
+        tool_source = ANTMAN_TOOL.read_text(encoding="utf-8")
+        self.assertIn("VstAiShmConsumer", tool_source)
+        self.assertIn("--vst-ai-shm-root", tool_source)
+
 
 if __name__ == "__main__":
     unittest.main()
