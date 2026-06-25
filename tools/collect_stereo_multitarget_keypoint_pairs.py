@@ -23,7 +23,7 @@ from collect_stereo_keypoint_pairs import (  # noqa: E402
 )
 from evaluate_stereo_multitarget_depth import (  # noqa: E402
     _candidate_pair,
-    _match_bbox_candidates,
+    _match_bbox_candidates_with_selected_fallback,
     _target_label,
 )
 from smartxr.nv12_reader import read_packet_file  # noqa: E402
@@ -64,7 +64,7 @@ def _rank_bbox_candidates(
         gate_box_height_ratio=False,
     )
     candidates: list[dict[str, Any]] = []
-    for left_det, right_det, left_bbox, right_bbox in _match_bbox_candidates(
+    for left_det, right_det, left_bbox, right_bbox, candidate_source in _match_bbox_candidates_with_selected_fallback(
         bbox_record,
         max_center_y_delta_px=max_center_y_delta_px,
     ):
@@ -77,12 +77,20 @@ def _rank_bbox_candidates(
         )
         evaluated["left_bbox_xyxy"] = list(left_bbox)
         evaluated["right_bbox_xyxy"] = list(right_bbox)
+        evaluated["candidate_source"] = candidate_source
         candidates.append(evaluated)
 
     ranked = sorted(
         [candidate for candidate in candidates if candidate.get("stereo_ok") is True],
         key=lambda candidate: float(candidate["depth_m"]),
     )
+    if not ranked:
+        selected_fallback = [
+            candidate
+            for candidate in candidates
+            if candidate.get("candidate_source") == "selected_bbox_fallback"
+        ]
+        ranked.extend(selected_fallback[:1])
     for rank_index, candidate in enumerate(ranked, start=1):
         candidate["bbox_rank"] = rank_index
         candidate["target_label"] = _target_label(rank_index, len(ranked))
@@ -165,7 +173,10 @@ def build_multitarget_keypoint_records_for_bbox_record(
         record["source_pair_id"] = source_pair_id
         record["target_label"] = target_label
         record["bbox_rank"] = int(candidate["bbox_rank"])
-        record["bbox_depth_m"] = float(candidate["depth_m"])
+        record["bbox_stereo_ok"] = bool(candidate.get("stereo_ok") is True)
+        if candidate.get("depth_m") is not None:
+            record["bbox_depth_m"] = float(candidate["depth_m"])
+        record["bbox_candidate_source"] = str(candidate.get("candidate_source", "matched_bbox"))
         record["association_reason"] = _association_reason(left_association, right_association)
         records.append(record)
     return records

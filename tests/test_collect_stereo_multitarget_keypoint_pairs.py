@@ -37,6 +37,26 @@ def bbox_record() -> dict:
     }
 
 
+def bbox_record_with_selected_target_outside_multitarget_match() -> dict:
+    return {
+        "pair_id": "pair-000002",
+        "frame_id": 2,
+        "left_bbox_xyxy": [443, 151, 587, 369],
+        "right_bbox_xyxy": [416, 205, 583, 521],
+        "left": {
+            "people": [
+                {"track_id": 10, "bbox": [443, 151, 587, 369], "confidence": 0.72},
+            ]
+        },
+        "right": {
+            "people": [
+                {"track_id": 20, "bbox": [416, 205, 583, 521], "confidence": 0.68},
+            ]
+        },
+        "confidence": 0.68,
+    }
+
+
 def pose_at(x: float, y: float) -> list[list[float]]:
     pose = [[x, y] for _ in range(17)]
     pose[5] = [x - 20.0, y]
@@ -69,6 +89,52 @@ class StereoMultitargetKeypointCollectorTests(unittest.TestCase):
         self.assertEqual(records[1]["pair_id"], "pair-000001:rank_2_far")
         self.assertEqual(records[0]["selected_anchor"]["kind"], "shoulder_midpoint")
         self.assertEqual(records[1]["pose_association"]["left"]["status"], "matched")
+
+    def test_falls_back_to_top_level_selected_bbox_when_multitarget_match_rejects_it(self):
+        collector = load_module(TOOL, "collect_stereo_multitarget_keypoint_pairs")
+        records = collector.build_multitarget_keypoint_records_for_bbox_record(
+            bbox_record_with_selected_target_outside_multitarget_match(),
+            left_keypoints=[pose_at(515, 260)],
+            left_scores=[[0.8] * 17],
+            right_keypoints=[pose_at(500, 360)],
+            right_scores=[[0.8] * 17],
+            timestamp_ms=123,
+            min_score=0.5,
+            recorded_width=880,
+            recorded_height=660,
+            max_center_y_delta_px=80.0,
+            pose_association_margin_px=8.0,
+            max_pose_association_distance_px=160.0,
+        )
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["target_label"], "rank_1_near")
+        self.assertEqual(records[0]["bbox_rank"], 1)
+        self.assertEqual(records[0]["association_reason"], "left_matched_right_matched")
+        self.assertEqual(records[0]["bbox_candidate_source"], "selected_bbox_fallback")
+
+    def test_emits_selected_fallback_record_even_when_bbox_depth_gate_rejects_it(self):
+        collector = load_module(TOOL, "collect_stereo_multitarget_keypoint_pairs")
+        records = collector.build_multitarget_keypoint_records_for_bbox_record(
+            bbox_record_with_selected_target_outside_multitarget_match(),
+            left_keypoints=[pose_at(515, 260)],
+            left_scores=[[0.8] * 17],
+            right_keypoints=[pose_at(500, 360)],
+            right_scores=[[0.8] * 17],
+            timestamp_ms=123,
+            min_score=0.5,
+            recorded_width=880,
+            recorded_height=660,
+            max_center_y_delta_px=80.0,
+            pose_association_margin_px=8.0,
+            max_pose_association_distance_px=160.0,
+            max_vertical_error_px=20.0,
+        )
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["target_label"], "rank_1_near")
+        self.assertEqual(records[0]["bbox_candidate_source"], "selected_bbox_fallback")
+        self.assertEqual(records[0]["bbox_stereo_ok"], False)
 
 
 if __name__ == "__main__":

@@ -51,6 +51,26 @@ def bbox_pair_record(frame_id: int) -> dict:
     }
 
 
+def selected_bbox_outside_multitarget_match_record(frame_id: int) -> dict:
+    return {
+        "pair_id": f"pair-{frame_id:06d}",
+        "frame_id": frame_id,
+        "left_bbox_xyxy": [443, 151, 587, 369],
+        "right_bbox_xyxy": [416, 205, 583, 521],
+        "left": {
+            "people": [
+                {"track_id": 10, "bbox": [443, 151, 587, 369], "confidence": 0.72},
+            ]
+        },
+        "right": {
+            "people": [
+                {"track_id": 20, "bbox": [416, 205, 583, 521], "confidence": 0.68},
+            ]
+        },
+        "confidence": 0.68,
+    }
+
+
 def keypoint_pair_record(frame_id: int) -> dict:
     return {
         "pair_id": f"pair-{frame_id:06d}",
@@ -117,6 +137,34 @@ class StereoMultitargetDepthEvaluatorTests(unittest.TestCase):
             summary["targets"]["rank_1_near"]["bbox"]["depth_m"]["median"],
             summary["targets"]["rank_2_far"]["bbox"]["depth_m"]["median"],
         )
+        self.assertEqual(summary["input_frames"], 2)
+        self.assertEqual(summary["matched_candidate_count"], 4)
+        self.assertEqual(summary["frames_with_candidate"], 2)
+        self.assertEqual(summary["target_coverage_ratio"], 1.0)
+
+    def test_selected_bbox_fallback_counts_as_candidate_coverage(self):
+        evaluator = load_module(TOOL, "evaluate_stereo_multitarget_depth")
+        input_path = self.tmp_path / "bbox.jsonl"
+        out_dir = self.tmp_path / "eval"
+        write_jsonl(input_path, [selected_bbox_outside_multitarget_match_record(1)])
+
+        evaluator.evaluate_stereo_multitarget_depth(
+            bbox_input_path=input_path,
+            keypoint_input_path=None,
+            out_dir=out_dir,
+            max_vertical_error_px=None,
+            max_center_y_delta_px=80.0,
+        )
+
+        summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(summary["input_frames"], 1)
+        self.assertEqual(summary["matched_candidate_count"], 1)
+        self.assertEqual(summary["frames_with_candidate"], 1)
+        self.assertEqual(summary["target_coverage_ratio"], 1.0)
+        self.assertEqual(summary["targets"]["rank_1_near"]["bbox"]["ok_count"], 1)
+
+        per_frame = json.loads((out_dir / "per_frame.jsonl").read_text(encoding="utf-8").strip())
+        self.assertEqual(per_frame["bbox_candidates"][0]["candidate_source"], "selected_bbox_fallback")
 
     def test_associates_keypoint_to_matching_target_and_reports_mismatch(self):
         evaluator = load_module(TOOL, "evaluate_stereo_multitarget_depth")

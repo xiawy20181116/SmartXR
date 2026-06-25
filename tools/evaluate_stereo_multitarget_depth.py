@@ -123,6 +123,65 @@ def _match_bbox_candidates(
     return matched
 
 
+def _same_bbox(
+    first: tuple[float, float, float, float],
+    second: tuple[float, float, float, float],
+    *,
+    tolerance_px: float = 1.0,
+) -> bool:
+    return all(abs(left - right) <= tolerance_px for left, right in zip(first, second))
+
+
+def _selected_bbox_fallback_candidate(
+    record: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], tuple[float, float, float, float], tuple[float, float, float, float]] | None:
+    left_value = record.get("left_bbox_xyxy")
+    right_value = record.get("right_bbox_xyxy")
+    if left_value is None or right_value is None:
+        return None
+    left_bbox = _bbox_xyxy(left_value)
+    right_bbox = _bbox_xyxy(right_value)
+    left_det = {
+        "track_id": record.get("person_id", "selected"),
+        "bbox": list(left_bbox),
+        "confidence": record.get("confidence", 1.0),
+    }
+    right_det = {
+        "track_id": record.get("person_id", "selected"),
+        "bbox": list(right_bbox),
+        "confidence": record.get("confidence", 1.0),
+    }
+    return left_det, right_det, left_bbox, right_bbox
+
+
+def _match_bbox_candidates_with_selected_fallback(
+    record: dict[str, Any],
+    *,
+    max_center_y_delta_px: float,
+) -> list[
+    tuple[
+        dict[str, Any],
+        dict[str, Any],
+        tuple[float, float, float, float],
+        tuple[float, float, float, float],
+        str,
+    ]
+]:
+    matched = [
+        (*candidate, "matched_bbox")
+        for candidate in _match_bbox_candidates(record, max_center_y_delta_px=max_center_y_delta_px)
+    ]
+    fallback = _selected_bbox_fallback_candidate(record)
+    if fallback is None:
+        return matched
+    _left_det, _right_det, fallback_left_bbox, fallback_right_bbox = fallback
+    for _left_det, _right_det, left_bbox, right_bbox, _source in matched:
+        if _same_bbox(left_bbox, fallback_left_bbox) and _same_bbox(right_bbox, fallback_right_bbox):
+            return matched
+    matched.append((*fallback, "selected_bbox_fallback"))
+    return matched
+
+
 def _candidate_pair(
     source: dict[str, Any],
     index: int,
@@ -358,7 +417,7 @@ def evaluate_stereo_multitarget_depth(
     with per_frame_path.open("w", encoding="utf-8", newline="\n") as handle:
         for index, source in enumerate(_iter_jsonl(bbox_input_path), start=1):
             raw_candidates = []
-            for left_det, right_det, left_bbox, right_bbox in _match_bbox_candidates(
+            for left_det, right_det, left_bbox, right_bbox, candidate_source in _match_bbox_candidates_with_selected_fallback(
                 source,
                 max_center_y_delta_px=max_center_y_delta_px,
             ):
@@ -371,10 +430,17 @@ def evaluate_stereo_multitarget_depth(
                 )
                 evaluated["left_bbox_xyxy"] = list(left_bbox)
                 evaluated["right_bbox_xyxy"] = list(right_bbox)
+                evaluated["candidate_source"] = candidate_source
                 raw_candidates.append(evaluated)
 
             ok_for_rank = [candidate for candidate in raw_candidates if candidate.get("stereo_ok") is True]
             ranked = sorted(ok_for_rank, key=lambda candidate: float(candidate["depth_m"]))
+            if not ranked:
+                ranked.extend([
+                    candidate
+                    for candidate in raw_candidates
+                    if candidate.get("candidate_source") == "selected_bbox_fallback"
+                ][:1])
             for rank_index, candidate in enumerate(ranked, start=1):
                 label = _target_label(rank_index, len(ranked))
                 candidate["target_label"] = label
@@ -478,8 +544,14 @@ def evaluate_stereo_multitarget_depth(
         }
         for label in target_labels
     }
+    input_frames = len(frame_records)
+    frames_with_candidate = sum(1 for record in frame_records if record["bbox_candidates"])
     summary = {
-        "frames_seen": len(frame_records),
+        "input_frames": input_frames,
+        "matched_candidate_count": bbox_candidate_count,
+        "frames_with_candidate": frames_with_candidate,
+        "target_coverage_ratio": 0.0 if input_frames == 0 else frames_with_candidate / input_frames,
+        "frames_seen": input_frames,
         "bbox_candidate_count": bbox_candidate_count,
         "targets": targets,
         "keypoint_association": {
