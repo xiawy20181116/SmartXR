@@ -39,6 +39,27 @@ class FakeTrackingResult:
 
 
 class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
+    def test_broadcast_hub_sends_same_message_to_multiple_clients(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        class FakeConn:
+            def __init__(self):
+                self.frames = []
+
+            def sendall(self, frame):
+                self.frames.append(frame)
+
+        first = FakeConn()
+        second = FakeConn()
+        hub = publisher.BroadcastHub()
+        hub.add_client(first, ("127.0.0.1", 11111))
+        hub.add_client(second, ("127.0.0.1", 11112))
+
+        hub.broadcast({"type": "proxy_targets", "sequence": 7, "targets": [], "cards": []})
+
+        self.assertEqual(len(first.frames), 1)
+        self.assertEqual(first.frames, second.frames)
+
     def test_builds_schema_valid_message_from_stereo_bbox_pair(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
         validator = load_module(VALIDATOR, "validate_proxy_targets_payload_schema")

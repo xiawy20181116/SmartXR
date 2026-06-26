@@ -24,6 +24,20 @@ def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def decode_log_text(data: bytes) -> str:
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16", errors="replace")
+    if data.startswith(b"\xef\xbb\xbf"):
+        return data.decode("utf-8-sig", errors="replace")
+    if b"\x00" in data[:256]:
+        return data.decode("utf-16", errors="replace")
+    return data.decode("utf-8", errors="replace")
+
+
+def read_log_text(path: Path) -> str:
+    return decode_log_text(path.read_bytes())
+
+
 def _count(status: dict[str, Any], key: str) -> int:
     try:
         return int(status.get(key, 0))
@@ -231,7 +245,7 @@ def wait_for_health(
     deadline = time.monotonic() + max(0.0, timeout_s)
     last_status: dict[str, Any] = {}
     while True:
-        sender_log_text = sender_log_path.read_text(encoding="utf-8", errors="replace") if sender_log_path.exists() else ""
+        sender_log_text = read_log_text(sender_log_path) if sender_log_path.exists() else ""
         raw_status = load_json(raw_status_path) if raw_status_path.exists() else {"ok": False, "errors": ["raw status file missing"]}
         pcmr_status = load_json(pcmr_status_path) if pcmr_status_path.exists() else {"error": "pcmr status file missing"}
         last_status = evaluate_health(sender_log_text, raw_status, pcmr_status, min_packets=min_packets)

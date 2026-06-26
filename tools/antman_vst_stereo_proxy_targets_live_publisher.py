@@ -4,6 +4,7 @@ import argparse
 import json
 import socket
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,48 @@ from smartxr.transport import (  # noqa: E402
     encode_websocket_text_frame,
     handshake as _handshake,
 )
+
+
+def is_proxy_targets_request(first_line: str) -> bool:
+    parts = first_line.split()
+    if len(parts) < 2:
+        return False
+    return parts[1].split("?", 1)[0] == "/proxy_targets"
+
+
+class BroadcastHub:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._clients: list[tuple[Any, Any]] = []
+
+    def add_client(self, conn: Any, address: Any) -> None:
+        with self._lock:
+            self._clients.append((conn, address))
+
+    def remove_client(self, conn: Any) -> None:
+        with self._lock:
+            self._clients = [(client, address) for client, address in self._clients if client is not conn]
+
+    def client_count(self) -> int:
+        with self._lock:
+            return len(self._clients)
+
+    def broadcast(self, message: dict[str, Any]) -> int:
+        payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False)
+        frame = encode_websocket_text_frame(payload)
+        stale = []
+        delivered = 0
+        with self._lock:
+            clients = list(self._clients)
+        for conn, _address in clients:
+            try:
+                conn.sendall(frame)
+                delivered += 1
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                stale.append(conn)
+        for conn in stale:
+            self.remove_client(conn)
+        return delivered
 
 
 def _empty_diagnostics(reason: str) -> dict[str, Any]:
@@ -250,8 +293,8 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
     return None, diagnostics
 
 
-def _publish_loop(
-    conn: socket.socket,
+def _broadcast_loop(
+    hub: BroadcastHub,
     *,
     left_reader: Any,
     right_reader: Any,
@@ -270,8 +313,9 @@ def _publish_loop(
     sequence = 0
     empty_windows = 0
     while True:
-        if not _drain_client_frames(conn):
-            return
+        if hub.client_count() == 0:
+            time.sleep(interval_s)
+            continue
         message, diagnostics = next_live_stereo_proxy_targets_message_with_diagnostics(
             left_reader=left_reader,
             right_reader=right_reader,
@@ -294,18 +338,18 @@ def _publish_loop(
             continue
 
         empty_windows = 0
-        payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False)
-        conn.sendall(encode_websocket_text_frame(payload))
+        delivered = hub.broadcast(message)
         if log_every > 0 and sequence % log_every == 0:
             target = message["targets"][0]
             position = target.get("transform", {}).get("position", [0.0, 0.0, 0.0])
             print(
-                "sent stereo seq=%d target=%s depth_source=%s depth_confidence=%s pos=%.3f %.3f %.3f"
+                "sent stereo seq=%d target=%s depth_source=%s depth_confidence=%s clients=%d pos=%.3f %.3f %.3f"
                 % (
                     sequence,
                     target.get("target_id", "-"),
                     target.get("depth_source", "-"),
                     target.get("depth_confidence", "-"),
+                    delivered,
                     position[0],
                     position[1],
                     position[2],
@@ -314,6 +358,21 @@ def _publish_loop(
             )
         sequence += 1
         time.sleep(interval_s)
+
+
+def _client_loop(conn: socket.socket, address: Any, hub: BroadcastHub) -> None:
+    try:
+        while True:
+            if not _drain_client_frames(conn):
+                return
+            time.sleep(0.05)
+    finally:
+        hub.remove_client(conn)
+        try:
+            conn.close()
+        except OSError:
+            pass
+        print(f"client disconnected: {address}", flush=True)
 
 
 def serve(args: argparse.Namespace) -> int:
@@ -328,36 +387,40 @@ def serve(args: argparse.Namespace) -> int:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
             server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server.bind((args.host, args.port))
-            server.listen(1)
+            server.listen(8)
             print(f"stereo proxy_targets live publisher listening on ws://{args.host}:{args.port}/proxy_targets", flush=True)
             print("source: Left/Right VST SHM + HumanTrackor bbox stereo", flush=True)
             print("waiting for WebSocket client; sent seq appears after a stereo pair passes confidence/depth gates", flush=True)
+            hub = BroadcastHub()
+            threading.Thread(
+                target=_broadcast_loop,
+                kwargs={
+                    "hub": hub,
+                    "left_reader": left_reader,
+                    "right_reader": right_reader,
+                    "left_tracker": left_tracker,
+                    "right_tracker": right_tracker,
+                    "hz": args.hz,
+                    "card_id": args.card_id,
+                    "min_confidence": args.min_confidence,
+                    "recorded_width": args.recorded_width,
+                    "recorded_height": args.recorded_height,
+                    "log_every": args.log_every,
+                    "max_empty_reads": args.max_empty_reads,
+                    "max_vertical_error_px": args.max_vertical_error_px,
+                },
+                daemon=True,
+            ).start()
             while True:
                 conn, address = server.accept()
-                with conn:
-                    ok, first_line = _handshake(conn)
-                    if not ok:
-                        print(f"rejected {address}: {first_line}", flush=True)
-                        continue
-                    print(f"client connected from {address}: {first_line}", flush=True)
-                    try:
-                        _publish_loop(
-                            conn,
-                            left_reader=left_reader,
-                            right_reader=right_reader,
-                            left_tracker=left_tracker,
-                            right_tracker=right_tracker,
-                            hz=args.hz,
-                            card_id=args.card_id,
-                            min_confidence=args.min_confidence,
-                            recorded_width=args.recorded_width,
-                            recorded_height=args.recorded_height,
-                            log_every=args.log_every,
-                            max_empty_reads=args.max_empty_reads,
-                            max_vertical_error_px=args.max_vertical_error_px,
-                        )
-                    except (BrokenPipeError, ConnectionResetError, OSError):
-                        print(f"client disconnected: {address}", flush=True)
+                ok, first_line = _handshake(conn, allow_request=is_proxy_targets_request)
+                if not ok:
+                    print(f"rejected {address}: {first_line}", flush=True)
+                    conn.close()
+                    continue
+                print(f"client connected from {address}: {first_line}", flush=True)
+                hub.add_client(conn, address)
+                threading.Thread(target=_client_loop, args=(conn, address, hub), daemon=True).start()
     finally:
         for reader_name in ("left_reader", "right_reader"):
             reader = locals().get(reader_name)
