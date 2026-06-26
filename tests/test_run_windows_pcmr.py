@@ -134,6 +134,16 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn('`$ArgsList["KeepGodotOpen"] = `$true', source)
         self.assertIn("Close the receiver tab/window manually", source)
 
+    def test_stereo_live_runner_wires_depth_trace_jsonl(self):
+        self.assertTrue(STEREO_LIVE_RUNNER.exists())
+        source = STEREO_LIVE_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("depth_estimation_trace.jsonl", source)
+        self.assertIn("$DepthTraceFile", source)
+        self.assertIn("$DepthTraceFileLiteral", source)
+        self.assertIn('"--depth-trace", $DepthTraceFileLiteral', source)
+        self.assertIn("Depth trace:", source)
+
     def test_stereo_live_runner_monitor_captures_all_streams_and_health_verdict(self):
         self.assertTrue(STEREO_LIVE_RUNNER.exists())
         source = STEREO_LIVE_RUNNER.read_text(encoding="utf-8")

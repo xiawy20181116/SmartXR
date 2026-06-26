@@ -25,6 +25,7 @@ $MonitorRunner = Join-Path -Path $RepoRoot -ChildPath "tools\run_proxy_targets_l
 $WorkDir = Join-Path -Path $RepoRoot -ChildPath ".tmp\antman_vst_stereo_proxy_targets_live"
 $PublisherLog = Join-Path -Path $WorkDir -ChildPath "stereo_proxy_targets_publisher.log"
 $PublisherErr = Join-Path -Path $WorkDir -ChildPath "stereo_proxy_targets_publisher.err.log"
+$DepthTraceFile = Join-Path -Path $WorkDir -ChildPath "depth_estimation_trace.jsonl"
 $WsUrl = "ws://${HostName}:${Port}/proxy_targets"
 
 function Stop-ChildProcess {
@@ -64,7 +65,7 @@ foreach ($RequiredPath in @($Publisher, $ProbeRunner, $MonitorRunner)) {
 }
 
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-Remove-Item -LiteralPath $PublisherLog, $PublisherErr -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $PublisherLog, $PublisherErr, $DepthTraceFile -Force -ErrorAction SilentlyContinue
 
 $PublisherProcess = $null
 $ExitCode = 1
@@ -74,6 +75,7 @@ Write-Host "Source:      Left/Right VST SHM + HumanTrackor bbox stereo"
 Write-Host "WebSocket:   $WsUrl"
 Write-Host "Python:      $PythonExe"
 Write-Host "Work dir:    $WorkDir"
+Write-Host "Depth trace: $DepthTraceFile"
 
 try {
     $PublisherArgs = @(
@@ -86,7 +88,8 @@ try {
         "--recorded-width", [string]$RecordedWidth,
         "--recorded-height", [string]$RecordedHeight,
         "--log-every", [string]$LogEvery,
-        "--max-empty-reads", [string]$MaxEmptyReads
+        "--max-empty-reads", [string]$MaxEmptyReads,
+        "--depth-trace", [string]$DepthTraceFile
     )
 
     $PublisherProcess = Start-Process `
@@ -131,6 +134,7 @@ try {
     Write-Host "Logs:"
     Write-Host "  Publisher stdout: $PublisherLog"
     Write-Host "  Publisher stderr: $PublisherErr"
+    Write-Host "  Depth trace:      $DepthTraceFile"
     Write-Host "  Staged status:    .tmp\script_only_staged_probe\apply\script_only_websocket_staged_probe_status.json"
 }
 

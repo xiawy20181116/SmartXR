@@ -37,6 +37,9 @@ from smartxr.transport import (  # noqa: E402
 )
 
 
+_DEPTH_TRACE_CONTEXT: dict[int, dict[str, Any]] = {}
+
+
 def is_proxy_targets_request(first_line: str) -> bool:
     parts = first_line.split()
     if len(parts) < 2:
@@ -269,7 +272,98 @@ def build_proxy_targets_message_from_stereo_bbox_record(
     message = normalize_source_payload(source_payload, sequence=sequence, card_id=card_id)
     if not message["targets"]:
         return None
+    detection = source_payload["detections"][0]
+    _DEPTH_TRACE_CONTEXT[id(message)] = {
+        "bbox": detection["bbox"],
+        "stereo": detection["stereo"],
+    }
     return message
+
+
+def _vector3_from_mapping(value: Any) -> list[float] | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        return [float(value["x"]), float(value["y"]), float(value["z"])]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def build_depth_trace_event(
+    *,
+    message: dict[str, Any] | None,
+    diagnostics: dict[str, Any],
+    sequence: int | None = None,
+    delivered_clients: int | None = None,
+) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "timestamp_ms": int(time.time() * 1000),
+        "reason": diagnostics.get("reason", "-"),
+        "read_attempts": diagnostics.get("read_attempts", 0),
+        "frames_seen_left": diagnostics.get("frames_seen_left", 0),
+        "frames_seen_right": diagnostics.get("frames_seen_right", 0),
+        "left_pending": diagnostics.get("left_pending", 0),
+        "right_pending": diagnostics.get("right_pending", 0),
+        "stereo_rejection_reason": diagnostics.get("stereo_rejection_reason"),
+        "left_source_stats": diagnostics.get("left_source_stats", {}),
+        "right_source_stats": diagnostics.get("right_source_stats", {}),
+    }
+    if delivered_clients is not None:
+        event["delivered_clients"] = delivered_clients
+
+    if message is None or not message.get("targets"):
+        frame_id = diagnostics.get("last_pair_frame_id")
+        event.update(
+            {
+                "event": "rejected",
+                "sequence": sequence,
+                "left_frame_id": frame_id,
+                "right_frame_id": frame_id,
+            }
+        )
+        return event
+
+    target = message["targets"][0]
+    trace_context = _DEPTH_TRACE_CONTEXT.pop(id(message), {})
+    source_coordinate = target.get("source_coordinate", {})
+    source_frame = source_coordinate.get("source_frame", {})
+    stereo = trace_context.get("stereo", target.get("stereo", {}))
+    stereo_frame_id = stereo.get("frame_id", diagnostics.get("last_pair_frame_id"))
+    depth_m = source_frame.get("anchor_depth")
+    if depth_m is None:
+        depth_m = source_coordinate.get("depth_m")
+    try:
+        depth_m = float(depth_m)
+    except (TypeError, ValueError):
+        depth_m = None
+
+    event.update(
+        {
+            "event": "accepted",
+            "sequence": message.get("sequence"),
+            "target_id": target.get("target_id"),
+            "card_id": message.get("cards", [{}])[0].get("card_id"),
+            "left_frame_id": stereo_frame_id,
+            "right_frame_id": stereo_frame_id,
+            "depth_m": depth_m,
+            "depth_source": target.get("depth_source") or source_coordinate.get("depth_source"),
+            "depth_confidence": target.get("depth_confidence") or source_coordinate.get("depth_confidence"),
+            "source_frame": source_frame,
+            "camera_point_m": _vector3_from_mapping(source_coordinate.get("camera_point_m")),
+            "head_position_m": _vector3_from_mapping(source_coordinate.get("head_position_m")),
+            "bbox": trace_context.get("bbox", target.get("bbox", {})),
+            "stereo": stereo,
+        }
+    )
+    return event
+
+
+def write_depth_trace_event(trace_path: Path | None, event: dict[str, Any]) -> None:
+    if trace_path is None:
+        return
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    with trace_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
 def next_live_stereo_proxy_targets_message_with_diagnostics(
@@ -357,6 +451,7 @@ def _broadcast_loop(
     log_every: int,
     max_empty_reads: int,
     max_vertical_error_px: float | None,
+    depth_trace: Path | None,
 ) -> None:
     interval_s = 1.0 / max(hz, 0.1)
     sequence = 0
@@ -380,6 +475,10 @@ def _broadcast_loop(
         )
         if message is None:
             empty_windows += 1
+            write_depth_trace_event(
+                depth_trace,
+                build_depth_trace_event(message=None, diagnostics=diagnostics, sequence=sequence),
+            )
             if log_every > 0 and empty_windows % log_every == 1:
                 print("No stereo target frames available from Left/Right VST SHM + HumanTrackor", flush=True)
                 print(format_stereo_diagnostics(diagnostics), flush=True)
@@ -388,6 +487,10 @@ def _broadcast_loop(
 
         empty_windows = 0
         delivered = hub.broadcast(message)
+        write_depth_trace_event(
+            depth_trace,
+            build_depth_trace_event(message=message, diagnostics=diagnostics, delivered_clients=delivered),
+        )
         if log_every > 0 and sequence % log_every == 0:
             target = message["targets"][0]
             position = target.get("transform", {}).get("position", [0.0, 0.0, 0.0])
@@ -474,6 +577,7 @@ def serve(args: argparse.Namespace) -> int:
                     "log_every": args.log_every,
                     "max_empty_reads": args.max_empty_reads,
                     "max_vertical_error_px": args.max_vertical_error_px,
+                    "depth_trace": args.depth_trace,
                 },
                 daemon=True,
             ).start()
@@ -506,6 +610,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--min-confidence", type=float, default=0.5)
     parser.add_argument("--max-empty-reads", type=int, default=120)
     parser.add_argument("--max-vertical-error-px", type=float, default=None)
+    parser.add_argument("--depth-trace", type=Path, default=None)
     parser.add_argument("--recorded-width", type=int, default=880)
     parser.add_argument("--recorded-height", type=int, default=660)
     parser.add_argument("--shm-name", default="Antman.VST.AI.v1")
