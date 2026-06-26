@@ -247,6 +247,47 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         self.assertIn("LOW_CONFIDENCE_DEPTH_ONLY", status["verdicts"])
         self.assertEqual(status["errors"], [])
 
+    def test_end_to_end_health_does_not_flag_sample_when_card_is_live_but_sample_target_remains_registered(self):
+        health = load_module(HEALTH_MONITOR, "validate_proxy_targets_end_to_end_health")
+        raw_status = {
+            "ok": True,
+            "packets": 10,
+            "parsed": 10,
+            "sequence_contiguous": True,
+            "position_changed": True,
+            "target_ids": ["vst_stereo-person-6-7"],
+            "depth_confidences": {"low": 10},
+            "depth_sources": {"bbox_top_center_fallback": 10},
+            "missing_depth_confidence_count": 0,
+            "missing_depth_source_count": 0,
+        }
+        pcmr_status = {
+            "last_command": "proxy_live",
+            "ws_connected": True,
+            "ws_subscribed": True,
+            "packets": 3,
+            "parsed": 3,
+            "live": 3,
+            "sequence": 2,
+            "card_target_id": "vst_stereo-person-6-7",
+            "card_attach_target_id": "vst_stereo-person-6-7",
+            "proxy_target_ids": ["person-7", "vst_stereo-person-6-7"],
+            "card_node_position": "1.20 0.58 0.08",
+            "card_resolved_position": "1.20 0.58 0.08",
+        }
+        sender_log = "\n".join(
+            [
+                "stereo proxy_targets live publisher listening on ws://127.0.0.1:8766/proxy_targets",
+                "sent stereo seq=0 target=vst_stereo-person-6-7 depth_source=bbox_top_center_fallback depth_confidence=low",
+            ]
+        )
+
+        status = health.evaluate_health(sender_log, raw_status, pcmr_status, min_packets=10)
+
+        self.assertTrue(status["ok"])
+        self.assertIn("CARD_BOUND_TO_LIVE_TARGET", status["verdicts"])
+        self.assertNotIn("SAMPLE_FALLBACK_ACTIVE", status["verdicts"])
+
     def test_wait_for_health_uses_latest_pcmr_status_until_timeout(self):
         health = load_module(HEALTH_MONITOR, "validate_proxy_targets_end_to_end_health")
         raw_status = {

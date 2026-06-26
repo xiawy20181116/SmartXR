@@ -119,14 +119,12 @@ def _pcmr_connected(pcmr_status: dict[str, Any]) -> bool:
 def _sample_fallback_active(pcmr_status: dict[str, Any]) -> bool:
     card_target_id = str(pcmr_status.get("card_target_id", "")).strip()
     card_attach_target_id = str(pcmr_status.get("card_attach_target_id", "")).strip()
-    proxy_target_ids = _list_strings(pcmr_status.get("proxy_target_ids"))
     card_node_position = str(pcmr_status.get("card_node_position", "")).strip()
     card_resolved_position = str(pcmr_status.get("card_resolved_position", "")).strip()
     return (
         str(pcmr_status.get("last_command", "")).strip() == "proxy_sample"
         or card_target_id == SAMPLE_TARGET_ID
         or card_attach_target_id == SAMPLE_TARGET_ID
-        or SAMPLE_TARGET_ID in proxy_target_ids
         or card_node_position == SAMPLE_CARD_POSITION
         or card_resolved_position == SAMPLE_CARD_POSITION
     )
