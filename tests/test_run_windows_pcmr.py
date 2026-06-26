@@ -91,6 +91,17 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("sender_ready.txt", source)
         self.assertNotIn("Start-Sleep -Seconds 1", source)
 
+    def test_stereo_live_runner_generates_argument_arrays_not_fragile_backtick_lines(self):
+        self.assertTrue(STEREO_LIVE_RUNNER.exists())
+        source = STEREO_LIVE_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("$PublisherArgs = @(", source)
+        self.assertIn("& $PythonExeLiteral @PublisherArgs", source)
+        self.assertIn("$MonitorArgs = @(", source)
+        self.assertIn("& $MonitorRunnerLiteral @MonitorArgs", source)
+        self.assertNotIn("& $PythonExeLiteral $PublisherLiteral `", source)
+        self.assertNotIn("& $MonitorRunnerLiteral `", source)
+
     def test_overlay_visual_check_runner_holds_godot_open_for_manual_inspection(self):
         self.assertTrue(VISUAL_RUNNER.exists())
         source = VISUAL_RUNNER.read_text(encoding="utf-8")

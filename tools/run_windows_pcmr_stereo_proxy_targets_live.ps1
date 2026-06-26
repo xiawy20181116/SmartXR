@@ -143,15 +143,18 @@ Write-Host "[sender] SmartXR stereo sender"
 Write-Host "[sender] WebSocket: $WsUrl"
 Write-Host "[sender] Expected depth_source=bbox_top_center_fallback depth_confidence=low"
 Write-Host "[sender] A later healthy run should print sent stereo seq=..."
-& $PythonExeLiteral $PublisherLiteral `
-  --antman-root $AntmanRootLiteral `
-  --host $HostName `
-  --port $Port `
-  --hz $Hz `
-  --min-confidence $MinConfidence `
-  --recorded-width $RecordedWidth `
-  --recorded-height $RecordedHeight `
-  --log-every $LogEvery 2>&1 | Tee-Object -FilePath $SenderLogLiteral -Append
+`$PublisherArgs = @(
+  $PublisherLiteral,
+  "--antman-root", $AntmanRootLiteral,
+  "--host", "$HostName",
+  "--port", "$Port",
+  "--hz", "$Hz",
+  "--min-confidence", "$MinConfidence",
+  "--recorded-width", "$RecordedWidth",
+  "--recorded-height", "$RecordedHeight",
+  "--log-every", "$LogEvery"
+)
+& $PythonExeLiteral @PublisherArgs 2>&1 | Tee-Object -FilePath $SenderLogLiteral -Append
 `$ExitCode = `$LASTEXITCODE
 Write-Host "[sender] Stereo sender exited with code `$ExitCode"
 exit `$ExitCode
@@ -193,11 +196,13 @@ while (-not (Test-Path -LiteralPath $SenderReadyFileLiteral)) {
   Start-Sleep -Milliseconds 250
 }
 Write-Host "[monitor] Sender ready; collecting packets."
-& $MonitorRunnerLiteral `
-  -Url $WsUrlLiteral `
-  -MinPackets $MonitorMinPackets `
-  -TimeoutSeconds $MonitorTimeoutSeconds `
-  -PythonExe $PythonExeLiteral 2>&1 | Tee-Object -FilePath $MonitorLogLiteral -Append
+`$MonitorArgs = @(
+  "-Url", $WsUrlLiteral,
+  "-MinPackets", "$MonitorMinPackets",
+  "-TimeoutSeconds", "$MonitorTimeoutSeconds",
+  "-PythonExe", $PythonExeLiteral
+)
+& $MonitorRunnerLiteral @MonitorArgs 2>&1 | Tee-Object -FilePath $MonitorLogLiteral -Append
 `$ExitCode = `$LASTEXITCODE
 Write-Host "[monitor] Monitor exited with code `$ExitCode"
 exit `$ExitCode
