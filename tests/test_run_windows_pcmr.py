@@ -5,6 +5,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "tools" / "run_windows_pcmr.ps1"
 LIVE_RUNNER = ROOT / "tools" / "run_windows_pcmr_proxy_targets_live.ps1"
+STEREO_LIVE_RUNNER = ROOT / "tools" / "run_windows_pcmr_stereo_proxy_targets_live.ps1"
 VISUAL_RUNNER = ROOT / "tools" / "run_windows_pcmr_overlay_visual_check.ps1"
 VISUAL_DOC = ROOT / "docs" / "pcmr_overlay_visual_check.md"
 
@@ -56,6 +57,23 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("ws://${HostName}:${Port}/proxy_targets", source)
         self.assertIn("-ValidateProxyTargets", source)
         self.assertIn("Stop-ChildProcess -Process $PublisherProcess", source)
+
+    def test_stereo_live_runner_launches_sender_receiver_and_monitor_windows(self):
+        self.assertTrue(STEREO_LIVE_RUNNER.exists())
+        source = STEREO_LIVE_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("antman_vst_stereo_proxy_targets_live_publisher.py", source)
+        self.assertIn("run_windows_pcmr.ps1", source)
+        self.assertIn("run_proxy_targets_live_monitor.ps1", source)
+        self.assertIn("Start-VisiblePowerShellWindow -Title \"SmartXR stereo sender\"", source)
+        self.assertIn("Start-VisiblePowerShellWindow -Title \"SmartXR PCMR receiver\"", source)
+        self.assertIn("Start-VisiblePowerShellWindow -Title \"SmartXR proxy_targets monitor\"", source)
+        self.assertIn("WindowStyle Normal", source)
+        self.assertIn("receiver needs the sender to stay open", source)
+        self.assertIn("-ValidateProxyTargets", source)
+        self.assertIn("-ProxyTargetsWsUrl", source)
+        self.assertIn("ws://${HostName}:${Port}/proxy_targets", source)
+        self.assertIn("depth_confidence=low", source)
 
     def test_overlay_visual_check_runner_holds_godot_open_for_manual_inspection(self):
         self.assertTrue(VISUAL_RUNNER.exists())
