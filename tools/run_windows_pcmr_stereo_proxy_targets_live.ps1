@@ -267,6 +267,7 @@ Write-Host "[monitor] Godot/card pose summary includes: proxy_world_position / c
   "--pcmr-status", $PcmrStatusFileLiteral,
   "--min-packets", "$MonitorMinPackets",
   "--timeout-seconds", "$ProxyTargetsTimeoutSeconds",
+  "--depth-trace", $DepthTraceFileLiteral,
   "--output", $HealthStatusFileLiteral
 )
 & $PythonExeLiteral @HealthArgs *>&1 | Tee-Object -FilePath $MonitorLogLiteral -Append

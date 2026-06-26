@@ -18,6 +18,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from collect_stereo_bbox_pairs import (  # noqa: E402
+    StereoActiveTargetStabilizer,
     _create_stereo_readers_and_trackers,
     build_stereo_bbox_pair_record,
 )
@@ -276,6 +277,7 @@ def build_proxy_targets_message_from_stereo_bbox_record(
     _DEPTH_TRACE_CONTEXT[id(message)] = {
         "bbox": detection["bbox"],
         "stereo": detection["stereo"],
+        "selection": dict(record.get("selection", {})),
     }
     return message
 
@@ -360,6 +362,21 @@ def build_depth_trace_event(
             "stereo": stereo,
         }
     )
+    selection = trace_context.get("selection") or diagnostics
+    for key in (
+        "active_target_id",
+        "raw_left_track_id",
+        "raw_right_track_id",
+        "raw_person_id",
+        "candidate_count",
+        "selected_score",
+        "switch_count",
+        "switch_reason",
+        "active_age_frames",
+        "held_last_pose",
+    ):
+        if key in selection:
+            event[key] = selection[key]
     return event
 
 
@@ -386,6 +403,7 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
     max_read_attempts: int | None = None,
     sleep_seconds: float = 0.005,
     max_vertical_error_px: float | None = None,
+    target_stabilizer: StereoActiveTargetStabilizer | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     attempts = max_read_attempts if max_read_attempts is not None else max_empty_reads
     diagnostics = _empty_diagnostics("no_pair")
@@ -416,11 +434,13 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
                 timestamp_ms=int(time.time() * 1000),
                 left_source_stats=diagnostics["left_source_stats"],
                 right_source_stats=diagnostics["right_source_stats"],
+                target_stabilizer=target_stabilizer,
             )
             diagnostics["last_pair_frame_id"] = frame_id
             if record is None:
                 diagnostics["reason"] = "no_target"
                 continue
+            diagnostics.update(record.get("selection", {}))
             message = build_proxy_targets_message_from_stereo_bbox_record(
                 record,
                 sequence=sequence,
@@ -461,6 +481,7 @@ def _broadcast_loop(
     interval_s = 1.0 / max(hz, 0.1)
     sequence = 0
     empty_windows = 0
+    target_stabilizer = StereoActiveTargetStabilizer()
     while True:
         if hub.client_count() == 0:
             time.sleep(interval_s)
@@ -477,6 +498,7 @@ def _broadcast_loop(
             min_confidence=min_confidence,
             max_empty_reads=max_empty_reads,
             max_vertical_error_px=max_vertical_error_px,
+            target_stabilizer=target_stabilizer,
         )
         if message is None:
             empty_windows += 1
