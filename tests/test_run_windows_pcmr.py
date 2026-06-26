@@ -65,6 +65,7 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("antman_vst_stereo_proxy_targets_live_publisher.py", source)
         self.assertIn("run_windows_pcmr.ps1", source)
         self.assertIn("run_proxy_targets_live_monitor.ps1", source)
+        self.assertIn("validate_proxy_targets_end_to_end_health.py", source)
         self.assertIn("Start-VisiblePowerShellWindow", source)
         self.assertIn('Open-RunnerTab -WindowName $WindowName -Title "SmartXR stereo sender"', source)
         self.assertIn('Open-RunnerTab -WindowName $WindowName -Title "SmartXR PCMR receiver"', source)
@@ -113,6 +114,21 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("TimeoutSeconds = $MonitorTimeoutSeconds", source)
         self.assertNotIn("& $PythonExeLiteral $PublisherLiteral `", source)
         self.assertNotIn("& $MonitorRunnerLiteral `", source)
+
+    def test_stereo_live_runner_monitor_captures_all_streams_and_health_verdict(self):
+        self.assertTrue(STEREO_LIVE_RUNNER.exists())
+        source = STEREO_LIVE_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("*>&1 | Tee-Object -FilePath $ReceiverLogLiteral -Append", source)
+        self.assertIn("*>&1 | Tee-Object -FilePath $MonitorLogLiteral -Append", source)
+        self.assertIn("validate_proxy_targets_end_to_end_health.py", source)
+        self.assertIn("--sender-log", source)
+        self.assertIn("--raw-status", source)
+        self.assertIn("--pcmr-status", source)
+        self.assertIn("--timeout-seconds", source)
+        self.assertIn("STREAM_OK", source)
+        self.assertIn("CARD_BOUND_TO_LIVE_TARGET", source)
+        self.assertIn("SAMPLE_FALLBACK_ACTIVE", source)
 
     def test_overlay_visual_check_runner_holds_godot_open_for_manual_inspection(self):
         self.assertTrue(VISUAL_RUNNER.exists())

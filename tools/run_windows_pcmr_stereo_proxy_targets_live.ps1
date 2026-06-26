@@ -22,6 +22,7 @@ $RepoRoot = [string](Resolve-Path (Join-Path -Path $PSScriptRoot -ChildPath ".."
 $Publisher = Join-Path -Path $RepoRoot -ChildPath "tools\antman_vst_stereo_proxy_targets_live_publisher.py"
 $PcmrRunner = Join-Path -Path $RepoRoot -ChildPath "tools\run_windows_pcmr.ps1"
 $MonitorRunner = Join-Path -Path $RepoRoot -ChildPath "tools\run_proxy_targets_live_monitor.ps1"
+$HealthValidator = Join-Path -Path $RepoRoot -ChildPath "tools\validate_proxy_targets_end_to_end_health.py"
 $WorkDir = Join-Path -Path $RepoRoot -ChildPath ".tmp\windows_pcmr_stereo_proxy_targets_live"
 $SenderScript = Join-Path -Path $WorkDir -ChildPath "sender.ps1"
 $ReceiverScript = Join-Path -Path $WorkDir -ChildPath "receiver.ps1"
@@ -29,6 +30,9 @@ $MonitorScript = Join-Path -Path $WorkDir -ChildPath "monitor.ps1"
 $SenderLog = Join-Path -Path $WorkDir -ChildPath "sender.log"
 $ReceiverLog = Join-Path -Path $WorkDir -ChildPath "receiver.log"
 $MonitorLog = Join-Path -Path $WorkDir -ChildPath "monitor.log"
+$HealthStatusFile = Join-Path -Path $WorkDir -ChildPath "end_to_end_health_status.json"
+$RawMonitorStatusFile = Join-Path -Path $RepoRoot -ChildPath ".tmp\proxy_targets_live_monitor\proxy_targets_live_monitor_status.json"
+$PcmrStatusFile = Join-Path -Path $env:APPDATA -ChildPath "Godot\app_userdata\demo_run\proxy_targets_live_status.json"
 $SenderReadyFile = Join-Path -Path $WorkDir -ChildPath "sender_ready.txt"
 $WsUrl = "ws://${HostName}:${Port}/proxy_targets"
 $WindowName = "smartxr-stereo-live-" + (Get-Date -Format "yyyyMMdd-HHmmss")
@@ -129,7 +133,7 @@ if ($PythonExe -eq "") {
     }
 }
 
-foreach ($RequiredPath in @($Publisher, $PcmrRunner, $MonitorRunner)) {
+foreach ($RequiredPath in @($Publisher, $PcmrRunner, $MonitorRunner, $HealthValidator)) {
     if (-not (Test-Path -LiteralPath $RequiredPath)) {
         throw "Required file not found: $RequiredPath"
     }
@@ -140,19 +144,23 @@ if ($PythonExe -ne "python" -and -not (Test-Path -LiteralPath $PythonExe)) {
 }
 
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-Remove-Item -LiteralPath $SenderLog, $ReceiverLog, $MonitorLog, $SenderReadyFile -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $SenderLog, $ReceiverLog, $MonitorLog, $HealthStatusFile, $SenderReadyFile -Force -ErrorAction SilentlyContinue
 
 $RepoRootLiteral = ConvertTo-PowerShellLiteral $RepoRoot
 $PythonExeLiteral = ConvertTo-PowerShellLiteral $PythonExe
 $PublisherLiteral = ConvertTo-PowerShellLiteral $Publisher
 $PcmrRunnerLiteral = ConvertTo-PowerShellLiteral $PcmrRunner
 $MonitorRunnerLiteral = ConvertTo-PowerShellLiteral $MonitorRunner
+$HealthValidatorLiteral = ConvertTo-PowerShellLiteral $HealthValidator
 $AntmanRootLiteral = ConvertTo-PowerShellLiteral $AntmanRoot
 $GodotExeLiteral = ConvertTo-PowerShellLiteral $GodotExe
 $WsUrlLiteral = ConvertTo-PowerShellLiteral $WsUrl
 $SenderLogLiteral = ConvertTo-PowerShellLiteral $SenderLog
 $ReceiverLogLiteral = ConvertTo-PowerShellLiteral $ReceiverLog
 $MonitorLogLiteral = ConvertTo-PowerShellLiteral $MonitorLog
+$HealthStatusFileLiteral = ConvertTo-PowerShellLiteral $HealthStatusFile
+$RawMonitorStatusFileLiteral = ConvertTo-PowerShellLiteral $RawMonitorStatusFile
+$PcmrStatusFileLiteral = ConvertTo-PowerShellLiteral $PcmrStatusFile
 $SenderReadyFileLiteral = ConvertTo-PowerShellLiteral $SenderReadyFile
 $UseOverlayLiteral = if ($UseAntmanPassthroughOverlay) { "`$true" } else { "`$false" }
 
@@ -201,7 +209,7 @@ Write-Host "[receiver] Sender ready; starting PCMR validation."
 if ($UseOverlayLiteral) {
   `$ArgsList["UseAntmanPassthroughOverlay"] = `$true
 }
-& $PcmrRunnerLiteral @ArgsList 2>&1 | Tee-Object -FilePath $ReceiverLogLiteral -Append
+& $PcmrRunnerLiteral @ArgsList *>&1 | Tee-Object -FilePath $ReceiverLogLiteral -Append
 `$ExitCode = `$LASTEXITCODE
 Write-Host "[receiver] PCMR receiver exited with code `$ExitCode"
 exit `$ExitCode
@@ -223,10 +231,26 @@ Write-Host "[monitor] Sender ready; collecting packets."
   TimeoutSeconds = $MonitorTimeoutSeconds
   PythonExe = $PythonExeLiteral
 }
-& $MonitorRunnerLiteral @MonitorArgs 2>&1 | Tee-Object -FilePath $MonitorLogLiteral -Append
-`$ExitCode = `$LASTEXITCODE
-Write-Host "[monitor] Monitor exited with code `$ExitCode"
-exit `$ExitCode
+& $MonitorRunnerLiteral @MonitorArgs *>&1 | Tee-Object -FilePath $MonitorLogLiteral -Append
+`$RawMonitorExitCode = `$LASTEXITCODE
+Write-Host "[monitor] Raw stream monitor exited with code `$RawMonitorExitCode"
+Write-Host "[monitor] Running end-to-end health verdict: STREAM_OK / GODOT_NOT_CONNECTED / SAMPLE_FALLBACK_ACTIVE / CARD_BOUND_TO_LIVE_TARGET / LOW_CONFIDENCE_DEPTH_ONLY"
+`$HealthArgs = @(
+  $HealthValidatorLiteral,
+  "--sender-log", $SenderLogLiteral,
+  "--raw-status", $RawMonitorStatusFileLiteral,
+  "--pcmr-status", $PcmrStatusFileLiteral,
+  "--min-packets", "$MonitorMinPackets",
+  "--timeout-seconds", "$ProxyTargetsTimeoutSeconds",
+  "--output", $HealthStatusFileLiteral
+)
+& $PythonExeLiteral @HealthArgs *>&1 | Tee-Object -FilePath $MonitorLogLiteral -Append
+`$HealthExitCode = `$LASTEXITCODE
+Write-Host "[monitor] End-to-end health monitor exited with code `$HealthExitCode"
+if (`$HealthExitCode -ne 0) {
+  exit `$HealthExitCode
+}
+exit `$RawMonitorExitCode
 "@
 
 Set-Content -LiteralPath $SenderScript -Value $SenderContent -Encoding UTF8
@@ -266,4 +290,5 @@ Write-Host "Logs:"
 Write-Host "  Sender:   $SenderLog"
 Write-Host "  Receiver: $ReceiverLog"
 Write-Host "  Monitor:  $MonitorLog"
+Write-Host "  Health:   $HealthStatusFile"
 Write-Host "  PCMR status copy: .tmp\windows_pcmr_proxy_targets\proxy_targets_live_status.json"

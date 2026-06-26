@@ -1,0 +1,274 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import time
+from pathlib import Path
+from typing import Any
+
+
+SAMPLE_TARGET_ID = "person-7"
+SAMPLE_CARD_POSITION = "0.50 0.25 -1.20"
+
+
+def default_pcmr_status_path(appdata: Path | None = None) -> Path:
+    if appdata is None:
+        appdata_value = os.environ.get("APPDATA", "")
+        appdata = Path(appdata_value) if appdata_value else Path.home() / "AppData" / "Roaming"
+    return appdata / "Godot" / "app_userdata" / "demo_run" / "proxy_targets_live_status.json"
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _count(status: dict[str, Any], key: str) -> int:
+    try:
+        return int(status.get(key, 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes"}
+    return False
+
+
+def _list_strings(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _sender_summary(sender_log_text: str) -> dict[str, Any]:
+    sent_matches = re.findall(
+        r"sent stereo seq=(?P<sequence>\d+)\s+target=(?P<target>\S+)\s+"
+        r"depth_source=(?P<depth_source>\S+)\s+depth_confidence=(?P<depth_confidence>\S+)",
+        sender_log_text,
+    )
+    last_sent = sent_matches[-1] if sent_matches else None
+    return {
+        "ready": "proxy_targets live publisher listening" in sender_log_text,
+        "sent_count": len(sent_matches),
+        "last_sequence": int(last_sent[0]) if last_sent else None,
+        "last_target_id": last_sent[1] if last_sent else None,
+        "last_depth_source": last_sent[2] if last_sent else None,
+        "last_depth_confidence": last_sent[3] if last_sent else None,
+        "mentions_left": bool(re.search(r"\b(left|Left)\b", sender_log_text)),
+        "mentions_right": bool(re.search(r"\b(right|Right)\b", sender_log_text)),
+        "no_target": "no_target" in sender_log_text,
+        "low_confidence": "low confidence" in sender_log_text or "depth_confidence=low" in sender_log_text,
+    }
+
+
+def _raw_stream_ok(raw_status: dict[str, Any], min_packets: int) -> bool:
+    target_ids = _list_strings(raw_status.get("target_ids"))
+    return (
+        _truthy(raw_status.get("ok"))
+        and _count(raw_status, "packets") >= min_packets
+        and _count(raw_status, "parsed") >= min_packets
+        and _truthy(raw_status.get("sequence_contiguous"))
+        and _truthy(raw_status.get("position_changed"))
+        and any(target_id.startswith("vst_stereo-") for target_id in target_ids)
+        and _count(raw_status, "missing_depth_confidence_count") == 0
+        and _count(raw_status, "missing_depth_source_count") == 0
+    )
+
+
+def _pcmr_connected(pcmr_status: dict[str, Any]) -> bool:
+    return (
+        _truthy(pcmr_status.get("ws_connected"))
+        and _truthy(pcmr_status.get("ws_subscribed"))
+        and _count(pcmr_status, "packets") > 0
+        and _count(pcmr_status, "parsed") > 0
+        and _count(pcmr_status, "live") > 0
+    )
+
+
+def _sample_fallback_active(pcmr_status: dict[str, Any]) -> bool:
+    card_target_id = str(pcmr_status.get("card_target_id", "")).strip()
+    card_attach_target_id = str(pcmr_status.get("card_attach_target_id", "")).strip()
+    proxy_target_ids = _list_strings(pcmr_status.get("proxy_target_ids"))
+    card_node_position = str(pcmr_status.get("card_node_position", "")).strip()
+    card_resolved_position = str(pcmr_status.get("card_resolved_position", "")).strip()
+    return (
+        str(pcmr_status.get("last_command", "")).strip() == "proxy_sample"
+        or card_target_id == SAMPLE_TARGET_ID
+        or card_attach_target_id == SAMPLE_TARGET_ID
+        or SAMPLE_TARGET_ID in proxy_target_ids
+        or card_node_position == SAMPLE_CARD_POSITION
+        or card_resolved_position == SAMPLE_CARD_POSITION
+    )
+
+
+def _card_bound_to_live_target(pcmr_status: dict[str, Any], raw_status: dict[str, Any]) -> bool:
+    card_target_id = str(pcmr_status.get("card_target_id", "")).strip()
+    card_attach_target_id = str(pcmr_status.get("card_attach_target_id", "")).strip()
+    proxy_target_ids = set(_list_strings(pcmr_status.get("proxy_target_ids")))
+    raw_target_ids = set(_list_strings(raw_status.get("target_ids")))
+    return (
+        str(pcmr_status.get("last_command", "")).strip() == "proxy_live"
+        and card_target_id.startswith("vst_stereo-")
+        and card_attach_target_id == card_target_id
+        and card_target_id in proxy_target_ids
+        and (not raw_target_ids or card_target_id in raw_target_ids)
+        and str(pcmr_status.get("card_node_position", "")).strip() != SAMPLE_CARD_POSITION
+        and str(pcmr_status.get("card_resolved_position", "")).strip() != SAMPLE_CARD_POSITION
+    )
+
+
+def _low_confidence_only(raw_status: dict[str, Any]) -> bool:
+    depth_confidences = raw_status.get("depth_confidences", {})
+    if not isinstance(depth_confidences, dict):
+        return False
+    nonzero = {str(key): int(value) for key, value in depth_confidences.items() if int(value) > 0}
+    return bool(nonzero) and set(nonzero) == {"low"}
+
+
+def evaluate_health(
+    sender_log_text: str,
+    raw_status: dict[str, Any],
+    pcmr_status: dict[str, Any],
+    *,
+    min_packets: int = 10,
+) -> dict[str, Any]:
+    verdicts: list[str] = []
+    errors: list[str] = []
+    sender = _sender_summary(sender_log_text)
+
+    if sender["ready"]:
+        verdicts.append("SENDER_READY")
+    else:
+        verdicts.append("SENDER_NOT_READY")
+        errors.append("sender did not report proxy_targets live publisher listening")
+
+    if sender["sent_count"] > 0 and str(sender.get("last_target_id", "")).startswith("vst_stereo-"):
+        verdicts.append("SENDER_STEREO_TARGETS")
+    else:
+        errors.append("sender did not report sent stereo target=vst_stereo-*")
+
+    if _raw_stream_ok(raw_status, min_packets=min_packets):
+        verdicts.append("STREAM_OK")
+    else:
+        verdicts.append("STREAM_NOT_OK")
+        errors.append("raw proxy_targets stream did not meet end-to-end monitor requirements")
+
+    if _pcmr_connected(pcmr_status):
+        verdicts.append("GODOT_CONNECTED")
+    else:
+        verdicts.append("GODOT_NOT_CONNECTED")
+        errors.append("Godot/PCMR did not report ws_connected/ws_subscribed/packets/parsed/live")
+
+    if _sample_fallback_active(pcmr_status):
+        verdicts.append("SAMPLE_FALLBACK_ACTIVE")
+        errors.append("PCMR/card is still on proxy_sample/person-7")
+
+    if _card_bound_to_live_target(pcmr_status, raw_status):
+        verdicts.append("CARD_BOUND_TO_LIVE_TARGET")
+    else:
+        errors.append("card_target_id is not bound to a live vst_stereo-* target")
+
+    if _low_confidence_only(raw_status):
+        verdicts.append("LOW_CONFIDENCE_DEPTH_ONLY")
+
+    ok = (
+        "SENDER_READY" in verdicts
+        and "SENDER_STEREO_TARGETS" in verdicts
+        and "STREAM_OK" in verdicts
+        and "GODOT_CONNECTED" in verdicts
+        and "CARD_BOUND_TO_LIVE_TARGET" in verdicts
+        and "SAMPLE_FALLBACK_ACTIVE" not in verdicts
+    )
+    return {
+        "ok": ok,
+        "verdicts": verdicts,
+        "errors": errors if not ok else [],
+        "sender": sender,
+        "raw": {
+            "packets": _count(raw_status, "packets"),
+            "parsed": _count(raw_status, "parsed"),
+            "sequence_contiguous": _truthy(raw_status.get("sequence_contiguous")),
+            "position_changed": _truthy(raw_status.get("position_changed")),
+            "target_ids": _list_strings(raw_status.get("target_ids")),
+            "depth_confidences": raw_status.get("depth_confidences", {}),
+            "depth_sources": raw_status.get("depth_sources", {}),
+            "missing_depth_confidence_count": _count(raw_status, "missing_depth_confidence_count"),
+            "missing_depth_source_count": _count(raw_status, "missing_depth_source_count"),
+        },
+        "pcmr": {
+            "last_command": pcmr_status.get("last_command"),
+            "ws_connected": _truthy(pcmr_status.get("ws_connected")),
+            "ws_subscribed": _truthy(pcmr_status.get("ws_subscribed")),
+            "packets": _count(pcmr_status, "packets"),
+            "parsed": _count(pcmr_status, "parsed"),
+            "live": _count(pcmr_status, "live"),
+            "sequence": pcmr_status.get("sequence"),
+            "card_target_id": pcmr_status.get("card_target_id"),
+            "card_attach_target_id": pcmr_status.get("card_attach_target_id"),
+            "proxy_target_ids": _list_strings(pcmr_status.get("proxy_target_ids")),
+            "card_node_position": pcmr_status.get("card_node_position"),
+            "card_resolved_position": pcmr_status.get("card_resolved_position"),
+        },
+    }
+
+
+def wait_for_health(
+    sender_log_path: Path,
+    raw_status_path: Path,
+    pcmr_status_path: Path,
+    *,
+    min_packets: int = 10,
+    timeout_s: float = 0.0,
+    interval_s: float = 0.25,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + max(0.0, timeout_s)
+    last_status: dict[str, Any] = {}
+    while True:
+        sender_log_text = sender_log_path.read_text(encoding="utf-8", errors="replace") if sender_log_path.exists() else ""
+        raw_status = load_json(raw_status_path) if raw_status_path.exists() else {"ok": False, "errors": ["raw status file missing"]}
+        pcmr_status = load_json(pcmr_status_path) if pcmr_status_path.exists() else {"error": "pcmr status file missing"}
+        last_status = evaluate_health(sender_log_text, raw_status, pcmr_status, min_packets=min_packets)
+        if last_status.get("ok") or time.monotonic() >= deadline:
+            return last_status
+        time.sleep(max(0.01, interval_s))
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Validate end-to-end stereo proxy_targets health across sender, raw stream, and Godot/card status.")
+    parser.add_argument("--sender-log", type=Path, required=True)
+    parser.add_argument("--raw-status", type=Path, required=True)
+    parser.add_argument("--pcmr-status", type=Path, default=default_pcmr_status_path())
+    parser.add_argument("--min-packets", type=int, default=10)
+    parser.add_argument("--timeout-seconds", type=float, default=0.0)
+    parser.add_argument("--interval-seconds", type=float, default=0.25)
+    parser.add_argument("--output", type=Path, default=None)
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = _parse_args()
+    status = wait_for_health(
+        args.sender_log,
+        args.raw_status,
+        args.pcmr_status,
+        min_packets=max(1, args.min_packets),
+        timeout_s=max(0.0, args.timeout_seconds),
+        interval_s=max(0.01, args.interval_seconds),
+    )
+    text = json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True)
+    print(text)
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(text + "\n", encoding="utf-8")
+    return 0 if status.get("ok") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
