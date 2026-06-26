@@ -192,14 +192,14 @@ while (-not (Test-Path -LiteralPath $SenderReadyFileLiteral)) {
   Start-Sleep -Milliseconds 250
 }
 Write-Host "[receiver] Sender ready; starting PCMR validation."
-`$ArgsList = @(
-  "-GodotExe", $GodotExeLiteral,
-  "-ValidateProxyTargets",
-  "-ProxyTargetsWsUrl", $WsUrlLiteral,
-  "-ProxyTargetsTimeoutSeconds", "$ProxyTargetsTimeoutSeconds"
-)
+`$ArgsList = @{
+  GodotExe = $GodotExeLiteral
+  ValidateProxyTargets = `$true
+  ProxyTargetsWsUrl = $WsUrlLiteral
+  ProxyTargetsTimeoutSeconds = $ProxyTargetsTimeoutSeconds
+}
 if ($UseOverlayLiteral) {
-  `$ArgsList += "-UseAntmanPassthroughOverlay"
+  `$ArgsList["UseAntmanPassthroughOverlay"] = `$true
 }
 & $PcmrRunnerLiteral @ArgsList 2>&1 | Tee-Object -FilePath $ReceiverLogLiteral -Append
 `$ExitCode = `$LASTEXITCODE
@@ -217,12 +217,12 @@ while (-not (Test-Path -LiteralPath $SenderReadyFileLiteral)) {
   Start-Sleep -Milliseconds 250
 }
 Write-Host "[monitor] Sender ready; collecting packets."
-`$MonitorArgs = @(
-  "-Url", $WsUrlLiteral,
-  "-MinPackets", "$MonitorMinPackets",
-  "-TimeoutSeconds", "$MonitorTimeoutSeconds",
-  "-PythonExe", $PythonExeLiteral
-)
+`$MonitorArgs = @{
+  Url = $WsUrlLiteral
+  MinPackets = $MonitorMinPackets
+  TimeoutSeconds = $MonitorTimeoutSeconds
+  PythonExe = $PythonExeLiteral
+}
 & $MonitorRunnerLiteral @MonitorArgs 2>&1 | Tee-Object -FilePath $MonitorLogLiteral -Append
 `$ExitCode = `$LASTEXITCODE
 Write-Host "[monitor] Monitor exited with code `$ExitCode"

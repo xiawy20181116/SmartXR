@@ -71,8 +71,8 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn('Open-RunnerTab -WindowName $WindowName -Title "SmartXR proxy_targets monitor"', source)
         self.assertIn("WindowStyle Normal", source)
         self.assertIn("receiver waits for sender_ready", source)
-        self.assertIn("-ValidateProxyTargets", source)
-        self.assertIn("-ProxyTargetsWsUrl", source)
+        self.assertIn("ValidateProxyTargets = `$true", source)
+        self.assertIn("ProxyTargetsWsUrl = $WsUrlLiteral", source)
         self.assertIn("ws://${HostName}:${Port}/proxy_targets", source)
         self.assertIn("depth_confidence=low", source)
 
@@ -101,8 +101,16 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
 
         self.assertIn("$PublisherArgs = @(", source)
         self.assertIn("& $PythonExeLiteral @PublisherArgs", source)
-        self.assertIn("$MonitorArgs = @(", source)
+        self.assertIn("$ArgsList = @{", source)
+        self.assertIn("GodotExe = $GodotExeLiteral", source)
+        self.assertIn("ValidateProxyTargets = `$true", source)
+        self.assertIn("ProxyTargetsWsUrl = $WsUrlLiteral", source)
+        self.assertIn("ProxyTargetsTimeoutSeconds = $ProxyTargetsTimeoutSeconds", source)
+        self.assertIn("$MonitorArgs = @{", source)
         self.assertIn("& $MonitorRunnerLiteral @MonitorArgs", source)
+        self.assertIn("Url = $WsUrlLiteral", source)
+        self.assertIn("MinPackets = $MonitorMinPackets", source)
+        self.assertIn("TimeoutSeconds = $MonitorTimeoutSeconds", source)
         self.assertNotIn("& $PythonExeLiteral $PublisherLiteral `", source)
         self.assertNotIn("& $MonitorRunnerLiteral `", source)
 
