@@ -27,6 +27,7 @@ DEFAULT_HORIZONTAL_FOV_DEG = 70.0
 DEFAULT_VERTICAL_FOV_DEG = 43.0
 DEFAULT_COORDINATE_SPACE = "vst_camera_right"
 DEFAULT_TARGET_DEPTH_M = 5.0
+VALID_DEPTH_CONFIDENCES = {"high", "low", "none"}
 
 
 def build_fake_proxy_targets_message(
@@ -138,6 +139,30 @@ def _camera_coordinate_space(detection: dict[str, Any], root_image: dict[str, An
     return DEFAULT_COORDINATE_SPACE
 
 
+def _depth_source(detection: dict[str, Any]) -> str:
+    value = detection.get("depth_source")
+    if value is not None:
+        source = str(value).strip()
+        if source:
+            return source
+    return "provided_depth" if "depth_m" in detection else "default_depth"
+
+
+def _depth_confidence(detection: dict[str, Any], depth_source: str) -> str:
+    value = detection.get("depth_confidence")
+    if value is not None:
+        confidence = str(value).strip().lower()
+        if confidence in VALID_DEPTH_CONFIDENCES:
+            return confidence
+        if confidence:
+            return "none"
+    if "depth_m" in detection or "position" in detection or "transform" in detection:
+        return "high"
+    if depth_source.endswith("_fallback") or depth_source == "default_depth":
+        return "low"
+    return "low"
+
+
 def _camera_point_from_bbox(
     detection: dict[str, Any],
     root_image: dict[str, Any],
@@ -215,13 +240,15 @@ def _source_coordinate_diagnostics(
 ) -> dict[str, Any]:
     point_vst, camera = _camera_point_from_bbox(detection, root_image, default_depth_m)
     right_eye_to_head = _right_eye_to_head_matrix(detection, root_image)
+    depth_source = _depth_source(detection)
     return {
         "coordinate_space": _camera_coordinate_space(detection, root_image),
         "publisher_convention": "godot_head",
         "camera_axes": "+X right,+Y down,+Z forward",
         "head_axes": "+X right,+Y up,-Z forward",
         "anchor": "target_center",
-        "depth_source": "provided_depth" if "depth_m" in detection else "default_depth",
+        "depth_source": depth_source,
+        "depth_confidence": _depth_confidence(detection, depth_source),
         "uses_right_eye_to_head": right_eye_to_head is not None,
         "source_frame": {
             "w": camera["image_w"],
@@ -296,6 +323,10 @@ def normalize_source_payload(
     for index, detection in enumerate(detections):
         if not isinstance(detection, dict):
             continue
+        depth_source = _depth_source(detection)
+        depth_confidence = _depth_confidence(detection, depth_source)
+        if depth_confidence == "none":
+            continue
         raw_id = detection.get("target_id", detection.get("id", detection.get("track_id")))
         target_id = _target_id(source, raw_id, index)
         target = {
@@ -305,6 +336,8 @@ def normalize_source_payload(
             "transform_space": "head",
             "state": canonical_state(detection.get("state", "tracked")),
             "confidence": as_float(detection.get("confidence"), 1.0),
+            "depth_source": depth_source,
+            "depth_confidence": depth_confidence,
             "timestamp_ms": as_float(detection.get("timestamp_ms"), timestamp_ms),
             "transform": _transform_from_detection(detection, root_image, default_depth_m),
         }
