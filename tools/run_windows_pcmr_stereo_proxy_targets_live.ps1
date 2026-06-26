@@ -8,7 +8,7 @@ param(
     [int]$RecordedWidth = 880,
     [int]$RecordedHeight = 660,
     [int]$LogEvery = 20,
-    [double]$SenderReadyTimeoutSeconds = 20.0,
+    [double]$SenderReadyTimeoutSeconds = 45.0,
     [double]$ProxyTargetsTimeoutSeconds = 60.0,
     [int]$MonitorMinPackets = 10,
     [double]$MonitorTimeoutSeconds = 20.0,
@@ -58,6 +58,27 @@ function Wait-ForLogText {
         Start-Sleep -Milliseconds 250
     }
     return $false
+}
+
+function Get-LogTail {
+    param(
+        [string]$Path,
+        [int]$Tail = 40
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return "(sender log not found yet: $Path)"
+    }
+
+    try {
+        $Lines = Get-Content -LiteralPath $Path -Tail $Tail -ErrorAction Stop
+        if ($null -eq $Lines -or $Lines.Count -eq 0) {
+            return "(sender log is empty: $Path)"
+        }
+        return ($Lines -join [Environment]::NewLine)
+    } catch {
+        return "(failed to read sender log: $($_.Exception.Message))"
+    }
 }
 
 function Start-VisiblePowerShellWindow {
@@ -223,7 +244,14 @@ Open-RunnerTab -WindowName $WindowName -Title "SmartXR stereo sender" -RunnerPat
 
 Write-Host "Waiting for sender readiness: proxy_targets live publisher listening"
 if (-not (Wait-ForLogText -Path $SenderLog -Text "proxy_targets live publisher listening" -TimeoutSeconds $SenderReadyTimeoutSeconds)) {
-    throw "Sender did not report ready within $SenderReadyTimeoutSeconds seconds. Check $SenderLog and $SenderLogLiteral"
+    $SenderLogTail = Get-LogTail -Path $SenderLog
+    throw @"
+Sender did not report ready within $SenderReadyTimeoutSeconds seconds.
+Check: $SenderLog
+
+Sender log tail:
+$SenderLogTail
+"@
 }
 Set-Content -LiteralPath $SenderReadyFile -Value "ready" -Encoding ASCII
 

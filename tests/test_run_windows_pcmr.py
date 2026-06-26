@@ -89,6 +89,10 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("receiver waits for sender_ready", source)
         self.assertIn("monitor waits for sender_ready", source)
         self.assertIn("sender_ready.txt", source)
+        self.assertIn("[double]$SenderReadyTimeoutSeconds = 45.0", source)
+        self.assertIn("Get-LogTail", source)
+        self.assertIn("Sender log tail:", source)
+        self.assertIn("not found yet", source)
         self.assertNotIn("Start-Sleep -Seconds 1", source)
 
     def test_stereo_live_runner_generates_argument_arrays_not_fragile_backtick_lines(self):
