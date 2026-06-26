@@ -46,6 +46,14 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("Copy-Item -LiteralPath $StatusFile -Destination $WorkDirStatusFile -Force", source)
         self.assertIn("Status JSON copy:", source)
 
+    def test_validate_proxy_targets_can_keep_godot_open_for_manual_inspection(self):
+        source = RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("[switch]$KeepGodotOpen", source)
+        self.assertIn("Keep running: Godot stays open after attached validation succeeds.", source)
+        self.assertIn("if (-not $KeepGodotOpen) {", source)
+        self.assertIn("Stop-ChildProcess -Process $GodotProcess", source)
+
     def test_live_runner_starts_isolated_fake_publisher_before_pcmr_validation(self):
         self.assertTrue(LIVE_RUNNER.exists())
         source = LIVE_RUNNER.read_text(encoding="utf-8")
@@ -115,6 +123,16 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("TimeoutSeconds = $MonitorTimeoutSeconds", source)
         self.assertNotIn("& $PythonExeLiteral $PublisherLiteral `", source)
         self.assertNotIn("& $MonitorRunnerLiteral `", source)
+
+    def test_stereo_live_runner_can_keep_receiver_godot_open(self):
+        self.assertTrue(STEREO_LIVE_RUNNER.exists())
+        source = STEREO_LIVE_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("[switch]$KeepReceiverOpen", source)
+        self.assertIn("Keep receiver Godot open: $KeepReceiverOpen", source)
+        self.assertIn("$KeepReceiverOpenLiteral", source)
+        self.assertIn('`$ArgsList["KeepGodotOpen"] = `$true', source)
+        self.assertIn("Close the receiver tab/window manually", source)
 
     def test_stereo_live_runner_monitor_captures_all_streams_and_health_verdict(self):
         self.assertTrue(STEREO_LIVE_RUNNER.exists())

@@ -13,6 +13,7 @@ param(
     [int]$MonitorMinPackets = 10,
     [double]$MonitorTimeoutSeconds = 20.0,
     [switch]$UseAntmanPassthroughOverlay,
+    [switch]$KeepReceiverOpen,
     [string]$PythonExe = ""
 )
 
@@ -163,6 +164,7 @@ $RawMonitorStatusFileLiteral = ConvertTo-PowerShellLiteral $RawMonitorStatusFile
 $PcmrStatusFileLiteral = ConvertTo-PowerShellLiteral $PcmrStatusFile
 $SenderReadyFileLiteral = ConvertTo-PowerShellLiteral $SenderReadyFile
 $UseOverlayLiteral = if ($UseAntmanPassthroughOverlay) { "`$true" } else { "`$false" }
+$KeepReceiverOpenLiteral = if ($KeepReceiverOpen) { "`$true" } else { "`$false" }
 
 $SenderContent = @"
 `$ErrorActionPreference = "Stop"
@@ -208,6 +210,9 @@ Write-Host "[receiver] Sender ready; starting PCMR validation."
 }
 if ($UseOverlayLiteral) {
   `$ArgsList["UseAntmanPassthroughOverlay"] = `$true
+}
+if ($KeepReceiverOpenLiteral) {
+  `$ArgsList["KeepGodotOpen"] = `$true
 }
 & $PcmrRunnerLiteral @ArgsList *>&1 | Tee-Object -FilePath $ReceiverLogLiteral -Append
 `$ExitCode = `$LASTEXITCODE
@@ -281,6 +286,7 @@ Write-Host "This opens one Windows Terminal window with three tabs when wt.exe i
 Write-Host "It falls back to three visible PowerShell windows otherwise."
 Write-Host "WebSocket: $WsUrl"
 Write-Host "Work dir:  $WorkDir"
+Write-Host "Keep receiver Godot open: $KeepReceiverOpen"
 Write-Host ""
 
 Open-RunnerTab -WindowName $WindowName -Title "SmartXR stereo sender" -RunnerPath $SenderScript
@@ -304,6 +310,9 @@ Open-RunnerTab -WindowName $WindowName -Title "SmartXR proxy_targets monitor" -R
 Write-Host ""
 Write-Host "Started sender, receiver, and monitor."
 Write-Host "Close the sender tab/window manually after real-device inspection is done."
+if ($KeepReceiverOpen) {
+    Write-Host "Close the receiver tab/window manually after visual card inspection is done."
+}
 Write-Host ""
 Write-Host "Logs:"
 Write-Host "  Sender:   $SenderLog"

@@ -2,6 +2,7 @@ param(
     [switch]$Editor,
     [switch]$ExportDebug,
     [switch]$ValidateProxyTargets,
+    [switch]$KeepGodotOpen,
     [switch]$UseAntmanPassthroughOverlay,
     [string]$ProxyTargetsWsUrl = "ws://127.0.0.1:8766/proxy_targets",
     [double]$ProxyTargetsTimeoutSeconds = 15.0,
@@ -71,6 +72,9 @@ if ($ValidateProxyTargets) {
     Write-Host "Status file: $StatusFile"
     Write-Host "Timeout: $ProxyTargetsTimeoutSeconds seconds"
     Write-Host "Publisher: external/already running; this script does not start one."
+    if ($KeepGodotOpen) {
+        Write-Host "Keep running: Godot stays open after attached validation succeeds."
+    }
 }
 if ($UseAntmanPassthroughOverlay) {
     Write-Host "SmartXR-PCMR Antman passthrough overlay"
@@ -129,7 +133,9 @@ try {
         $ExitCode = $LASTEXITCODE
     }
 } finally {
-    Stop-ChildProcess -Process $GodotProcess
+    if (-not $KeepGodotOpen) {
+        Stop-ChildProcess -Process $GodotProcess
+    }
     Restore-EnvVar -Name "PROXY_TARGETS_WS_URL" -Value $OldProxyTargetsWsUrl
     Restore-EnvVar -Name "SMARTXR_USE_PASSTHROUGH_OVERLAY" -Value $OldPassthroughOverlay
     Restore-EnvVar -Name "SMARTXR_STATUS_HUD_VISIBLE" -Value $OldStatusHudVisible
