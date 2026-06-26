@@ -267,6 +267,81 @@ class StereoMultitargetDepthEvaluatorTests(unittest.TestCase):
         per_frame = json.loads((out_dir / "per_frame.jsonl").read_text(encoding="utf-8").strip())
         self.assertEqual(per_frame["keypoint"]["anchor_consistency_gate"]["policy"], "fallback_bbox")
 
+    def test_exports_top_rejected_anchor_diagnostics(self):
+        evaluator = load_module(TOOL, "evaluate_stereo_multitarget_depth")
+        bbox_path = self.tmp_path / "bbox.jsonl"
+        keypoint_path = self.tmp_path / "keypoint.jsonl"
+        out_dir = self.tmp_path / "eval"
+        mismatch = target_keypoint_pair_record(1, "rank_1_near", [500, 330], [479, 331])
+        mismatch["selected_anchor"].update(
+            {
+                "kind": "mixed",
+                "left_kind": "shoulder_midpoint",
+                "right_kind": "nose",
+                "left_keypoints": ["left_shoulder", "right_shoulder"],
+                "right_keypoints": ["nose"],
+                "left_score": 0.81,
+                "right_score": 0.72,
+            }
+        )
+        vertical = target_keypoint_pair_record(2, "rank_1_near", [500, 330], [479, 380])
+        vertical["selected_anchor"].update(
+            {
+                "left_kind": "shoulder_midpoint",
+                "right_kind": "shoulder_midpoint",
+                "left_keypoints": ["left_shoulder", "right_shoulder"],
+                "right_keypoints": ["left_shoulder", "right_shoulder"],
+                "left_score": 0.81,
+                "right_score": 0.79,
+            }
+        )
+        write_jsonl(bbox_path, [bbox_pair_record(1), bbox_pair_record(2)])
+        write_jsonl(keypoint_path, [mismatch, vertical])
+
+        status = evaluator.evaluate_stereo_multitarget_depth(
+            bbox_input_path=bbox_path,
+            keypoint_input_path=keypoint_path,
+            out_dir=out_dir,
+            max_vertical_error_px=20.0,
+            require_anchor_kind="shoulder_midpoint",
+            anchor_mismatch_policy="reject",
+            diagnostic_reasons=["anchor_kind_mismatch", "vertical_error_too_large"],
+            diagnostic_top_n=5,
+        )
+
+        self.assertIn("diagnostics_jsonl", status)
+        mismatch_samples = [
+            json.loads(line)
+            for line in (out_dir / "diagnostics" / "anchor_kind_mismatch_top.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        vertical_samples = [
+            json.loads(line)
+            for line in (out_dir / "diagnostics" / "vertical_error_too_large_top.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        self.assertEqual(mismatch_samples[0]["frame_id"], 1)
+        self.assertEqual(mismatch_samples[0]["target_label"], "rank_1_near")
+        self.assertEqual(mismatch_samples[0]["left_anchor_kind"], "shoulder_midpoint")
+        self.assertEqual(mismatch_samples[0]["right_anchor_kind"], "nose")
+        self.assertEqual(mismatch_samples[0]["candidate_source"], "matched_bbox")
+        self.assertEqual(mismatch_samples[0]["bbox"]["left_xyxy"], [430.0, 260.0, 570.0, 430.0])
+        self.assertEqual(mismatch_samples[0]["selected_keypoints"]["right"], ["nose"])
+        self.assertEqual(mismatch_samples[0]["scores"]["right"], 0.72)
+        self.assertEqual(vertical_samples[0]["frame_id"], 2)
+        self.assertEqual(vertical_samples[0]["vertical_error_px"], -50.0)
+
+        per_frames = [
+            json.loads(line)
+            for line in (out_dir / "per_frame.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(
+            per_frames[0]["keypoint"]["diagnostic"]["rejection_reason"],
+            "anchor_kind_mismatch",
+        )
+
     def test_cli_accepts_bbox_and_keypoint_inputs(self):
         bbox_path = self.tmp_path / "bbox.jsonl"
         keypoint_path = self.tmp_path / "keypoint.jsonl"

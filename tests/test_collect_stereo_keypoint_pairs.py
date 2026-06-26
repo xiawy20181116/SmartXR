@@ -168,6 +168,38 @@ class StereoKeypointPairCollectorTests(unittest.TestCase):
         payload = json.loads(out_path.read_text(encoding="utf-8").strip())
         self.assertEqual(payload["selected_anchor"]["kind"], "nose")
 
+    def test_selected_anchor_preserves_per_eye_anchor_details(self):
+        collector = load_module(TOOL, "collect_stereo_keypoint_pairs")
+
+        record = collector.build_stereo_keypoint_pair_record(
+            frame_id=40,
+            timestamp_ms=400,
+            left_keypoints={
+                "left_shoulder": {"xy": [100, 200], "score": 0.9},
+                "right_shoulder": {"xy": [120, 204], "score": 0.8},
+            },
+            right_keypoints={
+                "nose": {"xy": [98, 190], "score": 0.7},
+            },
+            bbox_pair={
+                "pair_id": "pair-000040:rank_1_near",
+                "person_id": "target",
+                "left_bbox_xyxy": [80, 160, 140, 260],
+                "right_bbox_xyxy": [78, 160, 138, 260],
+                "confidence": 0.95,
+            },
+            min_score=0.5,
+        )
+
+        anchor = record["selected_anchor"]
+        self.assertEqual(anchor["kind"], "mixed")
+        self.assertEqual(anchor["left_kind"], "shoulder_midpoint")
+        self.assertEqual(anchor["right_kind"], "nose")
+        self.assertEqual(anchor["left_keypoints"], ["left_shoulder", "right_shoulder"])
+        self.assertEqual(anchor["right_keypoints"], ["nose"])
+        self.assertEqual(anchor["left_score"], 0.8)
+        self.assertEqual(anchor["right_score"], 0.7)
+
 
 if __name__ == "__main__":
     unittest.main()
