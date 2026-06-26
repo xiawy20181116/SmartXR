@@ -173,6 +173,58 @@ class VSTProxyTargetsPublisherTests(unittest.TestCase):
         self.assertEqual(target["source_coordinate"]["depth_source"], "default_depth")
         self.assertEqual(target["source_coordinate"]["source_frame"]["anchor_depth"], 5.0)
 
+    def test_vst_bbox_passes_depth_source_and_confidence_to_proxy_target(self):
+        publisher = load_module(PUBLISHER, "vst_proxy_targets_publisher")
+        validator = load_module(VALIDATOR, "validate_proxy_targets_payload_schema")
+
+        message = publisher.normalize_source_payload(
+            {
+                "source": "vst",
+                "timestamp_ms": 1780911169157,
+                "image": {"w": 880, "h": 660},
+                "detections": [
+                    {
+                        "id": "person-fallback",
+                        "confidence": 0.9,
+                        "depth_m": 1.23,
+                        "depth_source": "bbox_top_center_fallback",
+                        "depth_confidence": "low",
+                        "bbox": {"cx": 440.0, "cy": 330.0, "w": 100.0, "h": 200.0},
+                    }
+                ],
+            }
+        )
+
+        target = message["targets"][0]
+        self.assertEqual(target["depth_source"], "bbox_top_center_fallback")
+        self.assertEqual(target["depth_confidence"], "low")
+        self.assertEqual(target["source_coordinate"]["depth_source"], "bbox_top_center_fallback")
+        self.assertEqual(validator.validate_message(message), [])
+
+    def test_vst_bbox_depth_confidence_none_is_not_a_publishable_target(self):
+        publisher = load_module(PUBLISHER, "vst_proxy_targets_publisher")
+
+        message = publisher.normalize_source_payload(
+            {
+                "source": "vst",
+                "timestamp_ms": 1780911169157,
+                "image": {"w": 880, "h": 660},
+                "detections": [
+                    {
+                        "id": "person-none",
+                        "confidence": 0.9,
+                        "depth_m": 1.23,
+                        "depth_source": "bbox_top_center_fallback",
+                        "depth_confidence": "none",
+                        "bbox": {"cx": 440.0, "cy": 330.0, "w": 100.0, "h": 200.0},
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(message["targets"], [])
+        self.assertEqual(message["cards"], [])
+
     def test_vst_bbox_projection_can_apply_right_eye_to_head_matrix(self):
         publisher = load_module(PUBLISHER, "vst_proxy_targets_publisher")
 

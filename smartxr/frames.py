@@ -118,6 +118,10 @@ def normalize_frame(frame: dict[str, Any], index: int, min_confidence: float) ->
             detection["bbox"] = bbox
         if "depth_m" in item:
             detection["depth_m"] = as_float(item.get("depth_m"), 1.2)
+        if "depth_source" in item:
+            detection["depth_source"] = item["depth_source"]
+        if "depth_confidence" in item:
+            detection["depth_confidence"] = item["depth_confidence"]
         if "position" in item:
             detection["position"] = item["position"]
         if "transform" in item:

@@ -15,6 +15,7 @@ from typing import Any
 SCHEMA_VERSION = 1
 
 ALLOWED_STATES = {"tracked", "predicted", "stale", "lost"}
+ALLOWED_TARGET_DEPTH_CONFIDENCES = {"high", "low"}
 RAW_SOURCE_FIELDS = {"bbox", "boxes", "detection", "detections", "depth_m", "image"}
 
 DEFAULT_CARD_ID = "CardAnchor"
@@ -86,6 +87,10 @@ def _validate_target(target: Any, index: int, errors: list[str]) -> str | None:
     confidence = target.get("confidence")
     if not _is_number(confidence) or confidence < 0.0 or confidence > 1.0:
         errors.append(f"{path}.confidence must be a number in [0, 1]")
+    if "depth_source" in target and (not isinstance(target.get("depth_source"), str) or not target.get("depth_source")):
+        errors.append(f"{path}.depth_source must be a non-empty string when present")
+    if "depth_confidence" in target and target.get("depth_confidence") not in ALLOWED_TARGET_DEPTH_CONFIDENCES:
+        errors.append(f"{path}.depth_confidence must be one of {sorted(ALLOWED_TARGET_DEPTH_CONFIDENCES)}")
     if not _is_number(target.get("timestamp_ms")):
         errors.append(f"{path}.timestamp_ms must be a number")
 
