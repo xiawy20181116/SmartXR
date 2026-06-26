@@ -4,6 +4,7 @@ import argparse
 import json
 import socket
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,100 @@ from smartxr.transport import (  # noqa: E402
     encode_websocket_text_frame,
     handshake as _handshake,
 )
+
+
+_DEPTH_TRACE_CONTEXT: dict[int, dict[str, Any]] = {}
+
+
+def is_proxy_targets_request(first_line: str) -> bool:
+    parts = first_line.split()
+    if len(parts) < 2:
+        return False
+    return parts[1].split("?", 1)[0] == "/proxy_targets"
+
+
+class ClientInfo:
+    def __init__(self, conn: Any, address: Any, client_id: str, label: str) -> None:
+        self.conn = conn
+        self.address = address
+        self.client_id = client_id
+        self.label = label
+
+
+def _format_address(address: Any) -> str:
+    if isinstance(address, tuple) and len(address) >= 2:
+        return f"{address[0]}:{address[1]}"
+    return str(address)
+
+
+def _disconnect_reason(exc: BaseException | None) -> str:
+    if exc is None:
+        return "client_closed"
+    if isinstance(exc, ConnectionResetError):
+        return "connection_reset"
+    if isinstance(exc, BrokenPipeError):
+        return "broken_pipe"
+    return type(exc).__name__
+
+
+class BroadcastHub:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._clients: list[ClientInfo] = []
+        self._next_client_index = 1
+        self._last_disconnect: dict[str, Any] | None = None
+
+    def add_client(self, conn: Any, address: Any, label: str = "unknown") -> str:
+        with self._lock:
+            client_id = f"client-{self._next_client_index}"
+            self._next_client_index += 1
+            self._clients.append(ClientInfo(conn=conn, address=address, client_id=client_id, label=label))
+            return client_id
+
+    def remove_client(self, conn: Any, reason: str = "client_closed") -> dict[str, Any] | None:
+        with self._lock:
+            removed = next((client for client in self._clients if client.conn is conn), None)
+            self._clients = [client for client in self._clients if client.conn is not conn]
+            if removed is None:
+                return None
+            self._last_disconnect = {
+                "client_id": removed.client_id,
+                "label": removed.label,
+                "address": _format_address(removed.address),
+                "reason": reason,
+            }
+            return dict(self._last_disconnect)
+
+    def client_count(self) -> int:
+        with self._lock:
+            return len(self._clients)
+
+    def status_summary(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "active_client_count": len(self._clients),
+                "active_clients": [
+                    f"{client.client_id}={client.label}@{_format_address(client.address)}" for client in self._clients
+                ],
+                "last_disconnect": dict(self._last_disconnect) if self._last_disconnect else None,
+            }
+
+    def broadcast(self, message: dict[str, Any]) -> int:
+        payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False)
+        frame = encode_websocket_text_frame(payload)
+        stale: list[tuple[Any, str]] = []
+        delivered = 0
+        with self._lock:
+            clients = list(self._clients)
+        for client in clients:
+            try:
+                client.conn.sendall(frame)
+                delivered += 1
+            except (BrokenPipeError, ConnectionResetError, OSError) as exc:
+                stale.append((client.conn, _disconnect_reason(exc)))
+        for conn, reason in stale:
+            self.remove_client(conn, reason=reason)
+        return delivered
 
 
 def _empty_diagnostics(reason: str) -> dict[str, Any]:
@@ -177,7 +272,103 @@ def build_proxy_targets_message_from_stereo_bbox_record(
     message = normalize_source_payload(source_payload, sequence=sequence, card_id=card_id)
     if not message["targets"]:
         return None
+    detection = source_payload["detections"][0]
+    _DEPTH_TRACE_CONTEXT[id(message)] = {
+        "bbox": detection["bbox"],
+        "stereo": detection["stereo"],
+    }
     return message
+
+
+def _vector3_from_mapping(value: Any) -> list[float] | None:
+    if isinstance(value, (list, tuple)) and len(value) >= 3:
+        try:
+            return [float(value[0]), float(value[1]), float(value[2])]
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(value, dict):
+        return None
+    try:
+        return [float(value["x"]), float(value["y"]), float(value["z"])]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def build_depth_trace_event(
+    *,
+    message: dict[str, Any] | None,
+    diagnostics: dict[str, Any],
+    sequence: int | None = None,
+    delivered_clients: int | None = None,
+) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "timestamp_ms": int(time.time() * 1000),
+        "reason": diagnostics.get("reason", "-"),
+        "read_attempts": diagnostics.get("read_attempts", 0),
+        "frames_seen_left": diagnostics.get("frames_seen_left", 0),
+        "frames_seen_right": diagnostics.get("frames_seen_right", 0),
+        "left_pending": diagnostics.get("left_pending", 0),
+        "right_pending": diagnostics.get("right_pending", 0),
+        "stereo_rejection_reason": diagnostics.get("stereo_rejection_reason"),
+        "left_source_stats": diagnostics.get("left_source_stats", {}),
+        "right_source_stats": diagnostics.get("right_source_stats", {}),
+    }
+    if delivered_clients is not None:
+        event["delivered_clients"] = delivered_clients
+
+    if message is None or not message.get("targets"):
+        frame_id = diagnostics.get("last_pair_frame_id")
+        event.update(
+            {
+                "event": "rejected",
+                "sequence": sequence,
+                "left_frame_id": frame_id,
+                "right_frame_id": frame_id,
+            }
+        )
+        return event
+
+    target = message["targets"][0]
+    trace_context = _DEPTH_TRACE_CONTEXT.pop(id(message), {})
+    source_coordinate = target.get("source_coordinate", {})
+    source_frame = source_coordinate.get("source_frame", {})
+    stereo = trace_context.get("stereo", target.get("stereo", {}))
+    stereo_frame_id = stereo.get("frame_id", diagnostics.get("last_pair_frame_id"))
+    depth_m = source_frame.get("anchor_depth")
+    if depth_m is None:
+        depth_m = source_coordinate.get("depth_m")
+    try:
+        depth_m = float(depth_m)
+    except (TypeError, ValueError):
+        depth_m = None
+
+    event.update(
+        {
+            "event": "accepted",
+            "sequence": message.get("sequence"),
+            "target_id": target.get("target_id"),
+            "card_id": message.get("cards", [{}])[0].get("card_id"),
+            "left_frame_id": stereo_frame_id,
+            "right_frame_id": stereo_frame_id,
+            "depth_m": depth_m,
+            "depth_source": target.get("depth_source") or source_coordinate.get("depth_source"),
+            "depth_confidence": target.get("depth_confidence") or source_coordinate.get("depth_confidence"),
+            "source_frame": source_frame,
+            "camera_point_m": _vector3_from_mapping(source_coordinate.get("camera_point_m")),
+            "head_position_m": _vector3_from_mapping(source_coordinate.get("head_position_m")),
+            "bbox": trace_context.get("bbox", target.get("bbox", {})),
+            "stereo": stereo,
+        }
+    )
+    return event
+
+
+def write_depth_trace_event(trace_path: Path | None, event: dict[str, Any]) -> None:
+    if trace_path is None:
+        return
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    with trace_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
 def next_live_stereo_proxy_targets_message_with_diagnostics(
@@ -250,8 +441,8 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
     return None, diagnostics
 
 
-def _publish_loop(
-    conn: socket.socket,
+def _broadcast_loop(
+    hub: BroadcastHub,
     *,
     left_reader: Any,
     right_reader: Any,
@@ -265,13 +456,15 @@ def _publish_loop(
     log_every: int,
     max_empty_reads: int,
     max_vertical_error_px: float | None,
+    depth_trace: Path | None,
 ) -> None:
     interval_s = 1.0 / max(hz, 0.1)
     sequence = 0
     empty_windows = 0
     while True:
-        if not _drain_client_frames(conn):
-            return
+        if hub.client_count() == 0:
+            time.sleep(interval_s)
+            continue
         message, diagnostics = next_live_stereo_proxy_targets_message_with_diagnostics(
             left_reader=left_reader,
             right_reader=right_reader,
@@ -287,6 +480,10 @@ def _publish_loop(
         )
         if message is None:
             empty_windows += 1
+            write_depth_trace_event(
+                depth_trace,
+                build_depth_trace_event(message=None, diagnostics=diagnostics, sequence=sequence),
+            )
             if log_every > 0 and empty_windows % log_every == 1:
                 print("No stereo target frames available from Left/Right VST SHM + HumanTrackor", flush=True)
                 print(format_stereo_diagnostics(diagnostics), flush=True)
@@ -294,18 +491,22 @@ def _publish_loop(
             continue
 
         empty_windows = 0
-        payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False)
-        conn.sendall(encode_websocket_text_frame(payload))
+        delivered = hub.broadcast(message)
+        write_depth_trace_event(
+            depth_trace,
+            build_depth_trace_event(message=message, diagnostics=diagnostics, delivered_clients=delivered),
+        )
         if log_every > 0 and sequence % log_every == 0:
             target = message["targets"][0]
             position = target.get("transform", {}).get("position", [0.0, 0.0, 0.0])
             print(
-                "sent stereo seq=%d target=%s depth_source=%s depth_confidence=%s pos=%.3f %.3f %.3f"
+                "sent stereo seq=%d target=%s depth_source=%s depth_confidence=%s clients=%d pos=%.3f %.3f %.3f"
                 % (
                     sequence,
                     target.get("target_id", "-"),
                     target.get("depth_source", "-"),
                     target.get("depth_confidence", "-"),
+                    delivered,
                     position[0],
                     position[1],
                     position[2],
@@ -314,6 +515,38 @@ def _publish_loop(
             )
         sequence += 1
         time.sleep(interval_s)
+
+
+def _client_loop(conn: socket.socket, address: Any, hub: BroadcastHub) -> None:
+    disconnect_reason = "client_closed"
+    try:
+        while True:
+            try:
+                if not _drain_client_frames(conn):
+                    return
+            except (BrokenPipeError, ConnectionResetError, OSError) as exc:
+                disconnect_reason = _disconnect_reason(exc)
+                return
+            time.sleep(0.05)
+    finally:
+        disconnect = hub.remove_client(conn, reason=disconnect_reason)
+        try:
+            conn.close()
+        except OSError:
+            pass
+        if disconnect:
+            print(
+                "client disconnected: id=%s label=%s address=%s reason=%s"
+                % (
+                    disconnect["client_id"],
+                    disconnect["label"],
+                    disconnect["address"],
+                    disconnect["reason"],
+                ),
+                flush=True,
+            )
+        else:
+            print(f"client disconnected: {address}", flush=True)
 
 
 def serve(args: argparse.Namespace) -> int:
@@ -328,36 +561,42 @@ def serve(args: argparse.Namespace) -> int:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
             server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server.bind((args.host, args.port))
-            server.listen(1)
+            server.listen(8)
             print(f"stereo proxy_targets live publisher listening on ws://{args.host}:{args.port}/proxy_targets", flush=True)
             print("source: Left/Right VST SHM + HumanTrackor bbox stereo", flush=True)
             print("waiting for WebSocket client; sent seq appears after a stereo pair passes confidence/depth gates", flush=True)
+            hub = BroadcastHub()
+            threading.Thread(
+                target=_broadcast_loop,
+                kwargs={
+                    "hub": hub,
+                    "left_reader": left_reader,
+                    "right_reader": right_reader,
+                    "left_tracker": left_tracker,
+                    "right_tracker": right_tracker,
+                    "hz": args.hz,
+                    "card_id": args.card_id,
+                    "min_confidence": args.min_confidence,
+                    "recorded_width": args.recorded_width,
+                    "recorded_height": args.recorded_height,
+                    "log_every": args.log_every,
+                    "max_empty_reads": args.max_empty_reads,
+                    "max_vertical_error_px": args.max_vertical_error_px,
+                    "depth_trace": args.depth_trace,
+                },
+                daemon=True,
+            ).start()
             while True:
                 conn, address = server.accept()
-                with conn:
-                    ok, first_line = _handshake(conn)
-                    if not ok:
-                        print(f"rejected {address}: {first_line}", flush=True)
-                        continue
-                    print(f"client connected from {address}: {first_line}", flush=True)
-                    try:
-                        _publish_loop(
-                            conn,
-                            left_reader=left_reader,
-                            right_reader=right_reader,
-                            left_tracker=left_tracker,
-                            right_tracker=right_tracker,
-                            hz=args.hz,
-                            card_id=args.card_id,
-                            min_confidence=args.min_confidence,
-                            recorded_width=args.recorded_width,
-                            recorded_height=args.recorded_height,
-                            log_every=args.log_every,
-                            max_empty_reads=args.max_empty_reads,
-                            max_vertical_error_px=args.max_vertical_error_px,
-                        )
-                    except (BrokenPipeError, ConnectionResetError, OSError):
-                        print(f"client disconnected: {address}", flush=True)
+                ok, first_line = _handshake(conn, allow_request=is_proxy_targets_request)
+                if not ok:
+                    print(f"rejected {address}: {first_line}", flush=True)
+                    conn.close()
+                    continue
+                label = "godot" if hub.client_count() == 0 else "monitor"
+                client_id = hub.add_client(conn, address, label=label)
+                print(f"client connected: id={client_id} label={label} address={_format_address(address)} request={first_line}", flush=True)
+                threading.Thread(target=_client_loop, args=(conn, address, hub), daemon=True).start()
     finally:
         for reader_name in ("left_reader", "right_reader"):
             reader = locals().get(reader_name)
@@ -376,6 +615,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--min-confidence", type=float, default=0.5)
     parser.add_argument("--max-empty-reads", type=int, default=120)
     parser.add_argument("--max-vertical-error-px", type=float, default=None)
+    parser.add_argument("--depth-trace", type=Path, default=None)
     parser.add_argument("--recorded-width", type=int, default=880)
     parser.add_argument("--recorded-height", type=int, default=660)
     parser.add_argument("--shm-name", default="Antman.VST.AI.v1")

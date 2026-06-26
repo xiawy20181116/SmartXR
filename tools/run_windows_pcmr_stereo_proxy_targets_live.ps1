@@ -13,6 +13,7 @@ param(
     [int]$MonitorMinPackets = 10,
     [double]$MonitorTimeoutSeconds = 20.0,
     [switch]$UseAntmanPassthroughOverlay,
+    [switch]$KeepReceiverOpen,
     [string]$PythonExe = ""
 )
 
@@ -30,6 +31,7 @@ $MonitorScript = Join-Path -Path $WorkDir -ChildPath "monitor.ps1"
 $SenderLog = Join-Path -Path $WorkDir -ChildPath "sender.log"
 $ReceiverLog = Join-Path -Path $WorkDir -ChildPath "receiver.log"
 $MonitorLog = Join-Path -Path $WorkDir -ChildPath "monitor.log"
+$DepthTraceFile = Join-Path -Path $WorkDir -ChildPath "depth_estimation_trace.jsonl"
 $HealthStatusFile = Join-Path -Path $WorkDir -ChildPath "end_to_end_health_status.json"
 $RawMonitorStatusFile = Join-Path -Path $RepoRoot -ChildPath ".tmp\proxy_targets_live_monitor\proxy_targets_live_monitor_status.json"
 $PcmrStatusFile = Join-Path -Path $env:APPDATA -ChildPath "Godot\app_userdata\demo_run\proxy_targets_live_status.json"
@@ -144,7 +146,7 @@ if ($PythonExe -ne "python" -and -not (Test-Path -LiteralPath $PythonExe)) {
 }
 
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-Remove-Item -LiteralPath $SenderLog, $ReceiverLog, $MonitorLog, $HealthStatusFile, $SenderReadyFile -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $SenderLog, $ReceiverLog, $MonitorLog, $DepthTraceFile, $HealthStatusFile, $SenderReadyFile -Force -ErrorAction SilentlyContinue
 
 $RepoRootLiteral = ConvertTo-PowerShellLiteral $RepoRoot
 $PythonExeLiteral = ConvertTo-PowerShellLiteral $PythonExe
@@ -158,11 +160,13 @@ $WsUrlLiteral = ConvertTo-PowerShellLiteral $WsUrl
 $SenderLogLiteral = ConvertTo-PowerShellLiteral $SenderLog
 $ReceiverLogLiteral = ConvertTo-PowerShellLiteral $ReceiverLog
 $MonitorLogLiteral = ConvertTo-PowerShellLiteral $MonitorLog
+$DepthTraceFileLiteral = ConvertTo-PowerShellLiteral $DepthTraceFile
 $HealthStatusFileLiteral = ConvertTo-PowerShellLiteral $HealthStatusFile
 $RawMonitorStatusFileLiteral = ConvertTo-PowerShellLiteral $RawMonitorStatusFile
 $PcmrStatusFileLiteral = ConvertTo-PowerShellLiteral $PcmrStatusFile
 $SenderReadyFileLiteral = ConvertTo-PowerShellLiteral $SenderReadyFile
 $UseOverlayLiteral = if ($UseAntmanPassthroughOverlay) { "`$true" } else { "`$false" }
+$KeepReceiverOpenLiteral = if ($KeepReceiverOpen) { "`$true" } else { "`$false" }
 
 $SenderContent = @"
 `$ErrorActionPreference = "Stop"
@@ -171,6 +175,7 @@ Set-Location -LiteralPath $RepoRootLiteral
 Write-Host "[sender] SmartXR stereo sender"
 Write-Host "[sender] WebSocket: $WsUrl"
 Write-Host "[sender] Expected depth_source=bbox_top_center_fallback depth_confidence=low"
+Write-Host "[sender] Depth trace: $DepthTraceFile"
 Write-Host "[sender] A later healthy run should print sent stereo seq=..."
 `$PublisherArgs = @(
   $PublisherLiteral,
@@ -181,7 +186,8 @@ Write-Host "[sender] A later healthy run should print sent stereo seq=..."
   "--min-confidence", "$MinConfidence",
   "--recorded-width", "$RecordedWidth",
   "--recorded-height", "$RecordedHeight",
-  "--log-every", "$LogEvery"
+  "--log-every", "$LogEvery",
+  "--depth-trace", $DepthTraceFileLiteral
 )
 & $PythonExeLiteral @PublisherArgs 2>&1 | Tee-Object -FilePath $SenderLogLiteral -Append
 `$ExitCode = `$LASTEXITCODE
@@ -209,6 +215,9 @@ Write-Host "[receiver] Sender ready; starting PCMR validation."
 if ($UseOverlayLiteral) {
   `$ArgsList["UseAntmanPassthroughOverlay"] = `$true
 }
+if ($KeepReceiverOpenLiteral) {
+  `$ArgsList["KeepGodotOpen"] = `$true
+}
 & $PcmrRunnerLiteral @ArgsList *>&1 | Tee-Object -FilePath $ReceiverLogLiteral -Append
 `$ExitCode = `$LASTEXITCODE
 Write-Host "[receiver] PCMR receiver exited with code `$ExitCode"
@@ -231,10 +240,26 @@ Write-Host "[monitor] Sender ready; collecting packets."
   TimeoutSeconds = $MonitorTimeoutSeconds
   PythonExe = $PythonExeLiteral
 }
-& $MonitorRunnerLiteral @MonitorArgs *>&1 | Tee-Object -FilePath $MonitorLogLiteral -Append
+`$MonitorArgsList = @(
+  "-NoProfile",
+  "-ExecutionPolicy", "Bypass",
+  "-File", $MonitorRunnerLiteral,
+  "-Url", $WsUrlLiteral,
+  "-MinPackets", "$MonitorMinPackets",
+  "-TimeoutSeconds", "$MonitorTimeoutSeconds",
+  "-PythonExe", $PythonExeLiteral
+)
+`$RawMonitorFailed = `$false
+& powershell.exe @MonitorArgsList *>&1 | Tee-Object -FilePath $MonitorLogLiteral -Append
 `$RawMonitorExitCode = `$LASTEXITCODE
 Write-Host "[monitor] Raw stream monitor exited with code `$RawMonitorExitCode"
+if (`$RawMonitorExitCode -ne 0) {
+  `$RawMonitorFailed = `$true
+  Write-Host "[monitor] Raw stream monitor failed; continuing to end-to-end health verdict."
+}
 Write-Host "[monitor] Running end-to-end health verdict: STREAM_OK / GODOT_NOT_CONNECTED / SAMPLE_FALLBACK_ACTIVE / CARD_BOUND_TO_LIVE_TARGET / LOW_CONFIDENCE_DEPTH_ONLY"
+Write-Host "[monitor] Raw client diagnostics include: client_label / close_reason / packets_before_close"
+Write-Host "[monitor] Godot/card pose summary includes: proxy_world_position / card_resolved_position / card_minus_proxy_world"
 `$HealthArgs = @(
   $HealthValidatorLiteral,
   "--sender-log", $SenderLogLiteral,
@@ -250,6 +275,9 @@ Write-Host "[monitor] End-to-end health monitor exited with code `$HealthExitCod
 if (`$HealthExitCode -ne 0) {
   exit `$HealthExitCode
 }
+if (`$RawMonitorFailed) {
+  exit `$RawMonitorExitCode
+}
 exit `$RawMonitorExitCode
 "@
 
@@ -262,6 +290,8 @@ Write-Host "This opens one Windows Terminal window with three tabs when wt.exe i
 Write-Host "It falls back to three visible PowerShell windows otherwise."
 Write-Host "WebSocket: $WsUrl"
 Write-Host "Work dir:  $WorkDir"
+Write-Host "Keep receiver Godot open: $KeepReceiverOpen"
+Write-Host "Depth trace: $DepthTraceFile"
 Write-Host ""
 
 Open-RunnerTab -WindowName $WindowName -Title "SmartXR stereo sender" -RunnerPath $SenderScript
@@ -285,10 +315,14 @@ Open-RunnerTab -WindowName $WindowName -Title "SmartXR proxy_targets monitor" -R
 Write-Host ""
 Write-Host "Started sender, receiver, and monitor."
 Write-Host "Close the sender tab/window manually after real-device inspection is done."
+if ($KeepReceiverOpen) {
+    Write-Host "Close the receiver tab/window manually after visual card inspection is done."
+}
 Write-Host ""
 Write-Host "Logs:"
 Write-Host "  Sender:   $SenderLog"
 Write-Host "  Receiver: $ReceiverLog"
 Write-Host "  Monitor:  $MonitorLog"
+Write-Host "  Depth trace: $DepthTraceFile"
 Write-Host "  Health:   $HealthStatusFile"
 Write-Host "  PCMR status copy: .tmp\windows_pcmr_proxy_targets\proxy_targets_live_status.json"

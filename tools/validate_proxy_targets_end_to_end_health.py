@@ -24,6 +24,20 @@ def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def decode_log_text(data: bytes) -> str:
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16", errors="replace")
+    if data.startswith(b"\xef\xbb\xbf"):
+        return data.decode("utf-8-sig", errors="replace")
+    if b"\x00" in data[:256]:
+        return data.decode("utf-16", errors="replace")
+    return data.decode("utf-8", errors="replace")
+
+
+def read_log_text(path: Path) -> str:
+    return decode_log_text(path.read_bytes())
+
+
 def _count(status: dict[str, Any], key: str) -> int:
     try:
         return int(status.get(key, 0))
@@ -47,13 +61,73 @@ def _list_strings(value: Any) -> list[str]:
     return [item for item in value if isinstance(item, str)]
 
 
+def _parse_vector3(value: Any) -> list[float] | None:
+    if isinstance(value, list) and len(value) >= 3:
+        try:
+            return [round(float(value[0]), 3), round(float(value[1]), 3), round(float(value[2]), 3)]
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(value, str):
+        return None
+    parts = value.strip().split()
+    if len(parts) < 3:
+        return None
+    try:
+        return [round(float(parts[0]), 3), round(float(parts[1]), 3), round(float(parts[2]), 3)]
+    except ValueError:
+        return None
+
+
+def _sign_label(value: float | None) -> str:
+    if value is None:
+        return "unknown"
+    if value > 0:
+        return "positive"
+    if value < 0:
+        return "negative"
+    return "zero"
+
+
+def _z_sign_from_vector(value: Any) -> str:
+    vector = _parse_vector3(value)
+    return _sign_label(vector[2] if vector else None)
+
+
+def _card_pose_summary(pcmr_status: dict[str, Any]) -> dict[str, Any]:
+    proxy_world = _parse_vector3(pcmr_status.get("proxy_world_position"))
+    card_node = _parse_vector3(pcmr_status.get("card_node_position"))
+    card_minus_proxy_world = None
+    if proxy_world is not None and card_node is not None:
+        card_minus_proxy_world = [round(card_node[index] - proxy_world[index], 3) for index in range(3)]
+
+    source_coordinate = pcmr_status.get("source_coordinate", {})
+    if not isinstance(source_coordinate, dict):
+        source_coordinate = {}
+    return {
+        "proxy_local_position": pcmr_status.get("proxy_local_position"),
+        "proxy_world_position": pcmr_status.get("proxy_world_position"),
+        "card_node_position": pcmr_status.get("card_node_position"),
+        "card_resolved_position": pcmr_status.get("card_resolved_position"),
+        "card_minus_proxy_world": card_minus_proxy_world,
+        "head_z_sign": _z_sign_from_vector(source_coordinate.get("head_position_m")),
+        "camera_z_sign": _z_sign_from_vector(source_coordinate.get("camera_position_m")),
+        "world_z_sign": _z_sign_from_vector(pcmr_status.get("proxy_world_position")),
+    }
+
+
 def _sender_summary(sender_log_text: str) -> dict[str, Any]:
     sent_matches = re.findall(
         r"sent stereo seq=(?P<sequence>\d+)\s+target=(?P<target>\S+)\s+"
         r"depth_source=(?P<depth_source>\S+)\s+depth_confidence=(?P<depth_confidence>\S+)",
         sender_log_text,
     )
+    diagnostic_matches = re.findall(
+        r"stereo diagnostics: reason=(?P<reason>\S+)\s+reads=(?P<reads>\d+)\s+"
+        r"left_frames=(?P<left_frames>\d+)\s+right_frames=(?P<right_frames>\d+)",
+        sender_log_text,
+    )
     last_sent = sent_matches[-1] if sent_matches else None
+    last_diagnostic = diagnostic_matches[-1] if diagnostic_matches else None
     return {
         "ready": "proxy_targets live publisher listening" in sender_log_text,
         "sent_count": len(sent_matches),
@@ -61,6 +135,10 @@ def _sender_summary(sender_log_text: str) -> dict[str, Any]:
         "last_target_id": last_sent[1] if last_sent else None,
         "last_depth_source": last_sent[2] if last_sent else None,
         "last_depth_confidence": last_sent[3] if last_sent else None,
+        "last_empty_reason": last_diagnostic[0] if last_diagnostic else None,
+        "last_empty_reads": int(last_diagnostic[1]) if last_diagnostic else None,
+        "last_left_frames": int(last_diagnostic[2]) if last_diagnostic else None,
+        "last_right_frames": int(last_diagnostic[3]) if last_diagnostic else None,
         "mentions_left": bool(re.search(r"\b(left|Left)\b", sender_log_text)),
         "mentions_right": bool(re.search(r"\b(right|Right)\b", sender_log_text)),
         "no_target": "no_target" in sender_log_text,
@@ -95,14 +173,12 @@ def _pcmr_connected(pcmr_status: dict[str, Any]) -> bool:
 def _sample_fallback_active(pcmr_status: dict[str, Any]) -> bool:
     card_target_id = str(pcmr_status.get("card_target_id", "")).strip()
     card_attach_target_id = str(pcmr_status.get("card_attach_target_id", "")).strip()
-    proxy_target_ids = _list_strings(pcmr_status.get("proxy_target_ids"))
     card_node_position = str(pcmr_status.get("card_node_position", "")).strip()
     card_resolved_position = str(pcmr_status.get("card_resolved_position", "")).strip()
     return (
         str(pcmr_status.get("last_command", "")).strip() == "proxy_sample"
         or card_target_id == SAMPLE_TARGET_ID
         or card_attach_target_id == SAMPLE_TARGET_ID
-        or SAMPLE_TARGET_ID in proxy_target_ids
         or card_node_position == SAMPLE_CARD_POSITION
         or card_resolved_position == SAMPLE_CARD_POSITION
     )
@@ -151,6 +227,9 @@ def evaluate_health(
 
     if sender["sent_count"] > 0 and str(sender.get("last_target_id", "")).startswith("vst_stereo-"):
         verdicts.append("SENDER_STEREO_TARGETS")
+    elif sender.get("last_left_frames") == 0 and sender.get("last_right_frames") == 0:
+        verdicts.append("SENDER_NO_FRAMES")
+        errors.append("sender reported no Left/Right VST frames; live target source did not produce stereo pairs")
     else:
         errors.append("sender did not report sent stereo target=vst_stereo-*")
 
@@ -162,6 +241,7 @@ def evaluate_health(
 
     if _pcmr_connected(pcmr_status):
         verdicts.append("GODOT_CONNECTED")
+        verdicts.append("TRANSPORT_TO_GODOT_OK")
     else:
         verdicts.append("GODOT_NOT_CONNECTED")
         errors.append("Godot/PCMR did not report ws_connected/ws_subscribed/packets/parsed/live")
@@ -201,6 +281,14 @@ def evaluate_health(
             "depth_sources": raw_status.get("depth_sources", {}),
             "missing_depth_confidence_count": _count(raw_status, "missing_depth_confidence_count"),
             "missing_depth_source_count": _count(raw_status, "missing_depth_source_count"),
+            "client_label": raw_status.get("client_label"),
+            "ws_connected": _truthy(raw_status.get("ws_connected")),
+            "ws_subscribed": _truthy(raw_status.get("ws_subscribed")),
+            "first_packet_seen": _truthy(raw_status.get("first_packet_seen")),
+            "first_sequence": raw_status.get("first_sequence"),
+            "last_sequence": raw_status.get("last_sequence"),
+            "packets_before_close": _count(raw_status, "packets_before_close"),
+            "close_reason": raw_status.get("close_reason") or raw_status.get("reason"),
         },
         "pcmr": {
             "last_command": pcmr_status.get("last_command"),
@@ -213,8 +301,7 @@ def evaluate_health(
             "card_target_id": pcmr_status.get("card_target_id"),
             "card_attach_target_id": pcmr_status.get("card_attach_target_id"),
             "proxy_target_ids": _list_strings(pcmr_status.get("proxy_target_ids")),
-            "card_node_position": pcmr_status.get("card_node_position"),
-            "card_resolved_position": pcmr_status.get("card_resolved_position"),
+            **_card_pose_summary(pcmr_status),
         },
     }
 
@@ -231,7 +318,7 @@ def wait_for_health(
     deadline = time.monotonic() + max(0.0, timeout_s)
     last_status: dict[str, Any] = {}
     while True:
-        sender_log_text = sender_log_path.read_text(encoding="utf-8", errors="replace") if sender_log_path.exists() else ""
+        sender_log_text = read_log_text(sender_log_path) if sender_log_path.exists() else ""
         raw_status = load_json(raw_status_path) if raw_status_path.exists() else {"ok": False, "errors": ["raw status file missing"]}
         pcmr_status = load_json(pcmr_status_path) if pcmr_status_path.exists() else {"error": "pcmr status file missing"}
         last_status = evaluate_health(sender_log_text, raw_status, pcmr_status, min_packets=min_packets)
