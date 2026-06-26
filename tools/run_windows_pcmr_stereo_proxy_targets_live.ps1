@@ -231,9 +231,23 @@ Write-Host "[monitor] Sender ready; collecting packets."
   TimeoutSeconds = $MonitorTimeoutSeconds
   PythonExe = $PythonExeLiteral
 }
-& $MonitorRunnerLiteral @MonitorArgs *>&1 | Tee-Object -FilePath $MonitorLogLiteral -Append
+`$MonitorArgsList = @(
+  "-NoProfile",
+  "-ExecutionPolicy", "Bypass",
+  "-File", $MonitorRunnerLiteral,
+  "-Url", $WsUrlLiteral,
+  "-MinPackets", "$MonitorMinPackets",
+  "-TimeoutSeconds", "$MonitorTimeoutSeconds",
+  "-PythonExe", $PythonExeLiteral
+)
+`$RawMonitorFailed = `$false
+& powershell.exe @MonitorArgsList *>&1 | Tee-Object -FilePath $MonitorLogLiteral -Append
 `$RawMonitorExitCode = `$LASTEXITCODE
 Write-Host "[monitor] Raw stream monitor exited with code `$RawMonitorExitCode"
+if (`$RawMonitorExitCode -ne 0) {
+  `$RawMonitorFailed = `$true
+  Write-Host "[monitor] Raw stream monitor failed; continuing to end-to-end health verdict."
+}
 Write-Host "[monitor] Running end-to-end health verdict: STREAM_OK / GODOT_NOT_CONNECTED / SAMPLE_FALLBACK_ACTIVE / CARD_BOUND_TO_LIVE_TARGET / LOW_CONFIDENCE_DEPTH_ONLY"
 `$HealthArgs = @(
   $HealthValidatorLiteral,
@@ -249,6 +263,9 @@ Write-Host "[monitor] Running end-to-end health verdict: STREAM_OK / GODOT_NOT_C
 Write-Host "[monitor] End-to-end health monitor exited with code `$HealthExitCode"
 if (`$HealthExitCode -ne 0) {
   exit `$HealthExitCode
+}
+if (`$RawMonitorFailed) {
+  exit `$RawMonitorExitCode
 }
 exit `$RawMonitorExitCode
 "@

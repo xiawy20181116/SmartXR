@@ -108,7 +108,8 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("ProxyTargetsWsUrl = $WsUrlLiteral", source)
         self.assertIn("ProxyTargetsTimeoutSeconds = $ProxyTargetsTimeoutSeconds", source)
         self.assertIn("$MonitorArgs = @{", source)
-        self.assertIn("& $MonitorRunnerLiteral @MonitorArgs", source)
+        self.assertIn("$MonitorArgsList = @(", source)
+        self.assertIn("& powershell.exe @MonitorArgsList", source)
         self.assertIn("Url = $WsUrlLiteral", source)
         self.assertIn("MinPackets = $MonitorMinPackets", source)
         self.assertIn("TimeoutSeconds = $MonitorTimeoutSeconds", source)
@@ -129,6 +130,16 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("STREAM_OK", source)
         self.assertIn("CARD_BOUND_TO_LIVE_TARGET", source)
         self.assertIn("SAMPLE_FALLBACK_ACTIVE", source)
+
+    def test_stereo_live_runner_runs_health_even_when_raw_monitor_fails(self):
+        self.assertTrue(STEREO_LIVE_RUNNER.exists())
+        source = STEREO_LIVE_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("`$RawMonitorFailed = `$false", source)
+        self.assertIn("`$RawMonitorFailed = `$true", source)
+        self.assertIn("Raw stream monitor failed; continuing to end-to-end health verdict.", source)
+        self.assertIn("if (`$HealthExitCode -ne 0) {", source)
+        self.assertIn("if (`$RawMonitorFailed) {", source)
 
     def test_overlay_visual_check_runner_holds_godot_open_for_manual_inspection(self):
         self.assertTrue(VISUAL_RUNNER.exists())

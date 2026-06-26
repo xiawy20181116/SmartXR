@@ -324,6 +324,46 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         self.assertIn("SENDER_READY", status["verdicts"])
         self.assertIn("SENDER_STEREO_TARGETS", status["verdicts"])
 
+    def test_health_flags_sender_no_frames_when_stereo_inputs_are_empty(self):
+        health = load_module(HEALTH_MONITOR, "validate_proxy_targets_end_to_end_health")
+        raw_status = {
+            "ok": False,
+            "packets": 0,
+            "parsed": 0,
+            "target_ids": [],
+            "errors": ["timed out"],
+        }
+        pcmr_status = {
+            "last_command": "proxy_sample",
+            "ws_connected": True,
+            "ws_subscribed": True,
+            "packets": 0,
+            "parsed": 0,
+            "live": 0,
+            "card_target_id": "person-7",
+            "card_attach_target_id": "person-7",
+            "proxy_target_ids": ["person-7"],
+            "card_node_position": "0.50 0.25 -1.20",
+            "card_resolved_position": "0.50 0.25 -1.20",
+        }
+        sender_log = "\n".join(
+            [
+                "stereo proxy_targets live publisher listening on ws://127.0.0.1:8766/proxy_targets",
+                "client connected from ('127.0.0.1', 10172): GET /proxy_targets HTTP/1.1",
+                "No stereo target frames available from Left/Right VST SHM + HumanTrackor",
+                "stereo diagnostics: reason=no_pair reads=120 left_frames=0 right_frames=0 last_pair_frame_id=-1 left_pending=0 right_pending=0 stereo_rejection=-",
+            ]
+        )
+
+        status = health.evaluate_health(sender_log, raw_status, pcmr_status, min_packets=10)
+
+        self.assertFalse(status["ok"])
+        self.assertIn("SENDER_READY", status["verdicts"])
+        self.assertIn("SENDER_NO_FRAMES", status["verdicts"])
+        self.assertEqual(status["sender"]["last_empty_reason"], "no_pair")
+        self.assertEqual(status["sender"]["last_left_frames"], 0)
+        self.assertEqual(status["sender"]["last_right_frames"], 0)
+
     def test_classifies_connection_refused_with_actionable_hint(self):
         monitor = load_module(MONITOR, "monitor_proxy_targets_live_stream")
 

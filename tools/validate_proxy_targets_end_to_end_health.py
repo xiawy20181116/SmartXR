@@ -67,7 +67,13 @@ def _sender_summary(sender_log_text: str) -> dict[str, Any]:
         r"depth_source=(?P<depth_source>\S+)\s+depth_confidence=(?P<depth_confidence>\S+)",
         sender_log_text,
     )
+    diagnostic_matches = re.findall(
+        r"stereo diagnostics: reason=(?P<reason>\S+)\s+reads=(?P<reads>\d+)\s+"
+        r"left_frames=(?P<left_frames>\d+)\s+right_frames=(?P<right_frames>\d+)",
+        sender_log_text,
+    )
     last_sent = sent_matches[-1] if sent_matches else None
+    last_diagnostic = diagnostic_matches[-1] if diagnostic_matches else None
     return {
         "ready": "proxy_targets live publisher listening" in sender_log_text,
         "sent_count": len(sent_matches),
@@ -75,6 +81,10 @@ def _sender_summary(sender_log_text: str) -> dict[str, Any]:
         "last_target_id": last_sent[1] if last_sent else None,
         "last_depth_source": last_sent[2] if last_sent else None,
         "last_depth_confidence": last_sent[3] if last_sent else None,
+        "last_empty_reason": last_diagnostic[0] if last_diagnostic else None,
+        "last_empty_reads": int(last_diagnostic[1]) if last_diagnostic else None,
+        "last_left_frames": int(last_diagnostic[2]) if last_diagnostic else None,
+        "last_right_frames": int(last_diagnostic[3]) if last_diagnostic else None,
         "mentions_left": bool(re.search(r"\b(left|Left)\b", sender_log_text)),
         "mentions_right": bool(re.search(r"\b(right|Right)\b", sender_log_text)),
         "no_target": "no_target" in sender_log_text,
@@ -165,6 +175,9 @@ def evaluate_health(
 
     if sender["sent_count"] > 0 and str(sender.get("last_target_id", "")).startswith("vst_stereo-"):
         verdicts.append("SENDER_STEREO_TARGETS")
+    elif sender.get("last_left_frames") == 0 and sender.get("last_right_frames") == 0:
+        verdicts.append("SENDER_NO_FRAMES")
+        errors.append("sender reported no Left/Right VST frames; live target source did not produce stereo pairs")
     else:
         errors.append("sender did not report sent stereo target=vst_stereo-*")
 
