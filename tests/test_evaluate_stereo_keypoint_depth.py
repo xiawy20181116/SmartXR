@@ -106,6 +106,12 @@ class StereoKeypointDepthEvaluatorTests(unittest.TestCase):
         self.assertEqual(summary["bbox_baseline"]["depth_m"]["count"], 2)
         self.assertIn("keypoint_drift_m", summary)
         self.assertEqual(summary["top_rejection_reasons"], [])
+        per_frames = [
+            json.loads(line)
+            for line in (out_dir / "per_frame.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(per_frames[0]["keypoint"]["depth_confidence"], "high")
+        self.assertEqual(per_frames[0]["keypoint"]["depth_source"], "shoulder_midpoint")
 
     def test_rejects_low_score_vertical_error_disparity_and_depth_range(self):
         evaluator = load_module(TOOL, "evaluate_stereo_keypoint_depth")
@@ -171,6 +177,9 @@ class StereoKeypointDepthEvaluatorTests(unittest.TestCase):
         self.assertEqual(per_frame["selected_anchor"]["kind"], "bbox_top_center_fallback")
         self.assertEqual(per_frame["keypoint"]["anchor_consistency_gate"]["actual_kind"], "mixed")
         self.assertEqual(per_frame["keypoint"]["anchor_consistency_gate"]["policy"], "fallback_bbox")
+        self.assertEqual(per_frame["keypoint"]["depth_confidence"], "low")
+        self.assertEqual(per_frame["keypoint"]["depth_source"], "bbox_top_center_fallback")
+        self.assertEqual(per_frame["keypoint"]["fallback_reason"], "anchor_kind_mismatch")
 
     def test_cli_accepts_input_and_output_paths(self):
         records = [keypoint_record(30, left_px=[680, 300], right_px=[648, 301])]
