@@ -281,6 +281,11 @@ def build_proxy_targets_message_from_stereo_bbox_record(
 
 
 def _vector3_from_mapping(value: Any) -> list[float] | None:
+    if isinstance(value, (list, tuple)) and len(value) >= 3:
+        try:
+            return [float(value[0]), float(value[1]), float(value[2])]
+        except (TypeError, ValueError):
+            return None
     if not isinstance(value, dict):
         return None
     try:

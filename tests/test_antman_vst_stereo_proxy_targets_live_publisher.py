@@ -199,6 +199,10 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(event["source_frame"]["anchor_depth"], event["depth_m"])
         self.assertIn("camera_point_m", event)
         self.assertIn("head_position_m", event)
+        self.assertIsInstance(event["camera_point_m"], list)
+        self.assertIsInstance(event["head_position_m"], list)
+        self.assertEqual(len(event["camera_point_m"]), 3)
+        self.assertEqual(len(event["head_position_m"]), 3)
         self.assertIn("bbox", event)
         self.assertEqual(event["stereo"]["pair_id"], "pair-000010")
 
