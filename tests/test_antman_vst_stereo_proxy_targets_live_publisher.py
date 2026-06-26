@@ -162,6 +162,73 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(diagnostics["frames_seen_right"], 1)
         self.assertEqual(diagnostics["last_pair_frame_id"], 42)
 
+    def test_live_stereo_message_uses_stable_active_target_and_traces_raw_ids(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        class FakeReader:
+            def __init__(self, frames):
+                self.frames = list(frames)
+
+            def read_latest(self):
+                if not self.frames:
+                    return True, -1, None
+                return self.frames.pop(0)
+
+            def get_stats(self):
+                return {}
+
+        class FakeTracker:
+            def __init__(self, people_by_call):
+                self.people_by_call = list(people_by_call)
+                self.calls = 0
+
+            def process_frame(self, frame):
+                people = self.people_by_call[self.calls]
+                self.calls += 1
+                return FakeTrackingResult(people)
+
+        stabilizer = publisher.StereoActiveTargetStabilizer(switch_confirm_frames=2, switch_score_margin=0.05)
+        first, first_diagnostics = publisher.next_live_stereo_proxy_targets_message_with_diagnostics(
+            left_reader=FakeReader([(True, 50, FakeFrame())]),
+            right_reader=FakeReader([(True, 50, FakeFrame())]),
+            left_tracker=FakeTracker([[FakePerson(track_id=1, bbox=(640, 240, 720, 520), confidence=0.70)]]),
+            right_tracker=FakeTracker([[FakePerson(track_id=2, bbox=(608, 240, 688, 520), confidence=0.70)]]),
+            sequence=0,
+            max_read_attempts=1,
+            sleep_seconds=0,
+            target_stabilizer=stabilizer,
+        )
+        second, second_diagnostics = publisher.next_live_stereo_proxy_targets_message_with_diagnostics(
+            left_reader=FakeReader([(True, 51, FakeFrame())]),
+            right_reader=FakeReader([(True, 51, FakeFrame())]),
+            left_tracker=FakeTracker(
+                [[FakePerson(track_id=1, bbox=(641, 240, 721, 520), confidence=0.62), FakePerson(track_id=9, bbox=(420, 250, 500, 530), confidence=0.96)]]
+            ),
+            right_tracker=FakeTracker(
+                [[FakePerson(track_id=2, bbox=(609, 240, 689, 520), confidence=0.62), FakePerson(track_id=10, bbox=(388, 250, 468, 530), confidence=0.96)]]
+            ),
+            sequence=1,
+            max_read_attempts=1,
+            sleep_seconds=0,
+            target_stabilizer=stabilizer,
+        )
+
+        self.assertEqual(first["targets"][0]["target_id"], "vst_stereo-active-1")
+        self.assertEqual(second["targets"][0]["target_id"], "vst_stereo-active-1")
+        self.assertEqual(first_diagnostics["raw_left_track_id"], 1)
+        self.assertEqual(second_diagnostics["raw_right_track_id"], 2)
+        self.assertEqual(second_diagnostics["candidate_count"], 4)
+        self.assertEqual(second_diagnostics["switch_count"], 0)
+        self.assertEqual(second_diagnostics["switch_reason"], "active_continuity")
+
+        event = publisher.build_depth_trace_event(message=second, diagnostics=second_diagnostics)
+        self.assertEqual(event["active_target_id"], "active-1")
+        self.assertEqual(event["raw_left_track_id"], 1)
+        self.assertEqual(event["raw_right_track_id"], 2)
+        self.assertEqual(event["candidate_count"], 4)
+        self.assertEqual(event["switch_reason"], "active_continuity")
+        self.assertFalse(event["held_last_pose"])
+
     def test_depth_trace_event_records_accepted_target_depth_details(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
 

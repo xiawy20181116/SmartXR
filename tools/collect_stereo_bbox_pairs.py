@@ -23,6 +23,7 @@ from dump_antman_vst_humantrackor_jsonl import (  # noqa: E402
     resolve_vst_shm_name,
 )
 from smartxr.nv12_reader import Nv12Frame, read_packet_file  # noqa: E402
+from smartxr.stereo_depth import SCENE_STEREO_28  # noqa: E402
 from smartxr.stereo_package import load_stereo_package  # noqa: E402
 
 
@@ -34,6 +35,326 @@ def _best_person(people: list[dict[str, Any]]) -> dict[str, Any] | None:
     if not people:
         return None
     return max(people, key=lambda person: float(person.get("confidence", 0.0)))
+
+
+def _bbox_xyxy(person: dict[str, Any]) -> list[int]:
+    return [int(value) for value in person["bbox"]]
+
+
+def _track_id(person: dict[str, Any]) -> int:
+    return int(person.get("track_id", 0))
+
+
+def _top_center(bbox: list[int]) -> tuple[float, float]:
+    x1, y1, x2, _y2 = (float(value) for value in bbox)
+    return ((x1 + x2) * 0.5, y1)
+
+
+def _bbox_center(bbox: list[int]) -> tuple[float, float]:
+    x1, y1, x2, y2 = (float(value) for value in bbox)
+    return ((x1 + x2) * 0.5, (y1 + y2) * 0.5)
+
+
+def _bbox_size(bbox: list[int]) -> tuple[float, float]:
+    x1, y1, x2, y2 = (float(value) for value in bbox)
+    return (x2 - x1, y2 - y1)
+
+
+def _bbox_iou(first: list[int], second: list[int]) -> float:
+    ax1, ay1, ax2, ay2 = (float(value) for value in first)
+    bx1, by1, bx2, by2 = (float(value) for value in second)
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    inter_w = max(0.0, inter_x2 - inter_x1)
+    inter_h = max(0.0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+    if inter_area <= 0.0:
+        return 0.0
+    first_area = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    second_area = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = first_area + second_area - inter_area
+    if union <= 0.0:
+        return 0.0
+    return inter_area / union
+
+
+def _estimated_depth_m(image_width: int, image_height: int, disparity_px: float) -> float | None:
+    if disparity_px <= 0.0:
+        return None
+    try:
+        calibration = SCENE_STEREO_28.scaled_to(image_width, image_height)
+    except ValueError:
+        return None
+    return calibration.left.fx * calibration.baseline_m / float(disparity_px)
+
+
+class StereoActiveTargetStabilizer:
+    def __init__(
+        self,
+        *,
+        active_target_id: str = "active-1",
+        switch_confirm_frames: int = 2,
+        switch_score_margin: float = 0.12,
+        hold_frames: int = 6,
+        continuity_iou_threshold: float = 0.30,
+    ) -> None:
+        self.active_target_id = active_target_id
+        self.switch_confirm_frames = max(1, int(switch_confirm_frames))
+        self.switch_score_margin = float(switch_score_margin)
+        self.hold_frames = max(0, int(hold_frames))
+        self.continuity_iou_threshold = float(continuity_iou_threshold)
+        self._active: dict[str, Any] | None = None
+        self._pending_key: tuple[int, int] | None = None
+        self._pending_count = 0
+        self._switch_count = 0
+
+    def select(
+        self,
+        *,
+        frame_id: int,
+        image_width: int,
+        image_height: int,
+        left_people: list[dict[str, Any]],
+        right_people: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        candidates = self._build_candidates(frame_id, image_width, image_height, left_people, right_people)
+        if not candidates:
+            return self._hold_missing(frame_id, candidate_count=0)
+
+        best = max(candidates, key=lambda item: item["base_score"])
+        active_candidate = self._active_candidate(candidates)
+        if self._active is None:
+            return self._activate(best, switch_reason="initial", candidate_count=len(candidates))
+
+        if active_candidate is None:
+            held = self._hold_missing(frame_id, candidate_count=len(candidates))
+            if held is not None:
+                return held
+            return self._activate(best, switch_reason="active_missing_switch", candidate_count=len(candidates))
+
+        active_score = float(active_candidate["base_score"])
+        best_score = float(best["base_score"])
+        if best["key"] != active_candidate["key"] and best_score > active_score + self.switch_score_margin:
+            if self._pending_key == best["key"]:
+                self._pending_count += 1
+            else:
+                self._pending_key = best["key"]
+                self._pending_count = 1
+            if self._pending_count >= self.switch_confirm_frames:
+                self._switch_count += 1
+                return self._activate(best, switch_reason="switch_confirmed", candidate_count=len(candidates))
+
+        self._pending_key = None if best["key"] == active_candidate["key"] else self._pending_key
+        return self._activate(active_candidate, switch_reason="active_continuity", candidate_count=len(candidates))
+
+    def _build_candidates(
+        self,
+        frame_id: int,
+        image_width: int,
+        image_height: int,
+        left_people: list[dict[str, Any]],
+        right_people: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        for left_person in left_people:
+            left_bbox = _bbox_xyxy(left_person)
+            left_anchor = _top_center(left_bbox)
+            left_center = _bbox_center(left_bbox)
+            left_size = _bbox_size(left_bbox)
+            for right_person in right_people:
+                right_bbox = _bbox_xyxy(right_person)
+                right_anchor = _top_center(right_bbox)
+                right_center = _bbox_center(right_bbox)
+                right_size = _bbox_size(right_bbox)
+                confidence = min(
+                    float(left_person.get("confidence", 0.0)),
+                    float(right_person.get("confidence", 0.0)),
+                )
+                disparity_px = left_anchor[0] - right_anchor[0]
+                vertical_error_px = left_anchor[1] - right_anchor[1]
+                estimated_depth_m = _estimated_depth_m(image_width, image_height, disparity_px)
+                candidates.append(
+                    {
+                        "frame_id": int(frame_id),
+                        "key": (_track_id(left_person), _track_id(right_person)),
+                        "left_person": left_person,
+                        "right_person": right_person,
+                        "left_bbox": left_bbox,
+                        "right_bbox": right_bbox,
+                        "confidence": confidence,
+                        "base_score": self._candidate_base_score(
+                            confidence=confidence,
+                            disparity_px=disparity_px,
+                            vertical_error_px=vertical_error_px,
+                            left_size=left_size,
+                            right_size=right_size,
+                            estimated_depth_m=estimated_depth_m,
+                        ),
+                        "left_center_px": left_center,
+                        "right_center_px": right_center,
+                        "left_size_px": left_size,
+                        "right_size_px": right_size,
+                        "disparity_px": disparity_px,
+                        "vertical_error_px": vertical_error_px,
+                        "estimated_depth_m": estimated_depth_m,
+                        "image_width": int(image_width),
+                        "image_height": int(image_height),
+                    }
+                )
+        return candidates
+
+    def _candidate_base_score(
+        self,
+        *,
+        confidence: float,
+        disparity_px: float,
+        vertical_error_px: float,
+        left_size: tuple[float, float],
+        right_size: tuple[float, float],
+        estimated_depth_m: float | None,
+    ) -> float:
+        score = float(confidence)
+        if disparity_px <= 0.0:
+            score -= 1.0
+        if estimated_depth_m is None or estimated_depth_m < 0.2 or estimated_depth_m > 5.0:
+            score -= 0.75
+        score -= min(abs(float(vertical_error_px)) / 200.0, 0.5)
+        width_ratio = left_size[0] / max(right_size[0], 1.0)
+        height_ratio = left_size[1] / max(right_size[1], 1.0)
+        if width_ratio < 0.5 or width_ratio > 2.0:
+            score -= 0.5
+        if height_ratio < 0.5 or height_ratio > 2.0:
+            score -= 0.5
+        return score
+
+    def _active_candidate(self, candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+        if self._active is None:
+            return None
+        active_key = self._active["key"]
+        for candidate in candidates:
+            if candidate["key"] == active_key:
+                return candidate
+        plausible: list[tuple[float, dict[str, Any]]] = []
+        for candidate in candidates:
+            left_iou = _bbox_iou(candidate["left_bbox"], self._active["left_bbox"])
+            right_iou = _bbox_iou(candidate["right_bbox"], self._active["right_bbox"])
+            continuity = (left_iou + right_iou) * 0.5
+            if continuity >= self.continuity_iou_threshold:
+                plausible.append((continuity, candidate))
+        if not plausible:
+            return None
+        return max(plausible, key=lambda item: item[0])[1]
+
+    def _activate(self, candidate: dict[str, Any], *, switch_reason: str, candidate_count: int) -> dict[str, Any]:
+        active_age_frames = 1
+        if self._active is not None and candidate["key"] == self._active["key"]:
+            active_age_frames = int(self._active.get("active_age_frames", 0)) + 1
+        elif switch_reason == "active_continuity":
+            active_age_frames = int(self._active.get("active_age_frames", 0)) + 1 if self._active else 1
+        if switch_reason == "switch_confirmed":
+            self._pending_key = None
+            self._pending_count = 0
+        self._active = {
+            "key": candidate["key"],
+            "left_bbox": candidate["left_bbox"],
+            "right_bbox": candidate["right_bbox"],
+            "confidence": candidate["confidence"],
+            "active_age_frames": active_age_frames,
+            "missing_frames": 0,
+            "image_width": candidate.get("image_width", 880),
+            "image_height": candidate.get("image_height", 660),
+        }
+        return {
+            "person_id": self.active_target_id,
+            "left_person": candidate["left_person"],
+            "right_person": candidate["right_person"],
+            "left_bbox_xyxy": candidate["left_bbox"],
+            "right_bbox_xyxy": candidate["right_bbox"],
+            "confidence": candidate["confidence"],
+            "selection": self._selection_metadata(
+                candidate,
+                switch_reason=switch_reason,
+                active_age_frames=active_age_frames,
+                candidate_count=candidate_count,
+                held_last_pose=False,
+            ),
+        }
+
+    def _hold_missing(self, frame_id: int, *, candidate_count: int) -> dict[str, Any] | None:
+        if self._active is None:
+            return None
+        missing_frames = int(self._active.get("missing_frames", 0)) + 1
+        if missing_frames > self.hold_frames:
+            return None
+        self._active["missing_frames"] = missing_frames
+        held_candidate = {
+            "frame_id": int(frame_id),
+            "key": self._active["key"],
+            "left_person": {"track_id": self._active["key"][0], "bbox": self._active["left_bbox"]},
+            "right_person": {"track_id": self._active["key"][1], "bbox": self._active["right_bbox"]},
+            "left_bbox": list(self._active["left_bbox"]),
+            "right_bbox": list(self._active["right_bbox"]),
+            "confidence": float(self._active.get("confidence", 0.0)),
+            "base_score": float(self._active.get("confidence", 0.0)),
+            "left_center_px": _bbox_center(self._active["left_bbox"]),
+            "right_center_px": _bbox_center(self._active["right_bbox"]),
+            "left_size_px": _bbox_size(self._active["left_bbox"]),
+            "right_size_px": _bbox_size(self._active["right_bbox"]),
+            "disparity_px": _top_center(self._active["left_bbox"])[0] - _top_center(self._active["right_bbox"])[0],
+            "vertical_error_px": _top_center(self._active["left_bbox"])[1] - _top_center(self._active["right_bbox"])[1],
+            "estimated_depth_m": _estimated_depth_m(
+                self._active.get("image_width", 880),
+                self._active.get("image_height", 660),
+                _top_center(self._active["left_bbox"])[0] - _top_center(self._active["right_bbox"])[0],
+            ),
+        }
+        return {
+            "person_id": self.active_target_id,
+            "left_person": held_candidate["left_person"],
+            "right_person": held_candidate["right_person"],
+            "left_bbox_xyxy": held_candidate["left_bbox"],
+            "right_bbox_xyxy": held_candidate["right_bbox"],
+            "confidence": held_candidate["confidence"],
+            "selection": self._selection_metadata(
+                held_candidate,
+                switch_reason="held_missing",
+                active_age_frames=int(self._active.get("active_age_frames", 1)),
+                candidate_count=candidate_count,
+                held_last_pose=True,
+            ),
+        }
+
+    def _selection_metadata(
+        self,
+        candidate: dict[str, Any],
+        *,
+        switch_reason: str,
+        active_age_frames: int,
+        candidate_count: int,
+        held_last_pose: bool,
+    ) -> dict[str, Any]:
+        raw_left_track_id, raw_right_track_id = candidate["key"]
+        return {
+            "active_target_id": self.active_target_id,
+            "raw_left_track_id": int(raw_left_track_id),
+            "raw_right_track_id": int(raw_right_track_id),
+            "raw_person_id": f"person-{int(raw_left_track_id)}-{int(raw_right_track_id)}",
+            "candidate_count": int(candidate_count),
+            "selected_score": float(candidate["base_score"]),
+            "switch_count": int(self._switch_count),
+            "switch_reason": switch_reason,
+            "active_age_frames": int(active_age_frames),
+            "held_last_pose": bool(held_last_pose),
+            "disparity_px": float(candidate["disparity_px"]),
+            "vertical_error_px": float(candidate["vertical_error_px"]),
+            "left_center_px": [candidate["left_center_px"][0], candidate["left_center_px"][1]],
+            "right_center_px": [candidate["right_center_px"][0], candidate["right_center_px"][1]],
+            "left_size_px": [candidate["left_size_px"][0], candidate["left_size_px"][1]],
+            "right_size_px": [candidate["right_size_px"][0], candidate["right_size_px"][1]],
+            "estimated_depth_m": candidate.get("estimated_depth_m"),
+        }
 
 
 def _eye_record(
@@ -69,6 +390,7 @@ def build_stereo_bbox_pair_record(
     timestamp_ms: int,
     left_source_stats: dict[str, Any] | None = None,
     right_source_stats: dict[str, Any] | None = None,
+    target_stabilizer: StereoActiveTargetStabilizer | None = None,
 ) -> dict[str, Any] | None:
     left = _eye_record(
         frame=left_frame,
@@ -82,27 +404,58 @@ def build_stereo_bbox_pair_record(
         tracking_result=right_tracking_result,
         source_stats=right_source_stats,
     )
-    left_person = _best_person(left["people"])
-    right_person = _best_person(right["people"])
-    if left_person is None or right_person is None:
-        return None
-
-    left_track_id = int(left_person.get("track_id", 0))
-    right_track_id = int(right_person.get("track_id", 0))
-    confidence = min(
-        float(left_person.get("confidence", 0.0)),
-        float(right_person.get("confidence", 0.0)),
-    )
+    if target_stabilizer is None:
+        left_person = _best_person(left["people"])
+        right_person = _best_person(right["people"])
+        if left_person is None or right_person is None:
+            return None
+        left_track_id = _track_id(left_person)
+        right_track_id = _track_id(right_person)
+        selected = {
+            "person_id": f"person-{left_track_id}-{right_track_id}",
+            "left_bbox_xyxy": _bbox_xyxy(left_person),
+            "right_bbox_xyxy": _bbox_xyxy(right_person),
+            "confidence": min(
+                float(left_person.get("confidence", 0.0)),
+                float(right_person.get("confidence", 0.0)),
+            ),
+            "selection": {
+                "active_target_id": f"person-{left_track_id}-{right_track_id}",
+                "raw_left_track_id": left_track_id,
+                "raw_right_track_id": right_track_id,
+                "raw_person_id": f"person-{left_track_id}-{right_track_id}",
+                "candidate_count": 1,
+                "selected_score": min(
+                    float(left_person.get("confidence", 0.0)),
+                    float(right_person.get("confidence", 0.0)),
+                ),
+                "switch_count": 0,
+                "switch_reason": "best_confidence",
+                "active_age_frames": 1,
+                "held_last_pose": False,
+            },
+        }
+    else:
+        selected = target_stabilizer.select(
+            frame_id=frame_id,
+            image_width=int(left["image_width"]),
+            image_height=int(left["image_height"]),
+            left_people=left["people"],
+            right_people=right["people"],
+        )
+        if selected is None:
+            return None
     return {
         "source": "vst_stereo_bbox",
         "schema_version": 1,
         "pair_id": f"pair-{int(frame_id):06d}",
         "frame_id": int(frame_id),
-        "person_id": f"person-{left_track_id}-{right_track_id}",
+        "person_id": selected["person_id"],
         "timestamp_ms": int(timestamp_ms),
-        "left_bbox_xyxy": [int(value) for value in left_person["bbox"]],
-        "right_bbox_xyxy": [int(value) for value in right_person["bbox"]],
-        "confidence": confidence,
+        "left_bbox_xyxy": selected["left_bbox_xyxy"],
+        "right_bbox_xyxy": selected["right_bbox_xyxy"],
+        "confidence": selected["confidence"],
+        "selection": selected["selection"],
         "left": left,
         "right": right,
     }

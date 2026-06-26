@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import unittest
 from unittest import mock
@@ -425,6 +426,106 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         self.assertEqual(status["sender"]["last_empty_reason"], "no_pair")
         self.assertEqual(status["sender"]["last_left_frames"], 0)
         self.assertEqual(status["sender"]["last_right_frames"], 0)
+
+    def test_health_summarizes_depth_trace_tracking_stability_fields(self):
+        health = load_module(HEALTH_MONITOR, "validate_proxy_targets_end_to_end_health")
+        trace_path = ROOT / ".tmp" / "tests" / "depth_trace_tracking.jsonl"
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        trace_path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "event": "accepted",
+                            "sequence": 1,
+                            "target_id": "vst_stereo-active-1",
+                            "active_target_id": "active-1",
+                            "raw_left_track_id": 1,
+                            "raw_right_track_id": 2,
+                            "candidate_count": 3,
+                            "selected_score": 0.7,
+                            "switch_count": 0,
+                            "switch_reason": "initial",
+                            "active_age_frames": 1,
+                            "held_last_pose": False,
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "event": "accepted",
+                            "sequence": 2,
+                            "target_id": "vst_stereo-active-1",
+                            "active_target_id": "active-1",
+                            "raw_left_track_id": 1,
+                            "raw_right_track_id": 2,
+                            "candidate_count": 4,
+                            "selected_score": 0.62,
+                            "switch_count": 0,
+                            "switch_reason": "active_continuity",
+                            "active_age_frames": 2,
+                            "held_last_pose": False,
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "event": "accepted",
+                            "sequence": 3,
+                            "target_id": "vst_stereo-active-1",
+                            "active_target_id": "active-1",
+                            "raw_left_track_id": 9,
+                            "raw_right_track_id": 10,
+                            "candidate_count": 4,
+                            "selected_score": 0.96,
+                            "switch_count": 1,
+                            "switch_reason": "switch_confirmed",
+                            "active_age_frames": 1,
+                            "held_last_pose": False,
+                        }
+                    ),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        summary = health.summarize_depth_trace(trace_path)
+        status = health.evaluate_health(
+            "stereo proxy_targets live publisher listening\nsent stereo seq=2 target=vst_stereo-active-1 depth_source=bbox_top_center_fallback depth_confidence=low\n",
+            {
+                "ok": True,
+                "packets": 10,
+                "parsed": 10,
+                "sequence_contiguous": True,
+                "position_changed": True,
+                "target_ids": ["vst_stereo-active-1"],
+                "depth_confidences": {"low": 10},
+                "depth_sources": {"bbox_top_center_fallback": 10},
+            },
+            {
+                "last_command": "proxy_live",
+                "ws_connected": True,
+                "ws_subscribed": True,
+                "packets": 10,
+                "parsed": 10,
+                "live": 10,
+                "card_target_id": "vst_stereo-active-1",
+                "card_attach_target_id": "vst_stereo-active-1",
+                "proxy_target_ids": ["vst_stereo-active-1"],
+                "card_node_position": "1.20 0.58 0.08",
+                "card_resolved_position": "1.20 0.58 0.08",
+            },
+            min_packets=10,
+            depth_trace_summary=summary,
+        )
+
+        trace_path.unlink(missing_ok=True)
+        self.assertEqual(status["tracking"]["accepted_count"], 3)
+        self.assertEqual(status["tracking"]["active_target_ids"], ["active-1"])
+        self.assertEqual(status["tracking"]["raw_track_pairs"], ["1-2", "9-10"])
+        self.assertEqual(status["tracking"]["target_switch_count"], 0)
+        self.assertEqual(status["tracking"]["raw_track_switch_count"], 1)
+        self.assertEqual(status["tracking"]["last_switch_reason"], "switch_confirmed")
+        self.assertEqual(status["tracking"]["last_active_age_frames"], 1)
 
     def test_classifies_connection_refused_with_actionable_hint(self):
         monitor = load_module(MONITOR, "monitor_proxy_targets_live_stream")

@@ -118,6 +118,138 @@ class CollectStereoBboxPairsTests(unittest.TestCase):
         self.assertEqual(record["left"]["image_width"], 880)
         self.assertEqual(record["right"]["people"][0]["track_id"], 8)
 
+    def test_active_target_stabilizer_keeps_current_pair_over_one_frame_distractor(self):
+        collector = load_module(TOOL, "collect_stereo_bbox_pairs")
+        stabilizer = collector.StereoActiveTargetStabilizer(
+            switch_confirm_frames=2,
+            switch_score_margin=0.05,
+            hold_frames=6,
+        )
+
+        first = collector.build_stereo_bbox_pair_record(
+            frame_id=10,
+            left_frame=FakeFrame(),
+            right_frame=FakeFrame(),
+            left_tracking_result=FakeTrackingResult([FakePerson(1, (640, 240, 720, 520), 0.70)]),
+            right_tracking_result=FakeTrackingResult([FakePerson(2, (608, 240, 688, 520), 0.70)]),
+            timestamp_ms=1780899000000,
+            target_stabilizer=stabilizer,
+        )
+        second = collector.build_stereo_bbox_pair_record(
+            frame_id=11,
+            left_frame=FakeFrame(),
+            right_frame=FakeFrame(),
+            left_tracking_result=FakeTrackingResult(
+                [
+                    FakePerson(1, (641, 240, 721, 520), 0.62),
+                    FakePerson(9, (420, 250, 500, 530), 0.96),
+                ]
+            ),
+            right_tracking_result=FakeTrackingResult(
+                [
+                    FakePerson(2, (609, 240, 689, 520), 0.62),
+                    FakePerson(10, (388, 250, 468, 530), 0.96),
+                ]
+            ),
+            timestamp_ms=1780899000033,
+            target_stabilizer=stabilizer,
+        )
+
+        self.assertEqual(first["person_id"], "active-1")
+        self.assertEqual(second["person_id"], "active-1")
+        self.assertEqual(second["left_bbox_xyxy"], [641, 240, 721, 520])
+        self.assertEqual(second["right_bbox_xyxy"], [609, 240, 689, 520])
+        self.assertEqual(second["selection"]["candidate_count"], 4)
+        self.assertEqual(second["selection"]["raw_left_track_id"], 1)
+        self.assertEqual(second["selection"]["raw_right_track_id"], 2)
+        self.assertEqual(second["selection"]["switch_count"], 0)
+        self.assertEqual(second["selection"]["switch_reason"], "active_continuity")
+        self.assertEqual(second["selection"]["active_age_frames"], 2)
+        self.assertGreater(second["selection"]["estimated_depth_m"], 0.0)
+        self.assertFalse(second["selection"]["held_last_pose"])
+
+    def test_active_target_stabilizer_holds_last_pose_for_short_missing_window(self):
+        collector = load_module(TOOL, "collect_stereo_bbox_pairs")
+        stabilizer = collector.StereoActiveTargetStabilizer(hold_frames=6)
+
+        first = collector.build_stereo_bbox_pair_record(
+            frame_id=20,
+            left_frame=FakeFrame(),
+            right_frame=FakeFrame(),
+            left_tracking_result=FakeTrackingResult([FakePerson(1, (640, 240, 720, 520), 0.80)]),
+            right_tracking_result=FakeTrackingResult([FakePerson(2, (608, 240, 688, 520), 0.80)]),
+            timestamp_ms=1780899000000,
+            target_stabilizer=stabilizer,
+        )
+        held = collector.build_stereo_bbox_pair_record(
+            frame_id=21,
+            left_frame=FakeFrame(),
+            right_frame=FakeFrame(),
+            left_tracking_result=FakeTrackingResult([]),
+            right_tracking_result=FakeTrackingResult([]),
+            timestamp_ms=1780899000033,
+            target_stabilizer=stabilizer,
+        )
+
+        self.assertEqual(held["person_id"], "active-1")
+        self.assertEqual(held["left_bbox_xyxy"], first["left_bbox_xyxy"])
+        self.assertEqual(held["right_bbox_xyxy"], first["right_bbox_xyxy"])
+        self.assertEqual(held["selection"]["switch_reason"], "held_missing")
+        self.assertTrue(held["selection"]["held_last_pose"])
+        self.assertEqual(held["selection"]["active_age_frames"], 1)
+
+    def test_active_target_stabilizer_switches_after_sustained_better_candidate(self):
+        collector = load_module(TOOL, "collect_stereo_bbox_pairs")
+        stabilizer = collector.StereoActiveTargetStabilizer(
+            switch_confirm_frames=2,
+            switch_score_margin=0.05,
+            hold_frames=6,
+        )
+
+        collector.build_stereo_bbox_pair_record(
+            frame_id=30,
+            left_frame=FakeFrame(),
+            right_frame=FakeFrame(),
+            left_tracking_result=FakeTrackingResult([FakePerson(1, (640, 240, 720, 520), 0.70)]),
+            right_tracking_result=FakeTrackingResult([FakePerson(2, (608, 240, 688, 520), 0.70)]),
+            timestamp_ms=1780899000000,
+            target_stabilizer=stabilizer,
+        )
+        kept = collector.build_stereo_bbox_pair_record(
+            frame_id=31,
+            left_frame=FakeFrame(),
+            right_frame=FakeFrame(),
+            left_tracking_result=FakeTrackingResult(
+                [FakePerson(1, (641, 240, 721, 520), 0.62), FakePerson(9, (420, 250, 500, 530), 0.96)]
+            ),
+            right_tracking_result=FakeTrackingResult(
+                [FakePerson(2, (609, 240, 689, 520), 0.62), FakePerson(10, (388, 250, 468, 530), 0.96)]
+            ),
+            timestamp_ms=1780899000033,
+            target_stabilizer=stabilizer,
+        )
+        switched = collector.build_stereo_bbox_pair_record(
+            frame_id=32,
+            left_frame=FakeFrame(),
+            right_frame=FakeFrame(),
+            left_tracking_result=FakeTrackingResult(
+                [FakePerson(1, (642, 240, 722, 520), 0.61), FakePerson(9, (421, 250, 501, 530), 0.96)]
+            ),
+            right_tracking_result=FakeTrackingResult(
+                [FakePerson(2, (610, 240, 690, 520), 0.61), FakePerson(10, (389, 250, 469, 530), 0.96)]
+            ),
+            timestamp_ms=1780899000066,
+            target_stabilizer=stabilizer,
+        )
+
+        self.assertEqual(kept["selection"]["raw_left_track_id"], 1)
+        self.assertEqual(switched["person_id"], "active-1")
+        self.assertEqual(switched["selection"]["raw_left_track_id"], 9)
+        self.assertEqual(switched["selection"]["raw_right_track_id"], 10)
+        self.assertEqual(switched["selection"]["switch_reason"], "switch_confirmed")
+        self.assertEqual(switched["selection"]["switch_count"], 1)
+        self.assertEqual(switched["selection"]["active_age_frames"], 1)
+
     def test_collects_only_matching_frame_ids_into_evaluator_jsonl(self):
         collector = load_module(TOOL, "collect_stereo_bbox_pairs")
 

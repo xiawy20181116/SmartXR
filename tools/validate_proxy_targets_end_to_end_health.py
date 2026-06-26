@@ -24,6 +24,87 @@ def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def summarize_depth_trace(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
+        return {
+            "available": False,
+            "accepted_count": 0,
+            "rejected_count": 0,
+            "active_target_ids": [],
+            "raw_track_pairs": [],
+            "target_switch_count": 0,
+            "raw_track_switch_count": 0,
+            "held_last_pose_count": 0,
+            "last_switch_reason": None,
+            "last_active_age_frames": None,
+        }
+    accepted = 0
+    rejected = 0
+    active_target_ids: set[str] = set()
+    raw_track_pairs: set[str] = set()
+    last_target_id: str | None = None
+    last_raw_pair: str | None = None
+    target_switch_count = 0
+    raw_track_switch_count = 0
+    held_last_pose_count = 0
+    last_switch_reason: str | None = None
+    last_active_age_frames: int | None = None
+    max_candidate_count = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            rejected += 1
+            continue
+        if event.get("event") != "accepted":
+            rejected += 1
+            continue
+        accepted += 1
+        target_id = event.get("target_id")
+        if isinstance(target_id, str):
+            if last_target_id is not None and target_id != last_target_id:
+                target_switch_count += 1
+            last_target_id = target_id
+        active_target_id = event.get("active_target_id")
+        if isinstance(active_target_id, str) and active_target_id:
+            active_target_ids.add(active_target_id)
+        raw_left = event.get("raw_left_track_id")
+        raw_right = event.get("raw_right_track_id")
+        if raw_left is not None and raw_right is not None:
+            raw_pair = f"{raw_left}-{raw_right}"
+            raw_track_pairs.add(raw_pair)
+            if last_raw_pair is not None and raw_pair != last_raw_pair:
+                raw_track_switch_count += 1
+            last_raw_pair = raw_pair
+        if _truthy(event.get("held_last_pose")):
+            held_last_pose_count += 1
+        if isinstance(event.get("switch_reason"), str):
+            last_switch_reason = event["switch_reason"]
+        try:
+            last_active_age_frames = int(event["active_age_frames"])
+        except (KeyError, TypeError, ValueError):
+            pass
+        try:
+            max_candidate_count = max(max_candidate_count, int(event.get("candidate_count", 0)))
+        except (TypeError, ValueError):
+            pass
+    return {
+        "available": True,
+        "accepted_count": accepted,
+        "rejected_count": rejected,
+        "active_target_ids": sorted(active_target_ids),
+        "raw_track_pairs": sorted(raw_track_pairs),
+        "target_switch_count": target_switch_count,
+        "raw_track_switch_count": raw_track_switch_count,
+        "held_last_pose_count": held_last_pose_count,
+        "last_switch_reason": last_switch_reason,
+        "last_active_age_frames": last_active_age_frames,
+        "max_candidate_count": max_candidate_count,
+    }
+
+
 def decode_log_text(data: bytes) -> str:
     if data.startswith((b"\xff\xfe", b"\xfe\xff")):
         return data.decode("utf-16", errors="replace")
@@ -214,6 +295,7 @@ def evaluate_health(
     pcmr_status: dict[str, Any],
     *,
     min_packets: int = 10,
+    depth_trace_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     verdicts: list[str] = []
     errors: list[str] = []
@@ -303,6 +385,7 @@ def evaluate_health(
             "proxy_target_ids": _list_strings(pcmr_status.get("proxy_target_ids")),
             **_card_pose_summary(pcmr_status),
         },
+        "tracking": depth_trace_summary if depth_trace_summary is not None else summarize_depth_trace(None),
     }
 
 
@@ -314,6 +397,7 @@ def wait_for_health(
     min_packets: int = 10,
     timeout_s: float = 0.0,
     interval_s: float = 0.25,
+    depth_trace_path: Path | None = None,
 ) -> dict[str, Any]:
     deadline = time.monotonic() + max(0.0, timeout_s)
     last_status: dict[str, Any] = {}
@@ -321,7 +405,13 @@ def wait_for_health(
         sender_log_text = read_log_text(sender_log_path) if sender_log_path.exists() else ""
         raw_status = load_json(raw_status_path) if raw_status_path.exists() else {"ok": False, "errors": ["raw status file missing"]}
         pcmr_status = load_json(pcmr_status_path) if pcmr_status_path.exists() else {"error": "pcmr status file missing"}
-        last_status = evaluate_health(sender_log_text, raw_status, pcmr_status, min_packets=min_packets)
+        last_status = evaluate_health(
+            sender_log_text,
+            raw_status,
+            pcmr_status,
+            min_packets=min_packets,
+            depth_trace_summary=summarize_depth_trace(depth_trace_path),
+        )
         if last_status.get("ok") or time.monotonic() >= deadline:
             return last_status
         time.sleep(max(0.01, interval_s))
@@ -335,6 +425,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--min-packets", type=int, default=10)
     parser.add_argument("--timeout-seconds", type=float, default=0.0)
     parser.add_argument("--interval-seconds", type=float, default=0.25)
+    parser.add_argument("--depth-trace", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
     return parser.parse_args()
 
@@ -348,6 +439,7 @@ def main() -> int:
         min_packets=max(1, args.min_packets),
         timeout_s=max(0.0, args.timeout_seconds),
         interval_s=max(0.01, args.interval_seconds),
+        depth_trace_path=args.depth_trace,
     )
     text = json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True)
     print(text)
