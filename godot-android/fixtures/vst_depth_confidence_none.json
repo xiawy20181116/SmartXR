@@ -1,0 +1,24 @@
+{
+  "source": "vst",
+  "sequence": 0,
+  "timestamp_ms": 1780911169177,
+  "image": {
+    "w": 880,
+    "h": 660
+  },
+  "detections": [
+    {
+      "id": "person-none",
+      "confidence": 0.86,
+      "depth_m": 1.45,
+      "depth_source": "bbox_top_center_fallback",
+      "depth_confidence": "none",
+      "bbox": {
+        "cx": 464.0,
+        "cy": 342.0,
+        "w": 108.0,
+        "h": 208.0
+      }
+    }
+  ]
+}

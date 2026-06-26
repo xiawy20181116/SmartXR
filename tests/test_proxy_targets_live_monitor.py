@@ -5,6 +5,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 MONITOR = ROOT / "tools" / "monitor_proxy_targets_live_stream.py"
+DEPTH_VALIDATOR = ROOT / "tools" / "validate_proxy_targets_depth_confidence_stream.py"
 RUNNER = ROOT / "tools" / "run_proxy_targets_live_monitor.ps1"
 FAKE_PUBLISHER = ROOT / "tools" / "fake_proxy_targets_publisher.py"
 
@@ -58,6 +59,103 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         self.assertFalse(status["sequence_contiguous"])
         self.assertIn("not enough packets: 2 < 3", status["errors"])
         self.assertTrue(any("$.targets[0].transform.position" in error for error in status["errors"]))
+
+    def test_analyzes_depth_confidence_distribution(self):
+        monitor = load_module(MONITOR, "monitor_proxy_targets_live_stream")
+        messages = [
+            {
+                "type": "proxy_targets",
+                "schema_version": 1,
+                "sequence": 0,
+                "targets": [
+                    {
+                        "target_id": "person-high",
+                        "source": "vst",
+                        "coordinate_space": "head",
+                        "transform_space": "head",
+                        "state": "tracked",
+                        "confidence": 0.9,
+                        "depth_source": "shoulder_midpoint",
+                        "depth_confidence": "high",
+                        "timestamp_ms": 1780911169157,
+                        "transform": {
+                            "position": [0.0, 0.0, -1.2],
+                            "rotation_xyzw": [0.0, 0.0, 0.0, 1.0],
+                            "scale": [1.0, 1.0, 1.0],
+                        },
+                    }
+                ],
+                "cards": [{"card_id": "CardAnchor", "target_id": "person-high", "offset_rule": {}}],
+            },
+            {
+                "type": "proxy_targets",
+                "schema_version": 1,
+                "sequence": 1,
+                "targets": [
+                    {
+                        "target_id": "person-low",
+                        "source": "vst",
+                        "coordinate_space": "head",
+                        "transform_space": "head",
+                        "state": "tracked",
+                        "confidence": 0.9,
+                        "depth_source": "bbox_top_center_fallback",
+                        "depth_confidence": "low",
+                        "timestamp_ms": 1780911169167,
+                        "transform": {
+                            "position": [0.1, 0.0, -1.1],
+                            "rotation_xyzw": [0.0, 0.0, 0.0, 1.0],
+                            "scale": [1.0, 1.0, 1.0],
+                        },
+                    }
+                ],
+                "cards": [{"card_id": "CardAnchor", "target_id": "person-low", "offset_rule": {}}],
+            },
+        ]
+
+        status = monitor.analyze_messages(messages, min_packets=2)
+
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["target_count"], 2)
+        self.assertEqual(status["depth_confidences"], {"high": 1, "low": 1})
+        self.assertEqual(status["depth_sources"], {"bbox_top_center_fallback": 1, "shoulder_midpoint": 1})
+        self.assertEqual(status["missing_depth_confidence_count"], 0)
+        self.assertEqual(status["missing_depth_source_count"], 0)
+
+    def test_depth_confidence_validator_requires_expected_distribution(self):
+        validator = load_module(DEPTH_VALIDATOR, "validate_proxy_targets_depth_confidence_stream")
+        status = {
+            "ok": True,
+            "depth_confidences": {"high": 3, "low": 2},
+            "missing_depth_confidence_count": 0,
+            "missing_depth_source_count": 0,
+        }
+
+        errors = validator.validate_depth_confidence_status(
+            status,
+            require_confidences=["high", "low"],
+            forbid_confidences=["none"],
+            require_depth_fields=True,
+        )
+
+        self.assertEqual(errors, [])
+
+        bad_status = {
+            "ok": True,
+            "depth_confidences": {"high": 1, "none": 1},
+            "missing_depth_confidence_count": 1,
+            "missing_depth_source_count": 0,
+        }
+        bad_errors = validator.validate_depth_confidence_status(
+            bad_status,
+            require_confidences=["high", "low"],
+            forbid_confidences=["none"],
+            require_depth_fields=True,
+        )
+
+        self.assertIn("required depth_confidence missing: low", bad_errors)
+        self.assertIn("forbidden depth_confidence present: none=1", bad_errors)
+        self.assertIn("targets missing depth_confidence: 1", bad_errors)
 
     def test_classifies_connection_refused_with_actionable_hint(self):
         monitor = load_module(MONITOR, "monitor_proxy_targets_live_stream")

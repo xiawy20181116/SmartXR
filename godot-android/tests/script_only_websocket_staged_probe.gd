@@ -47,6 +47,8 @@ var _packet_bytes := 0
 var _packet_preview := "-"
 var _sequence := -1
 var _error := "-"
+var _last_depth_source := "-"
+var _last_depth_confidence := "-"
 
 
 func _initialize() -> void:
@@ -134,6 +136,7 @@ func _apply_payload(payload: String) -> void:
 	_parsed += 1
 	_sequence = int(parsed.get("sequence", _sequence))
 	_error = "-"
+	_update_depth_status(parsed)
 
 	if _stage == STAGE_APPLY:
 		if _adapter != null and _adapter.apply_proxy_targets_message(parsed):
@@ -166,6 +169,8 @@ func _write_status() -> void:
 		"packet_bytes": _packet_bytes,
 		"packet_preview": _packet_preview,
 		"sequence": _sequence,
+		"depth_source": _last_depth_source,
+		"depth_confidence": _last_depth_confidence,
 		"registered_targets": _card_wrapper.registered_targets.size(),
 		"attachments": _card_wrapper.attachments.size(),
 		"elapsed": _elapsed,
@@ -174,6 +179,18 @@ func _write_status() -> void:
 	var file := FileAccess.open(_status_res, FileAccess.WRITE)
 	if file:
 		file.store_string(JSON.stringify(status, "  "))
+
+
+func _update_depth_status(message: Dictionary) -> void:
+	var targets = message.get("targets", [])
+	if typeof(targets) != TYPE_ARRAY:
+		return
+	for target in targets:
+		if typeof(target) != TYPE_DICTIONARY:
+			continue
+		_last_depth_source = str(target.get("depth_source", "-"))
+		_last_depth_confidence = str(target.get("depth_confidence", "-"))
+		return
 
 
 func _load_script_from_env(name: String, fallback: String) -> Script:
