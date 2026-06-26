@@ -44,38 +44,87 @@ def is_proxy_targets_request(first_line: str) -> bool:
     return parts[1].split("?", 1)[0] == "/proxy_targets"
 
 
+class ClientInfo:
+    def __init__(self, conn: Any, address: Any, client_id: str, label: str) -> None:
+        self.conn = conn
+        self.address = address
+        self.client_id = client_id
+        self.label = label
+
+
+def _format_address(address: Any) -> str:
+    if isinstance(address, tuple) and len(address) >= 2:
+        return f"{address[0]}:{address[1]}"
+    return str(address)
+
+
+def _disconnect_reason(exc: BaseException | None) -> str:
+    if exc is None:
+        return "client_closed"
+    if isinstance(exc, ConnectionResetError):
+        return "connection_reset"
+    if isinstance(exc, BrokenPipeError):
+        return "broken_pipe"
+    return type(exc).__name__
+
+
 class BroadcastHub:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._clients: list[tuple[Any, Any]] = []
+        self._clients: list[ClientInfo] = []
+        self._next_client_index = 1
+        self._last_disconnect: dict[str, Any] | None = None
 
-    def add_client(self, conn: Any, address: Any) -> None:
+    def add_client(self, conn: Any, address: Any, label: str = "unknown") -> str:
         with self._lock:
-            self._clients.append((conn, address))
+            client_id = f"client-{self._next_client_index}"
+            self._next_client_index += 1
+            self._clients.append(ClientInfo(conn=conn, address=address, client_id=client_id, label=label))
+            return client_id
 
-    def remove_client(self, conn: Any) -> None:
+    def remove_client(self, conn: Any, reason: str = "client_closed") -> dict[str, Any] | None:
         with self._lock:
-            self._clients = [(client, address) for client, address in self._clients if client is not conn]
+            removed = next((client for client in self._clients if client.conn is conn), None)
+            self._clients = [client for client in self._clients if client.conn is not conn]
+            if removed is None:
+                return None
+            self._last_disconnect = {
+                "client_id": removed.client_id,
+                "label": removed.label,
+                "address": _format_address(removed.address),
+                "reason": reason,
+            }
+            return dict(self._last_disconnect)
 
     def client_count(self) -> int:
         with self._lock:
             return len(self._clients)
 
+    def status_summary(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "active_client_count": len(self._clients),
+                "active_clients": [
+                    f"{client.client_id}={client.label}@{_format_address(client.address)}" for client in self._clients
+                ],
+                "last_disconnect": dict(self._last_disconnect) if self._last_disconnect else None,
+            }
+
     def broadcast(self, message: dict[str, Any]) -> int:
         payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False)
         frame = encode_websocket_text_frame(payload)
-        stale = []
+        stale: list[tuple[Any, str]] = []
         delivered = 0
         with self._lock:
             clients = list(self._clients)
-        for conn, _address in clients:
+        for client in clients:
             try:
-                conn.sendall(frame)
+                client.conn.sendall(frame)
                 delivered += 1
-            except (BrokenPipeError, ConnectionResetError, OSError):
-                stale.append(conn)
-        for conn in stale:
-            self.remove_client(conn)
+            except (BrokenPipeError, ConnectionResetError, OSError) as exc:
+                stale.append((client.conn, _disconnect_reason(exc)))
+        for conn, reason in stale:
+            self.remove_client(conn, reason=reason)
         return delivered
 
 
@@ -361,18 +410,35 @@ def _broadcast_loop(
 
 
 def _client_loop(conn: socket.socket, address: Any, hub: BroadcastHub) -> None:
+    disconnect_reason = "client_closed"
     try:
         while True:
-            if not _drain_client_frames(conn):
+            try:
+                if not _drain_client_frames(conn):
+                    return
+            except (BrokenPipeError, ConnectionResetError, OSError) as exc:
+                disconnect_reason = _disconnect_reason(exc)
                 return
             time.sleep(0.05)
     finally:
-        hub.remove_client(conn)
+        disconnect = hub.remove_client(conn, reason=disconnect_reason)
         try:
             conn.close()
         except OSError:
             pass
-        print(f"client disconnected: {address}", flush=True)
+        if disconnect:
+            print(
+                "client disconnected: id=%s label=%s address=%s reason=%s"
+                % (
+                    disconnect["client_id"],
+                    disconnect["label"],
+                    disconnect["address"],
+                    disconnect["reason"],
+                ),
+                flush=True,
+            )
+        else:
+            print(f"client disconnected: {address}", flush=True)
 
 
 def serve(args: argparse.Namespace) -> int:
@@ -418,8 +484,9 @@ def serve(args: argparse.Namespace) -> int:
                     print(f"rejected {address}: {first_line}", flush=True)
                     conn.close()
                     continue
-                print(f"client connected from {address}: {first_line}", flush=True)
-                hub.add_client(conn, address)
+                label = "godot" if hub.client_count() == 0 else "monitor"
+                client_id = hub.add_client(conn, address, label=label)
+                print(f"client connected: id={client_id} label={label} address={_format_address(address)} request={first_line}", flush=True)
                 threading.Thread(target=_client_loop, args=(conn, address, hub), daemon=True).start()
     finally:
         for reader_name in ("left_reader", "right_reader"):

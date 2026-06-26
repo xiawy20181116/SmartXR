@@ -216,6 +216,12 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
             "depth_sources": {"bbox_top_center_fallback": 10},
             "missing_depth_confidence_count": 0,
             "missing_depth_source_count": 0,
+            "client_label": "monitor",
+            "ws_connected": True,
+            "ws_subscribed": True,
+            "first_packet_seen": True,
+            "packets_before_close": 10,
+            "close_reason": "completed",
         }
         pcmr_status = {
             "last_command": "proxy_live",
@@ -228,8 +234,14 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
             "card_target_id": "vst_stereo-person-2-3",
             "card_attach_target_id": "vst_stereo-person-2-3",
             "proxy_target_ids": ["vst_stereo-person-2-3"],
+            "proxy_local_position": "-0.04 0.11 -0.30",
+            "proxy_world_position": "0.80 0.31 0.05",
             "card_node_position": "-0.04 0.11 -0.30",
             "card_resolved_position": "-0.04 0.11 -0.30",
+            "source_coordinate": {
+                "head_position_m": [-0.04, 0.11, -0.30],
+                "camera_position_m": [-0.04, 0.11, 0.30],
+            },
         }
         sender_log = "\n".join(
             [
@@ -243,8 +255,17 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         self.assertTrue(status["ok"])
         self.assertIn("SENDER_READY", status["verdicts"])
         self.assertIn("STREAM_OK", status["verdicts"])
+        self.assertIn("TRANSPORT_TO_GODOT_OK", status["verdicts"])
         self.assertIn("CARD_BOUND_TO_LIVE_TARGET", status["verdicts"])
         self.assertIn("LOW_CONFIDENCE_DEPTH_ONLY", status["verdicts"])
+        self.assertEqual(status["raw"]["client_label"], "monitor")
+        self.assertEqual(status["raw"]["close_reason"], "completed")
+        self.assertEqual(status["raw"]["packets_before_close"], 10)
+        self.assertEqual(status["pcmr"]["proxy_world_position"], "0.80 0.31 0.05")
+        self.assertEqual(status["pcmr"]["card_minus_proxy_world"], [-0.84, -0.2, -0.35])
+        self.assertEqual(status["pcmr"]["head_z_sign"], "negative")
+        self.assertEqual(status["pcmr"]["camera_z_sign"], "positive")
+        self.assertEqual(status["pcmr"]["world_z_sign"], "positive")
         self.assertEqual(status["errors"], [])
 
     def test_end_to_end_health_does_not_flag_sample_when_card_is_live_but_sample_target_remains_registered(self):
@@ -414,6 +435,31 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         self.assertEqual(status["reason"], "connection_refused")
         self.assertIn("publisher is not listening", status["hint"])
         self.assertIn("run_antman_vst_proxy_targets_live_publisher.ps1", status["hint"])
+
+    def test_classifies_connection_reset_with_stage_and_packet_counts(self):
+        monitor = load_module(MONITOR, "monitor_proxy_targets_live_stream")
+
+        status = monitor.status_from_exception(
+            ConnectionResetError(10054, "remote host reset"),
+            "ws://127.0.0.1:8766/proxy_targets",
+            20.0,
+            ws_connected=True,
+            ws_subscribed=True,
+            packets_before_close=3,
+            first_sequence=0,
+            last_sequence=2,
+            client_label="monitor",
+        )
+
+        self.assertFalse(status["ok"])
+        self.assertEqual(status["reason"], "connection_reset")
+        self.assertTrue(status["ws_connected"])
+        self.assertTrue(status["ws_subscribed"])
+        self.assertTrue(status["first_packet_seen"])
+        self.assertEqual(status["packets_before_close"], 3)
+        self.assertEqual(status["first_sequence"], 0)
+        self.assertEqual(status["last_sequence"], 2)
+        self.assertEqual(status["client_label"], "monitor")
 
     def test_runner_invokes_monitor_only(self):
         self.assertTrue(RUNNER.exists())

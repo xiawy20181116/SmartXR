@@ -61,6 +61,60 @@ def _list_strings(value: Any) -> list[str]:
     return [item for item in value if isinstance(item, str)]
 
 
+def _parse_vector3(value: Any) -> list[float] | None:
+    if isinstance(value, list) and len(value) >= 3:
+        try:
+            return [round(float(value[0]), 3), round(float(value[1]), 3), round(float(value[2]), 3)]
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(value, str):
+        return None
+    parts = value.strip().split()
+    if len(parts) < 3:
+        return None
+    try:
+        return [round(float(parts[0]), 3), round(float(parts[1]), 3), round(float(parts[2]), 3)]
+    except ValueError:
+        return None
+
+
+def _sign_label(value: float | None) -> str:
+    if value is None:
+        return "unknown"
+    if value > 0:
+        return "positive"
+    if value < 0:
+        return "negative"
+    return "zero"
+
+
+def _z_sign_from_vector(value: Any) -> str:
+    vector = _parse_vector3(value)
+    return _sign_label(vector[2] if vector else None)
+
+
+def _card_pose_summary(pcmr_status: dict[str, Any]) -> dict[str, Any]:
+    proxy_world = _parse_vector3(pcmr_status.get("proxy_world_position"))
+    card_node = _parse_vector3(pcmr_status.get("card_node_position"))
+    card_minus_proxy_world = None
+    if proxy_world is not None and card_node is not None:
+        card_minus_proxy_world = [round(card_node[index] - proxy_world[index], 3) for index in range(3)]
+
+    source_coordinate = pcmr_status.get("source_coordinate", {})
+    if not isinstance(source_coordinate, dict):
+        source_coordinate = {}
+    return {
+        "proxy_local_position": pcmr_status.get("proxy_local_position"),
+        "proxy_world_position": pcmr_status.get("proxy_world_position"),
+        "card_node_position": pcmr_status.get("card_node_position"),
+        "card_resolved_position": pcmr_status.get("card_resolved_position"),
+        "card_minus_proxy_world": card_minus_proxy_world,
+        "head_z_sign": _z_sign_from_vector(source_coordinate.get("head_position_m")),
+        "camera_z_sign": _z_sign_from_vector(source_coordinate.get("camera_position_m")),
+        "world_z_sign": _z_sign_from_vector(pcmr_status.get("proxy_world_position")),
+    }
+
+
 def _sender_summary(sender_log_text: str) -> dict[str, Any]:
     sent_matches = re.findall(
         r"sent stereo seq=(?P<sequence>\d+)\s+target=(?P<target>\S+)\s+"
@@ -187,6 +241,7 @@ def evaluate_health(
 
     if _pcmr_connected(pcmr_status):
         verdicts.append("GODOT_CONNECTED")
+        verdicts.append("TRANSPORT_TO_GODOT_OK")
     else:
         verdicts.append("GODOT_NOT_CONNECTED")
         errors.append("Godot/PCMR did not report ws_connected/ws_subscribed/packets/parsed/live")
@@ -226,6 +281,14 @@ def evaluate_health(
             "depth_sources": raw_status.get("depth_sources", {}),
             "missing_depth_confidence_count": _count(raw_status, "missing_depth_confidence_count"),
             "missing_depth_source_count": _count(raw_status, "missing_depth_source_count"),
+            "client_label": raw_status.get("client_label"),
+            "ws_connected": _truthy(raw_status.get("ws_connected")),
+            "ws_subscribed": _truthy(raw_status.get("ws_subscribed")),
+            "first_packet_seen": _truthy(raw_status.get("first_packet_seen")),
+            "first_sequence": raw_status.get("first_sequence"),
+            "last_sequence": raw_status.get("last_sequence"),
+            "packets_before_close": _count(raw_status, "packets_before_close"),
+            "close_reason": raw_status.get("close_reason") or raw_status.get("reason"),
         },
         "pcmr": {
             "last_command": pcmr_status.get("last_command"),
@@ -238,8 +301,7 @@ def evaluate_health(
             "card_target_id": pcmr_status.get("card_target_id"),
             "card_attach_target_id": pcmr_status.get("card_attach_target_id"),
             "proxy_target_ids": _list_strings(pcmr_status.get("proxy_target_ids")),
-            "card_node_position": pcmr_status.get("card_node_position"),
-            "card_resolved_position": pcmr_status.get("card_resolved_position"),
+            **_card_pose_summary(pcmr_status),
         },
     }
 

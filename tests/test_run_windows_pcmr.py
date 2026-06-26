@@ -131,6 +131,17 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("CARD_BOUND_TO_LIVE_TARGET", source)
         self.assertIn("SAMPLE_FALLBACK_ACTIVE", source)
 
+    def test_stereo_live_runner_monitor_mentions_client_disconnect_and_pose_summary(self):
+        self.assertTrue(STEREO_LIVE_RUNNER.exists())
+        source = STEREO_LIVE_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("client_label", source)
+        self.assertIn("close_reason", source)
+        self.assertIn("packets_before_close", source)
+        self.assertIn("card_minus_proxy_world", source)
+        self.assertIn("proxy_world_position", source)
+        self.assertIn("card_resolved_position", source)
+
     def test_stereo_live_runner_runs_health_even_when_raw_monitor_fails(self):
         self.assertTrue(STEREO_LIVE_RUNNER.exists())
         source = STEREO_LIVE_RUNNER.read_text(encoding="utf-8")

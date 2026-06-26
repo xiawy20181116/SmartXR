@@ -249,6 +249,8 @@ if (`$RawMonitorExitCode -ne 0) {
   Write-Host "[monitor] Raw stream monitor failed; continuing to end-to-end health verdict."
 }
 Write-Host "[monitor] Running end-to-end health verdict: STREAM_OK / GODOT_NOT_CONNECTED / SAMPLE_FALLBACK_ACTIVE / CARD_BOUND_TO_LIVE_TARGET / LOW_CONFIDENCE_DEPTH_ONLY"
+Write-Host "[monitor] Raw client diagnostics include: client_label / close_reason / packets_before_close"
+Write-Host "[monitor] Godot/card pose summary includes: proxy_world_position / card_resolved_position / card_minus_proxy_world"
 `$HealthArgs = @(
   $HealthValidatorLiteral,
   "--sender-log", $SenderLogLiteral,

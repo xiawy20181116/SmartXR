@@ -176,7 +176,27 @@ def analyze_messages(messages: list[dict[str, Any]], min_packets: int) -> dict[s
     }
 
 
-def status_from_exception(exc: Exception, url: str, timeout_seconds: float) -> dict[str, Any]:
+def _sequence_bounds(messages: list[dict[str, Any]]) -> tuple[int | None, int | None]:
+    sequences = [
+        message.get("sequence")
+        for message in messages
+        if isinstance(message.get("sequence"), int) and not isinstance(message.get("sequence"), bool)
+    ]
+    return (sequences[0], sequences[-1]) if sequences else (None, None)
+
+
+def status_from_exception(
+    exc: Exception,
+    url: str,
+    timeout_seconds: float,
+    *,
+    ws_connected: bool = False,
+    ws_subscribed: bool = False,
+    packets_before_close: int = 0,
+    first_sequence: int | None = None,
+    last_sequence: int | None = None,
+    client_label: str = "monitor",
+) -> dict[str, Any]:
     reason = "exception"
     hint = "Inspect the live publisher and network settings."
     if isinstance(exc, ConnectionRefusedError):
@@ -188,16 +208,27 @@ def status_from_exception(exc: Exception, url: str, timeout_seconds: float) -> d
     elif isinstance(exc, TimeoutError) or isinstance(exc, socket.timeout):
         reason = "timeout"
         hint = "publisher accepted no usable WebSocket traffic before timeout; check the publisher console."
+    elif isinstance(exc, ConnectionResetError):
+        reason = "connection_reset"
+        hint = "connection opened but the peer reset it before enough proxy_targets packets arrived."
     elif isinstance(exc, ConnectionError):
         reason = "connection_error"
         hint = "connection opened but closed or failed before enough proxy_targets packets arrived."
 
     return {
         "ok": False,
-        "packets": 0,
-        "parsed": 0,
+        "packets": packets_before_close,
+        "parsed": packets_before_close,
         "url": url,
         "timeout_seconds": timeout_seconds,
+        "client_label": client_label,
+        "ws_connected": ws_connected,
+        "ws_subscribed": ws_subscribed,
+        "first_packet_seen": packets_before_close > 0,
+        "first_sequence": first_sequence,
+        "last_sequence": last_sequence,
+        "packets_before_close": packets_before_close,
+        "close_reason": reason,
         "reason": reason,
         "hint": hint,
         "errors": [str(exc)],
@@ -213,25 +244,52 @@ def monitor_stream(url: str, min_packets: int, timeout_seconds: float, subscribe
     path = parsed.path or "/"
     messages: list[dict[str, Any]] = []
     deadline = time.monotonic() + timeout_seconds
+    ws_connected = False
+    ws_subscribed = False
 
-    with socket.create_connection((host, port), timeout=timeout_seconds) as conn:
-        conn.settimeout(max(0.1, timeout_seconds))
-        _perform_client_handshake(conn, host, port, path)
-        conn.sendall(_encode_masked_text_frame(json.dumps({"type": "subscribe", "stream": subscribe_stream}, separators=(",", ":"))))
+    try:
+        with socket.create_connection((host, port), timeout=timeout_seconds) as conn:
+            conn.settimeout(max(0.1, timeout_seconds))
+            _perform_client_handshake(conn, host, port, path)
+            ws_connected = True
+            subscribe_payload = json.dumps(
+                {"type": "subscribe", "stream": subscribe_stream, "client_label": "monitor"},
+                separators=(",", ":"),
+            )
+            conn.sendall(_encode_masked_text_frame(subscribe_payload))
+            ws_subscribed = True
 
-        while len(messages) < min_packets and time.monotonic() < deadline:
-            remaining = max(0.1, deadline - time.monotonic())
-            conn.settimeout(remaining)
-            payload = _read_websocket_text(conn)
-            if payload is None:
-                break
-            if payload == "":
-                continue
-            messages.append(json.loads(payload))
+            while len(messages) < min_packets and time.monotonic() < deadline:
+                remaining = max(0.1, deadline - time.monotonic())
+                conn.settimeout(remaining)
+                payload = _read_websocket_text(conn)
+                if payload is None:
+                    break
+                if payload == "":
+                    continue
+                messages.append(json.loads(payload))
+    except Exception as exc:
+        first_sequence, last_sequence = _sequence_bounds(messages)
+        return status_from_exception(
+            exc,
+            url,
+            timeout_seconds,
+            ws_connected=ws_connected,
+            ws_subscribed=ws_subscribed,
+            packets_before_close=len(messages),
+            first_sequence=first_sequence,
+            last_sequence=last_sequence,
+        )
 
     status = analyze_messages(messages, min_packets=min_packets)
     status["url"] = url
     status["timeout_seconds"] = timeout_seconds
+    status["client_label"] = "monitor"
+    status["ws_connected"] = ws_connected
+    status["ws_subscribed"] = ws_subscribed
+    status["first_packet_seen"] = bool(messages)
+    status["packets_before_close"] = len(messages)
+    status["close_reason"] = "completed" if status.get("ok") else "insufficient_packets"
     return status
 
 

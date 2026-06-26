@@ -60,6 +60,33 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(len(first.frames), 1)
         self.assertEqual(first.frames, second.frames)
 
+    def test_broadcast_hub_reports_client_labels_and_disconnects(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        class FakeConn:
+            def __init__(self, fail=False):
+                self.fail = fail
+
+            def sendall(self, _frame):
+                if self.fail:
+                    raise ConnectionResetError("reset by peer")
+
+        godot = FakeConn()
+        monitor = FakeConn(fail=True)
+        hub = publisher.BroadcastHub()
+        godot_id = hub.add_client(godot, ("127.0.0.1", 11111), label="godot")
+        monitor_id = hub.add_client(monitor, ("127.0.0.1", 11112), label="monitor")
+
+        delivered = hub.broadcast({"type": "proxy_targets", "sequence": 7, "targets": [], "cards": []})
+        summary = hub.status_summary()
+
+        self.assertEqual(delivered, 1)
+        self.assertIn(f"{godot_id}=godot@127.0.0.1:11111", summary["active_clients"])
+        self.assertEqual(summary["active_client_count"], 1)
+        self.assertEqual(summary["last_disconnect"]["client_id"], monitor_id)
+        self.assertEqual(summary["last_disconnect"]["label"], "monitor")
+        self.assertEqual(summary["last_disconnect"]["reason"], "connection_reset")
+
     def test_builds_schema_valid_message_from_stereo_bbox_pair(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
         validator = load_module(VALIDATOR, "validate_proxy_targets_payload_schema")
