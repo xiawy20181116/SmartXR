@@ -8,10 +8,10 @@ param(
     [int]$RecordedWidth = 880,
     [int]$RecordedHeight = 660,
     [int]$LogEvery = 20,
+    [double]$SenderReadyTimeoutSeconds = 20.0,
     [double]$ProxyTargetsTimeoutSeconds = 60.0,
     [int]$MonitorMinPackets = 10,
     [double]$MonitorTimeoutSeconds = 20.0,
-    [int]$MonitorStartDelaySeconds = 2,
     [switch]$UseAntmanPassthroughOverlay,
     [string]$PythonExe = ""
 )
@@ -29,11 +29,35 @@ $MonitorScript = Join-Path -Path $WorkDir -ChildPath "monitor.ps1"
 $SenderLog = Join-Path -Path $WorkDir -ChildPath "sender.log"
 $ReceiverLog = Join-Path -Path $WorkDir -ChildPath "receiver.log"
 $MonitorLog = Join-Path -Path $WorkDir -ChildPath "monitor.log"
+$SenderReadyFile = Join-Path -Path $WorkDir -ChildPath "sender_ready.txt"
 $WsUrl = "ws://${HostName}:${Port}/proxy_targets"
+$WindowName = "smartxr-stereo-live-" + (Get-Date -Format "yyyyMMdd-HHmmss")
 
 function ConvertTo-PowerShellLiteral {
     param([string]$Value)
     return "'" + $Value.Replace("'", "''") + "'"
+}
+
+function Wait-ForLogText {
+    param(
+        [string]$Path,
+        [string]$Text,
+        [double]$TimeoutSeconds
+    )
+
+    $Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($Stopwatch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+        if (Test-Path -LiteralPath $Path) {
+            try {
+                if (Select-String -Path $Path -SimpleMatch -Pattern $Text -Quiet) {
+                    return $true
+                }
+            } catch {
+            }
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    return $false
 }
 
 function Start-VisiblePowerShellWindow {
@@ -45,11 +69,26 @@ function Start-VisiblePowerShellWindow {
     )
 
     Start-Process `
-        -FilePath "powershell" `
+        -FilePath "powershell.exe" `
         -ArgumentList @("-NoExit", "-ExecutionPolicy", "Bypass", "-File", $ScriptPath) `
         -WorkingDirectory $RepoRoot `
         -WindowStyle Normal | Out-Null
     Write-Host "Opened $Title window: $ScriptPath"
+}
+
+function Open-RunnerTab {
+    param(
+        [string]$WindowName,
+        [string]$Title,
+        [string]$RunnerPath
+    )
+
+    if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
+        & wt.exe -w $WindowName new-tab --title $Title powershell.exe -NoExit -ExecutionPolicy Bypass -File $RunnerPath
+    } else {
+        Write-Host "wt.exe not found; falling back to a standalone PowerShell window for $Title" -ForegroundColor Yellow
+        Start-VisiblePowerShellWindow -Title $Title -ScriptPath $RunnerPath
+    }
 }
 
 if ($PythonExe -eq "") {
@@ -75,8 +114,12 @@ foreach ($RequiredPath in @($Publisher, $PcmrRunner, $MonitorRunner)) {
     }
 }
 
+if ($PythonExe -ne "python" -and -not (Test-Path -LiteralPath $PythonExe)) {
+    throw "Python executable not found: $PythonExe"
+}
+
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-Remove-Item -LiteralPath $SenderLog, $ReceiverLog, $MonitorLog -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $SenderLog, $ReceiverLog, $MonitorLog, $SenderReadyFile -Force -ErrorAction SilentlyContinue
 
 $RepoRootLiteral = ConvertTo-PowerShellLiteral $RepoRoot
 $PythonExeLiteral = ConvertTo-PowerShellLiteral $PythonExe
@@ -89,14 +132,17 @@ $WsUrlLiteral = ConvertTo-PowerShellLiteral $WsUrl
 $SenderLogLiteral = ConvertTo-PowerShellLiteral $SenderLog
 $ReceiverLogLiteral = ConvertTo-PowerShellLiteral $ReceiverLog
 $MonitorLogLiteral = ConvertTo-PowerShellLiteral $MonitorLog
+$SenderReadyFileLiteral = ConvertTo-PowerShellLiteral $SenderReadyFile
 $UseOverlayLiteral = if ($UseAntmanPassthroughOverlay) { "`$true" } else { "`$false" }
 
 $SenderContent = @"
 `$ErrorActionPreference = "Stop"
+`$Host.UI.RawUI.WindowTitle = "SmartXR stereo sender"
 Set-Location -LiteralPath $RepoRootLiteral
-Write-Host "SmartXR stereo sender"
-Write-Host "WebSocket: $WsUrl"
-Write-Host "Expected depth_source=bbox_top_center_fallback depth_confidence=low"
+Write-Host "[sender] SmartXR stereo sender"
+Write-Host "[sender] WebSocket: $WsUrl"
+Write-Host "[sender] Expected depth_source=bbox_top_center_fallback depth_confidence=low"
+Write-Host "[sender] A later healthy run should print sent stereo seq=..."
 & $PythonExeLiteral $PublisherLiteral `
   --antman-root $AntmanRootLiteral `
   --host $HostName `
@@ -105,18 +151,23 @@ Write-Host "Expected depth_source=bbox_top_center_fallback depth_confidence=low"
   --min-confidence $MinConfidence `
   --recorded-width $RecordedWidth `
   --recorded-height $RecordedHeight `
-  --log-every $LogEvery 2>&1 | Tee-Object -FilePath $SenderLogLiteral
+  --log-every $LogEvery 2>&1 | Tee-Object -FilePath $SenderLogLiteral -Append
 `$ExitCode = `$LASTEXITCODE
-Write-Host "Stereo sender exited with code `$ExitCode"
+Write-Host "[sender] Stereo sender exited with code `$ExitCode"
 exit `$ExitCode
 "@
 
 $ReceiverContent = @"
 `$ErrorActionPreference = "Stop"
+`$Host.UI.RawUI.WindowTitle = "SmartXR PCMR receiver"
 Set-Location -LiteralPath $RepoRootLiteral
-Write-Host "SmartXR PCMR receiver"
-Write-Host "Using proxy_targets: $WsUrl"
-Write-Host "Keep the sender window open; receiver needs the sender to stay open."
+Write-Host "[receiver] SmartXR PCMR receiver"
+Write-Host "[receiver] Using proxy_targets: $WsUrl"
+Write-Host "[receiver] Waiting for sender_ready marker; receiver waits for sender_ready."
+while (-not (Test-Path -LiteralPath $SenderReadyFileLiteral)) {
+  Start-Sleep -Milliseconds 250
+}
+Write-Host "[receiver] Sender ready; starting PCMR validation."
 `$ArgsList = @(
   "-GodotExe", $GodotExeLiteral,
   "-ValidateProxyTargets",
@@ -126,25 +177,29 @@ Write-Host "Keep the sender window open; receiver needs the sender to stay open.
 if ($UseOverlayLiteral) {
   `$ArgsList += "-UseAntmanPassthroughOverlay"
 }
-& $PcmrRunnerLiteral @ArgsList 2>&1 | Tee-Object -FilePath $ReceiverLogLiteral
+& $PcmrRunnerLiteral @ArgsList 2>&1 | Tee-Object -FilePath $ReceiverLogLiteral -Append
 `$ExitCode = `$LASTEXITCODE
-Write-Host "PCMR receiver exited with code `$ExitCode"
+Write-Host "[receiver] PCMR receiver exited with code `$ExitCode"
 exit `$ExitCode
 "@
 
 $MonitorContent = @"
 `$ErrorActionPreference = "Stop"
+`$Host.UI.RawUI.WindowTitle = "SmartXR proxy_targets monitor"
 Set-Location -LiteralPath $RepoRootLiteral
-Write-Host "SmartXR proxy_targets monitor"
-Write-Host "Waiting $MonitorStartDelaySeconds seconds for sender/receiver startup..."
-Start-Sleep -Seconds $MonitorStartDelaySeconds
+Write-Host "[monitor] SmartXR proxy_targets monitor"
+Write-Host "[monitor] Waiting for sender_ready marker; monitor waits for sender_ready."
+while (-not (Test-Path -LiteralPath $SenderReadyFileLiteral)) {
+  Start-Sleep -Milliseconds 250
+}
+Write-Host "[monitor] Sender ready; collecting packets."
 & $MonitorRunnerLiteral `
   -Url $WsUrlLiteral `
   -MinPackets $MonitorMinPackets `
   -TimeoutSeconds $MonitorTimeoutSeconds `
-  -PythonExe $PythonExeLiteral 2>&1 | Tee-Object -FilePath $MonitorLogLiteral
+  -PythonExe $PythonExeLiteral 2>&1 | Tee-Object -FilePath $MonitorLogLiteral -Append
 `$ExitCode = `$LASTEXITCODE
-Write-Host "Monitor exited with code `$ExitCode"
+Write-Host "[monitor] Monitor exited with code `$ExitCode"
 exit `$ExitCode
 "@
 
@@ -153,20 +208,26 @@ Set-Content -LiteralPath $ReceiverScript -Value $ReceiverContent -Encoding UTF8
 Set-Content -LiteralPath $MonitorScript -Value $MonitorContent -Encoding UTF8
 
 Write-Host "SmartXR-PCMR stereo proxy_targets live manual validation"
-Write-Host "This opens three visible PowerShell windows:"
-Write-Host "  1. SmartXR stereo sender"
-Write-Host "  2. SmartXR PCMR receiver"
-Write-Host "  3. SmartXR proxy_targets monitor"
+Write-Host "This opens one Windows Terminal window with three tabs when wt.exe is available."
+Write-Host "It falls back to three visible PowerShell windows otherwise."
 Write-Host "WebSocket: $WsUrl"
 Write-Host "Work dir:  $WorkDir"
 Write-Host ""
-Write-Host "Close the sender window manually after real-device inspection is done."
 
-Start-VisiblePowerShellWindow -Title "SmartXR stereo sender" -ScriptPath $SenderScript
-Start-Sleep -Seconds 1
-Start-VisiblePowerShellWindow -Title "SmartXR PCMR receiver" -ScriptPath $ReceiverScript
-Start-VisiblePowerShellWindow -Title "SmartXR proxy_targets monitor" -ScriptPath $MonitorScript
+Open-RunnerTab -WindowName $WindowName -Title "SmartXR stereo sender" -RunnerPath $SenderScript
 
+Write-Host "Waiting for sender readiness: proxy_targets live publisher listening"
+if (-not (Wait-ForLogText -Path $SenderLog -Text "proxy_targets live publisher listening" -TimeoutSeconds $SenderReadyTimeoutSeconds)) {
+    throw "Sender did not report ready within $SenderReadyTimeoutSeconds seconds. Check $SenderLog and $SenderLogLiteral"
+}
+Set-Content -LiteralPath $SenderReadyFile -Value "ready" -Encoding ASCII
+
+Open-RunnerTab -WindowName $WindowName -Title "SmartXR PCMR receiver" -RunnerPath $ReceiverScript
+Open-RunnerTab -WindowName $WindowName -Title "SmartXR proxy_targets monitor" -RunnerPath $MonitorScript
+
+Write-Host ""
+Write-Host "Started sender, receiver, and monitor."
+Write-Host "Close the sender tab/window manually after real-device inspection is done."
 Write-Host ""
 Write-Host "Logs:"
 Write-Host "  Sender:   $SenderLog"
