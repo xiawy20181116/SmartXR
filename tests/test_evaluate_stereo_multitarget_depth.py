@@ -266,6 +266,37 @@ class StereoMultitargetDepthEvaluatorTests(unittest.TestCase):
 
         per_frame = json.loads((out_dir / "per_frame.jsonl").read_text(encoding="utf-8").strip())
         self.assertEqual(per_frame["keypoint"]["anchor_consistency_gate"]["policy"], "fallback_bbox")
+        self.assertEqual(per_frame["keypoint"]["depth_confidence"], "low")
+        self.assertEqual(per_frame["keypoint"]["depth_source"], "bbox_top_center_fallback")
+        self.assertEqual(per_frame["keypoint"]["fallback_reason"], "anchor_kind_mismatch")
+
+    def test_target_keypoint_anchor_fallback_uses_matching_candidate_bbox(self):
+        evaluator = load_module(TOOL, "evaluate_stereo_multitarget_depth")
+        bbox_path = self.tmp_path / "bbox.jsonl"
+        keypoint_path = self.tmp_path / "keypoint.jsonl"
+        out_dir = self.tmp_path / "eval"
+        keypoint = target_keypoint_pair_record(1, "rank_1_near", [500, 330], [479, 380])
+        keypoint["selected_anchor"]["kind"] = "mixed"
+        write_jsonl(bbox_path, [bbox_pair_record(1)])
+        write_jsonl(keypoint_path, [keypoint])
+
+        evaluator.evaluate_stereo_multitarget_depth(
+            bbox_input_path=bbox_path,
+            keypoint_input_path=keypoint_path,
+            out_dir=out_dir,
+            max_vertical_error_px=20.0,
+            require_anchor_kind="shoulder_midpoint",
+            anchor_mismatch_policy="fallback_bbox",
+        )
+
+        summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(summary["targets"]["rank_1_near"]["keypoint"]["ok_count"], 1)
+
+        per_frame = json.loads((out_dir / "per_frame.jsonl").read_text(encoding="utf-8").strip())
+        self.assertEqual(per_frame["keypoint"]["left_anchor_px"], [500.0, 260.0])
+        self.assertEqual(per_frame["keypoint"]["right_anchor_px"], [479.0, 261.0])
+        self.assertEqual(per_frame["keypoint"]["depth_confidence"], "low")
+        self.assertEqual(per_frame["keypoint"]["depth_source"], "bbox_top_center_fallback")
 
     def test_exports_top_rejected_anchor_diagnostics(self):
         evaluator = load_module(TOOL, "evaluate_stereo_multitarget_depth")

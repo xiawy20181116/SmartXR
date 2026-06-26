@@ -379,6 +379,21 @@ def _candidate_for_label(candidates: list[dict[str, Any]], label: str | None) ->
     return None
 
 
+def _with_candidate_bbox_baseline(
+    keypoint_record: dict[str, Any],
+    candidate: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if isinstance(keypoint_record.get("bbox_baseline"), dict) or candidate is None:
+        return keypoint_record
+    with_baseline = dict(keypoint_record)
+    with_baseline["bbox_baseline"] = {
+        "left_anchor_px": candidate.get("left_anchor_px"),
+        "right_anchor_px": candidate.get("right_anchor_px"),
+        "score": candidate.get("confidence", 1.0),
+    }
+    return with_baseline
+
+
 def _diagnostic_from_rejection(
     *,
     keypoint_record: dict[str, Any],
@@ -637,8 +652,9 @@ def evaluate_stereo_multitarget_depth(
             ]
             if target_keypoint_records_for_frame:
                 for selected_bbox_label, keypoint_record in target_keypoint_records_for_frame:
+                    selected_candidate = _candidate_for_label(raw_candidates, selected_bbox_label)
                     effective_anchor, candidate_keypoint_eval = evaluate_keypoint_anchor_depth(
-                        keypoint_record,
+                        _with_candidate_bbox_baseline(keypoint_record, selected_candidate),
                         calibration=calibration,
                         min_keypoint_score=min_keypoint_score,
                         min_depth_m=min_depth_m,
@@ -668,7 +684,7 @@ def evaluate_stereo_multitarget_depth(
                             keypoint_record=keypoint_record,
                             keypoint_eval=candidate_keypoint_eval,
                             target_label=selected_bbox_label,
-                            candidate=_candidate_for_label(raw_candidates, selected_bbox_label),
+                            candidate=selected_candidate,
                         )
                         candidate_keypoint_eval["diagnostic"] = diagnostic
                         diagnostics.append(diagnostic)
@@ -678,8 +694,9 @@ def evaluate_stereo_multitarget_depth(
             elif str(source.get("pair_id")) in legacy_keypoint_by_pair_id:
                 keypoint_record = legacy_keypoint_by_pair_id[str(source.get("pair_id"))]
                 selected_bbox_label = _find_selected_bbox_label(keypoint_record, raw_candidates)
+                selected_candidate = _candidate_for_label(raw_candidates, selected_bbox_label)
                 effective_anchor, candidate_keypoint_eval = evaluate_keypoint_anchor_depth(
-                    keypoint_record,
+                    _with_candidate_bbox_baseline(keypoint_record, selected_candidate),
                     calibration=calibration,
                     min_keypoint_score=min_keypoint_score,
                     min_depth_m=min_depth_m,
@@ -710,7 +727,8 @@ def evaluate_stereo_multitarget_depth(
                             keypoint_record=keypoint_record,
                             keypoint_eval=candidate_keypoint_eval,
                             target_label=selected_bbox_label or associated_label,
-                            candidate=_candidate_for_label(raw_candidates, selected_bbox_label or associated_label),
+                            candidate=selected_candidate
+                            or _candidate_for_label(raw_candidates, selected_bbox_label or associated_label),
                         )
                         candidate_keypoint_eval["diagnostic"] = diagnostic
                         diagnostics.append(diagnostic)

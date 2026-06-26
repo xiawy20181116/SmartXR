@@ -127,6 +127,8 @@ def _anchor_gate_rejection(anchor: dict[str, Any], gate: dict[str, Any]) -> dict
         "stereo_ok": False,
         "rejection_reason": "anchor_kind_mismatch",
         "anchor_consistency_gate": gate,
+        "depth_confidence": "none",
+        "depth_source": str(anchor.get("kind", "unknown")),
     }
 
 
@@ -161,6 +163,24 @@ def _resolve_anchor_for_depth(
     return effective_anchor, gate, True
 
 
+def _mark_depth_confidence(
+    keypoint: dict[str, Any],
+    *,
+    anchor: dict[str, Any],
+    gate: dict[str, Any] | None,
+) -> None:
+    source = str(anchor.get("kind", "unknown"))
+    keypoint["depth_source"] = source
+    if keypoint.get("stereo_ok") is not True:
+        keypoint["depth_confidence"] = "none"
+        return
+    if gate is not None and source == "bbox_top_center_fallback":
+        keypoint["depth_confidence"] = "low"
+        keypoint["fallback_reason"] = "anchor_kind_mismatch"
+        return
+    keypoint["depth_confidence"] = "high"
+
+
 def evaluate_keypoint_anchor_depth(
     record: dict[str, Any],
     *,
@@ -192,6 +212,7 @@ def evaluate_keypoint_anchor_depth(
         )
         if gate is not None:
             keypoint["anchor_consistency_gate"] = gate
+    _mark_depth_confidence(keypoint, anchor=effective_anchor, gate=gate)
     return effective_anchor, keypoint
 
 
@@ -249,6 +270,10 @@ def _summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         str(record.get("rejection_reason") or "unknown")
         for record in keypoint_rejected
     )
+    confidence_counts = Counter(
+        str(record.get("depth_confidence") or "unknown")
+        for record in keypoint_records
+    )
     anchor_counts = Counter(
         str(record.get("selected_anchor", {}).get("kind", "unknown"))
         for record in records
@@ -274,6 +299,10 @@ def _summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         "keypoint_anchor_kinds": [
             {"kind": kind, "count": count}
             for kind, count in anchor_counts.most_common()
+        ],
+        "keypoint_depth_confidences": [
+            {"confidence": confidence, "count": count}
+            for confidence, count in confidence_counts.most_common()
         ],
         "top_rejection_reasons": [
             {"reason": reason, "count": count}
