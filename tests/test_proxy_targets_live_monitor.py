@@ -1,10 +1,12 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MONITOR = ROOT / "tools" / "monitor_proxy_targets_live_stream.py"
+HEALTH_MONITOR = ROOT / "tools" / "validate_proxy_targets_end_to_end_health.py"
 DEPTH_VALIDATOR = ROOT / "tools" / "validate_proxy_targets_depth_confidence_stream.py"
 RUNNER = ROOT / "tools" / "run_proxy_targets_live_monitor.ps1"
 FAKE_PUBLISHER = ROOT / "tools" / "fake_proxy_targets_publisher.py"
@@ -156,6 +158,133 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         self.assertIn("required depth_confidence missing: low", bad_errors)
         self.assertIn("forbidden depth_confidence present: none=1", bad_errors)
         self.assertIn("targets missing depth_confidence: 1", bad_errors)
+
+    def test_end_to_end_health_flags_sample_fallback_despite_raw_stream_ok(self):
+        health = load_module(HEALTH_MONITOR, "validate_proxy_targets_end_to_end_health")
+        raw_status = {
+            "ok": True,
+            "packets": 10,
+            "parsed": 10,
+            "sequence_contiguous": True,
+            "position_changed": True,
+            "target_ids": ["vst_stereo-person-2-3"],
+            "depth_confidences": {"low": 10},
+            "depth_sources": {"bbox_top_center_fallback": 10},
+            "missing_depth_confidence_count": 0,
+            "missing_depth_source_count": 0,
+        }
+        pcmr_status = {
+            "last_command": "proxy_sample",
+            "ws_connected": False,
+            "ws_subscribed": False,
+            "packets": 0,
+            "parsed": 0,
+            "live": 0,
+            "sequence": -1,
+            "card_target_id": "person-7",
+            "card_attach_target_id": "person-7",
+            "proxy_target_ids": ["person-7"],
+            "card_node_position": "0.50 0.25 -1.20",
+            "card_resolved_position": "0.50 0.25 -1.20",
+        }
+        sender_log = "\n".join(
+            [
+                "stereo proxy_targets live publisher listening on ws://127.0.0.1:8766/proxy_targets",
+                "sent stereo seq=20 target=vst_stereo-person-2-3 depth_source=bbox_top_center_fallback depth_confidence=low",
+            ]
+        )
+
+        status = health.evaluate_health(sender_log, raw_status, pcmr_status, min_packets=10)
+
+        self.assertFalse(status["ok"])
+        self.assertIn("STREAM_OK", status["verdicts"])
+        self.assertIn("GODOT_NOT_CONNECTED", status["verdicts"])
+        self.assertIn("SAMPLE_FALLBACK_ACTIVE", status["verdicts"])
+        self.assertIn("LOW_CONFIDENCE_DEPTH_ONLY", status["verdicts"])
+        self.assertIn("PCMR/card is still on proxy_sample/person-7", status["errors"])
+
+    def test_end_to_end_health_passes_when_card_binds_live_stereo_target(self):
+        health = load_module(HEALTH_MONITOR, "validate_proxy_targets_end_to_end_health")
+        raw_status = {
+            "ok": True,
+            "packets": 10,
+            "parsed": 10,
+            "sequence_contiguous": True,
+            "position_changed": True,
+            "target_ids": ["vst_stereo-person-2-3"],
+            "depth_confidences": {"low": 10},
+            "depth_sources": {"bbox_top_center_fallback": 10},
+            "missing_depth_confidence_count": 0,
+            "missing_depth_source_count": 0,
+        }
+        pcmr_status = {
+            "last_command": "proxy_live",
+            "ws_connected": True,
+            "ws_subscribed": True,
+            "packets": 12,
+            "parsed": 12,
+            "live": 12,
+            "sequence": 11,
+            "card_target_id": "vst_stereo-person-2-3",
+            "card_attach_target_id": "vst_stereo-person-2-3",
+            "proxy_target_ids": ["vst_stereo-person-2-3"],
+            "card_node_position": "-0.04 0.11 -0.30",
+            "card_resolved_position": "-0.04 0.11 -0.30",
+        }
+        sender_log = "\n".join(
+            [
+                "stereo proxy_targets live publisher listening on ws://127.0.0.1:8766/proxy_targets",
+                "sent stereo seq=20 target=vst_stereo-person-2-3 depth_source=bbox_top_center_fallback depth_confidence=low",
+            ]
+        )
+
+        status = health.evaluate_health(sender_log, raw_status, pcmr_status, min_packets=10)
+
+        self.assertTrue(status["ok"])
+        self.assertIn("SENDER_READY", status["verdicts"])
+        self.assertIn("STREAM_OK", status["verdicts"])
+        self.assertIn("CARD_BOUND_TO_LIVE_TARGET", status["verdicts"])
+        self.assertIn("LOW_CONFIDENCE_DEPTH_ONLY", status["verdicts"])
+        self.assertEqual(status["errors"], [])
+
+    def test_wait_for_health_uses_latest_pcmr_status_until_timeout(self):
+        health = load_module(HEALTH_MONITOR, "validate_proxy_targets_end_to_end_health")
+        raw_status = {
+            "ok": True,
+            "packets": 10,
+            "parsed": 10,
+            "sequence_contiguous": True,
+            "position_changed": True,
+            "target_ids": ["vst_stereo-person-2-3"],
+            "depth_confidences": {"low": 10},
+            "depth_sources": {"bbox_top_center_fallback": 10},
+            "missing_depth_confidence_count": 0,
+            "missing_depth_source_count": 0,
+        }
+        pcmr_status = {
+            "last_command": "proxy_live",
+            "ws_connected": True,
+            "ws_subscribed": True,
+            "packets": 12,
+            "parsed": 12,
+            "live": 12,
+            "card_target_id": "vst_stereo-person-2-3",
+            "card_attach_target_id": "vst_stereo-person-2-3",
+            "proxy_target_ids": ["vst_stereo-person-2-3"],
+            "card_node_position": "-0.04 0.11 -0.30",
+            "card_resolved_position": "-0.04 0.11 -0.30",
+        }
+        sender_log = (
+            "stereo proxy_targets live publisher listening on ws://127.0.0.1:8766/proxy_targets\n"
+            "sent stereo seq=20 target=vst_stereo-person-2-3 depth_source=bbox_top_center_fallback depth_confidence=low\n"
+        )
+        with mock.patch.object(Path, "exists", return_value=True), mock.patch.object(Path, "read_text", return_value=sender_log), mock.patch.object(
+            health, "load_json", side_effect=[raw_status, pcmr_status]
+        ):
+            status = health.wait_for_health(Path("sender.log"), Path("raw.json"), Path("pcmr.json"), min_packets=10, timeout_s=0.1, interval_s=0.01)
+
+        self.assertTrue(status["ok"])
+        self.assertIn("CARD_BOUND_TO_LIVE_TARGET", status["verdicts"])
 
     def test_classifies_connection_refused_with_actionable_hint(self):
         monitor = load_module(MONITOR, "monitor_proxy_targets_live_stream")

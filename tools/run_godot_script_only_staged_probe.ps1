@@ -5,6 +5,7 @@ param(
     [int]$StartPort = 8780,
     [string]$PublisherScript = "",
     [string]$PublisherInput = "",
+    [switch]$ExternalPublisher,
     [ValidateSet("all", "consumer_load", "consumer_instance", "adapter_instance", "apply")]
     [string]$Stage = "all",
     [double]$TimeoutSeconds = 5.0,
@@ -130,9 +131,13 @@ $OverallExitCode = 0
 Write-Host "SmartXR Godot script-only staged WebSocket harness"
 Write-Host "Work root: $WorkRoot"
 Write-Host "Stages: $($Stages -join ', ')"
-Write-Host "Publisher script: $Publisher"
-if (-not [string]::IsNullOrWhiteSpace($PublisherInputPath)) {
-    Write-Host "Publisher input: $PublisherInputPath"
+if ($ExternalPublisher) {
+    Write-Host "Publisher script: external/already running"
+} else {
+    Write-Host "Publisher script: $Publisher"
+    if (-not [string]::IsNullOrWhiteSpace($PublisherInputPath)) {
+        Write-Host "Publisher input: $PublisherInputPath"
+    }
 }
 Write-Host ""
 
@@ -158,21 +163,25 @@ try {
         Write-Host "  WebSocket: $WsUrl"
 
         try {
-            $PublisherArgs = @($Publisher, "--host", $HostName, "--port", [string]$Port, "--hz", "20", "--log-every", "5")
-            if (-not [string]::IsNullOrWhiteSpace($PublisherInputPath)) {
-                $PublisherArgs += @("--input", $PublisherInputPath)
-            }
-            $PublisherProcess = Start-Process `
-                -FilePath $PythonExe `
-                -ArgumentList $PublisherArgs `
-                -WorkingDirectory $RepoRoot `
-                -WindowStyle Hidden `
-                -RedirectStandardOutput $PublisherLog `
-                -RedirectStandardError $PublisherErr `
-                -PassThru
+            if (-not $ExternalPublisher) {
+                $PublisherArgs = @($Publisher, "--host", $HostName, "--port", [string]$Port, "--hz", "20", "--log-every", "5")
+                if (-not [string]::IsNullOrWhiteSpace($PublisherInputPath)) {
+                    $PublisherArgs += @("--input", $PublisherInputPath)
+                }
+                $PublisherProcess = Start-Process `
+                    -FilePath $PythonExe `
+                    -ArgumentList $PublisherArgs `
+                    -WorkingDirectory $RepoRoot `
+                    -WindowStyle Hidden `
+                    -RedirectStandardOutput $PublisherLog `
+                    -RedirectStandardError $PublisherErr `
+                    -PassThru
 
-            if (-not (Wait-ForLogText -Path $PublisherLog -Text "proxy_targets" -TimeoutSeconds 5.0)) {
-                Write-Host "  Publisher did not report ready before timeout."
+                if (-not (Wait-ForLogText -Path $PublisherLog -Text "proxy_targets" -TimeoutSeconds 5.0)) {
+                    Write-Host "  Publisher did not report ready before timeout."
+                }
+            } else {
+                Write-Host "  Publisher: external/already running"
             }
 
             $env:PROXY_TARGETS_WS_URL = $WsUrl
