@@ -164,7 +164,12 @@ def format_stereo_diagnostics(diagnostics: dict[str, Any]) -> str:
     )
 
 
-def _read_one_eye(reader: Any, pending: dict[int, Any], seen: set[int]) -> int:
+def _read_one_eye(
+    reader: Any,
+    pending: dict[int, Any],
+    seen: set[int],
+    received_at_ms: dict[int, float] | None = None,
+) -> int:
     ok, frame_id, frame = reader.read_latest()
     if not ok:
         return 1
@@ -174,7 +179,79 @@ def _read_one_eye(reader: Any, pending: dict[int, Any], seen: set[int]) -> int:
     if frame_key not in seen:
         seen.add(frame_key)
         pending[frame_key] = frame
+        if received_at_ms is not None:
+            received_at_ms[frame_key] = time.monotonic() * 1000.0
     return 0
+
+
+def _numeric_attr_or_key(value: Any, names: tuple[str, ...]) -> float | None:
+    for name in names:
+        source = None
+        if isinstance(value, dict):
+            source = value.get(name)
+        elif hasattr(value, name):
+            source = getattr(value, name)
+        try:
+            if source is not None:
+                return float(source)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _frame_timestamp_us(frame: Any) -> int | None:
+    timestamp_us = _numeric_attr_or_key(
+        frame,
+        ("timestamp_us", "capture_timestamp_us", "ts_us", "timestampUsec", "timestamp_usec"),
+    )
+    if timestamp_us is not None:
+        return int(round(timestamp_us))
+    timestamp_ms = _numeric_attr_or_key(
+        frame,
+        ("timestamp_ms", "capture_timestamp_ms", "ts_ms", "timestampMillis"),
+    )
+    if timestamp_ms is not None:
+        return int(round(timestamp_ms * 1000.0))
+    return None
+
+
+def _tracking_latency_ms(result: Any) -> float | None:
+    return _numeric_attr_or_key(result, ("frame_latency_ms", "latency_ms", "processing_latency_ms"))
+
+
+def _pair_temporal_diagnostics(
+    *,
+    left_frame_id: int,
+    right_frame_id: int,
+    left_frame: Any,
+    right_frame: Any,
+    left_received_at_ms: float | None,
+    right_received_at_ms: float | None,
+    left_tracking_result: Any,
+    right_tracking_result: Any,
+) -> dict[str, Any]:
+    left_timestamp_us = _frame_timestamp_us(left_frame)
+    right_timestamp_us = _frame_timestamp_us(right_frame)
+    temporal: dict[str, Any] = {
+        "left_frame_id": int(left_frame_id),
+        "right_frame_id": int(right_frame_id),
+        "frame_id_delta": int(left_frame_id) - int(right_frame_id),
+        "left_capture_timestamp_us": left_timestamp_us,
+        "right_capture_timestamp_us": right_timestamp_us,
+        "left_receive_monotonic_ms": left_received_at_ms,
+        "right_receive_monotonic_ms": right_received_at_ms,
+        "left_tracker_latency_ms": _tracking_latency_ms(left_tracking_result),
+        "right_tracker_latency_ms": _tracking_latency_ms(right_tracking_result),
+    }
+    if left_timestamp_us is not None and right_timestamp_us is not None:
+        temporal["pair_capture_delta_ms"] = abs(float(left_timestamp_us) - float(right_timestamp_us)) / 1000.0
+    else:
+        temporal["pair_capture_delta_ms"] = None
+    if left_received_at_ms is not None and right_received_at_ms is not None:
+        temporal["pair_receive_delta_ms"] = abs(float(left_received_at_ms) - float(right_received_at_ms))
+    else:
+        temporal["pair_receive_delta_ms"] = None
+    return temporal
 
 
 def _bbox_dict_from_xyxy(bbox_xyxy: list[float] | tuple[float, float, float, float]) -> dict[str, float]:
@@ -317,15 +394,33 @@ def build_depth_trace_event(
     }
     if delivered_clients is not None:
         event["delivered_clients"] = delivered_clients
+    temporal = diagnostics.get("temporal")
+    if isinstance(temporal, dict):
+        event["temporal"] = dict(temporal)
+        for key in (
+            "left_capture_timestamp_us",
+            "right_capture_timestamp_us",
+            "left_receive_monotonic_ms",
+            "right_receive_monotonic_ms",
+            "pair_capture_delta_ms",
+            "pair_receive_delta_ms",
+            "frame_id_delta",
+            "left_tracker_latency_ms",
+            "right_tracker_latency_ms",
+        ):
+            if key in temporal:
+                event[key] = temporal[key]
 
     if message is None or not message.get("targets"):
         frame_id = diagnostics.get("last_pair_frame_id")
+        left_frame_id = temporal.get("left_frame_id") if isinstance(temporal, dict) else frame_id
+        right_frame_id = temporal.get("right_frame_id") if isinstance(temporal, dict) else frame_id
         event.update(
             {
                 "event": "rejected",
                 "sequence": sequence,
-                "left_frame_id": frame_id,
-                "right_frame_id": frame_id,
+                "left_frame_id": left_frame_id,
+                "right_frame_id": right_frame_id,
             }
         )
         return event
@@ -409,12 +504,14 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
     diagnostics = _empty_diagnostics("no_pair")
     pending_left: dict[int, Any] = {}
     pending_right: dict[int, Any] = {}
+    pending_left_received_at_ms: dict[int, float] = {}
+    pending_right_received_at_ms: dict[int, float] = {}
     seen_left: set[int] = set()
     seen_right: set[int] = set()
     for _ in range(max(1, int(attempts if attempts is not None else 120))):
         diagnostics["read_attempts"] += 1
-        _read_one_eye(left_reader, pending_left, seen_left)
-        _read_one_eye(right_reader, pending_right, seen_right)
+        _read_one_eye(left_reader, pending_left, seen_left, pending_left_received_at_ms)
+        _read_one_eye(right_reader, pending_right, seen_right, pending_right_received_at_ms)
         diagnostics["frames_seen_left"] = len(seen_left)
         diagnostics["frames_seen_right"] = len(seen_right)
         diagnostics["left_pending"] = len(pending_left)
@@ -425,12 +522,26 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
         for frame_id in sorted(set(pending_left).intersection(pending_right)):
             left_frame = pending_left.pop(frame_id)
             right_frame = pending_right.pop(frame_id)
+            left_received_at_ms = pending_left_received_at_ms.pop(frame_id, None)
+            right_received_at_ms = pending_right_received_at_ms.pop(frame_id, None)
+            left_tracking_result = left_tracker.process_frame(left_frame)
+            right_tracking_result = right_tracker.process_frame(right_frame)
+            diagnostics["temporal"] = _pair_temporal_diagnostics(
+                left_frame_id=frame_id,
+                right_frame_id=frame_id,
+                left_frame=left_frame,
+                right_frame=right_frame,
+                left_received_at_ms=left_received_at_ms,
+                right_received_at_ms=right_received_at_ms,
+                left_tracking_result=left_tracking_result,
+                right_tracking_result=right_tracking_result,
+            )
             record = build_stereo_bbox_pair_record(
                 frame_id=frame_id,
                 left_frame=left_frame,
                 right_frame=right_frame,
-                left_tracking_result=left_tracker.process_frame(left_frame),
-                right_tracking_result=right_tracker.process_frame(right_frame),
+                left_tracking_result=left_tracking_result,
+                right_tracking_result=right_tracking_result,
                 timestamp_ms=int(time.time() * 1000),
                 left_source_stats=diagnostics["left_source_stats"],
                 right_source_stats=diagnostics["right_source_stats"],

@@ -38,8 +38,10 @@ def live_trace_row(
     raw_left_track_id: int = 1,
     raw_right_track_id: int = 2,
     depth_confidence: str = "low",
+    pair_capture_delta_ms: float | None = None,
+    pair_receive_delta_ms: float | None = None,
 ) -> dict:
-    return {
+    row = {
         "event": "accepted",
         "sequence": sequence,
         "target_id": target_id,
@@ -56,6 +58,11 @@ def live_trace_row(
             "right_anchor_px": [400.0 - disparity_px, 202.0],
         },
     }
+    if pair_capture_delta_ms is not None:
+        row["pair_capture_delta_ms"] = pair_capture_delta_ms
+    if pair_receive_delta_ms is not None:
+        row["pair_receive_delta_ms"] = pair_receive_delta_ms
+    return row
 
 
 def per_frame_record(frame_id: int, near_left: list[float], near_right: list[float], far_left: list[float], far_right: list[float]) -> dict:
@@ -102,9 +109,9 @@ class AnalyzeDepthStabilityTests(unittest.TestCase):
             trace_path,
             [
                 {"event": "rejected", "sequence": 0, "reason": "no_target"},
-                live_trace_row(1, 0.8, 25.0),
-                live_trace_row(2, 4.2, 5.0),
-                live_trace_row(3, 1.0, 21.0, raw_right_track_id=4),
+                live_trace_row(1, 0.8, 25.0, pair_capture_delta_ms=1.0, pair_receive_delta_ms=2.0),
+                live_trace_row(2, 4.2, 5.0, pair_capture_delta_ms=18.0, pair_receive_delta_ms=22.0),
+                live_trace_row(3, 1.0, 21.0, raw_right_track_id=4, pair_capture_delta_ms=4.0, pair_receive_delta_ms=5.0),
             ],
         )
 
@@ -128,6 +135,9 @@ class AnalyzeDepthStabilityTests(unittest.TestCase):
         self.assertEqual(live["low_confidence_ratio"], 1.0)
         self.assertEqual(live["top_depth_jumps"][0]["from"]["disparity_px"], 25.0)
         self.assertEqual(live["top_depth_jumps"][0]["to"]["disparity_px"], 5.0)
+        self.assertEqual(live["temporal"]["pair_capture_delta_ms"]["max"], 18.0)
+        self.assertEqual(live["temporal"]["pair_receive_delta_ms"]["p50"], 5.0)
+        self.assertEqual(live["temporal"]["jump_gt_0.5m_by_capture_delta_bucket"], {"lt_5ms": 1, "gte_10ms": 1})
 
     def test_replays_recorded_per_frame_candidates_through_active_target_logic(self):
         analyzer = load_module(TOOL, "analyze_depth_stability")
@@ -168,6 +178,50 @@ class AnalyzeDepthStabilityTests(unittest.TestCase):
         self.assertEqual(recorded["active_replay"]["raw_track_switch_count"], 0)
         self.assertEqual(recorded["active_replay"]["switch_reasons"], {"initial": 1, "active_continuity": 1})
         self.assertEqual(recorded["active_replay"]["raw_track_pairs"], ["9-10"])
+
+    def test_shift_replay_pairs_recorded_left_with_shifted_right_frames(self):
+        analyzer = load_module(TOOL, "analyze_depth_stability")
+        per_frame_path = self.tmp_path / "per_frame.jsonl"
+        write_jsonl(
+            per_frame_path,
+            [
+                per_frame_record(
+                    10,
+                    [640, 240, 720, 520],
+                    [608, 240, 688, 520],
+                    [420, 250, 500, 530],
+                    [388, 250, 468, 530],
+                ),
+                per_frame_record(
+                    11,
+                    [667, 240, 747, 520],
+                    [635, 240, 715, 520],
+                    [420, 250, 500, 530],
+                    [388, 250, 468, 530],
+                ),
+                per_frame_record(
+                    12,
+                    [640, 240, 720, 520],
+                    [608, 240, 688, 520],
+                    [420, 250, 500, 530],
+                    [388, 250, 468, 530],
+                ),
+            ],
+        )
+
+        report = analyzer.analyze_depth_stability(
+            inputs=[analyzer.AnalysisInput(name="recorded", path=per_frame_path, kind="per_frame")],
+            out_dir=self.tmp_path / "out",
+            top_n=5,
+            shift_window=1,
+        )
+
+        shifts = report["datasets"]["recorded"]["shift_replay"]["shifts"]
+        self.assertEqual(shifts["0"]["accepted_count"], 3)
+        self.assertEqual(shifts["1"]["accepted_count"], 2)
+        self.assertEqual(shifts["1"]["shift_frames"], 1)
+        self.assertGreater(shifts["1"]["jump_counts"]["gt_0.5m"], shifts["0"]["jump_counts"]["gt_0.5m"])
+        self.assertEqual(shifts["1"]["temporal_shift"]["right_frame_offset"], 1)
 
     def test_cli_writes_depth_stability_report(self):
         trace_path = self.tmp_path / "depth_estimation_trace.jsonl"
