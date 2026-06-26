@@ -105,8 +105,13 @@ def analyze_messages(messages: list[dict[str, Any]], min_packets: int) -> dict[s
     errors: list[str] = []
     sequences: list[int] = []
     target_ids: set[str] = set()
+    depth_confidences: dict[str, int] = {}
+    depth_sources: dict[str, int] = {}
     first_positions: dict[str, list[float]] = {}
     position_changed = False
+    target_count = 0
+    missing_depth_confidence_count = 0
+    missing_depth_source_count = 0
 
     for index, message in enumerate(messages):
         schema_errors = validate_message(message)
@@ -122,7 +127,18 @@ def analyze_messages(messages: list[dict[str, Any]], min_packets: int) -> dict[s
             target_id = target.get("target_id")
             if not isinstance(target_id, str) or not target_id:
                 continue
+            target_count += 1
             target_ids.add(target_id)
+            depth_confidence = target.get("depth_confidence")
+            if isinstance(depth_confidence, str) and depth_confidence:
+                depth_confidences[depth_confidence] = depth_confidences.get(depth_confidence, 0) + 1
+            else:
+                missing_depth_confidence_count += 1
+            depth_source = target.get("depth_source")
+            if isinstance(depth_source, str) and depth_source:
+                depth_sources[depth_source] = depth_sources.get(depth_source, 0) + 1
+            else:
+                missing_depth_source_count += 1
             position = target.get("transform", {}).get("position") if isinstance(target.get("transform"), dict) else None
             if not isinstance(position, list):
                 continue
@@ -151,6 +167,11 @@ def analyze_messages(messages: list[dict[str, Any]], min_packets: int) -> dict[s
         "sequence_contiguous": sequence_contiguous,
         "position_changed": position_changed,
         "target_ids": sorted(target_ids),
+        "target_count": target_count,
+        "depth_confidences": dict(sorted(depth_confidences.items())),
+        "depth_sources": dict(sorted(depth_sources.items())),
+        "missing_depth_confidence_count": missing_depth_confidence_count,
+        "missing_depth_source_count": missing_depth_source_count,
         "errors": errors,
     }
 

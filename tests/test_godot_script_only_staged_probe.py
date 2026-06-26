@@ -30,6 +30,8 @@ class GodotScriptOnlyStagedProbeTests(unittest.TestCase):
         self.assertIn('"packets": _packets', source)
         self.assertIn('"parsed": _parsed', source)
         self.assertIn('"live": _live', source)
+        self.assertIn('"depth_source": _last_depth_source', source)
+        self.assertIn('"depth_confidence": _last_depth_confidence', source)
 
         self.assertNotIn("OpenXR", source)
         self.assertNotIn("XRServer", source)

@@ -42,6 +42,8 @@ var _packet_bytes := 0
 var _packet_preview := "-"
 var _message_type := "-"
 var _error := "-"
+var _last_depth_source := "-"
+var _last_depth_confidence := "-"
 
 
 func _initialize() -> void:
@@ -49,6 +51,7 @@ func _initialize() -> void:
 	_require = _env_string("PROXY_TARGETS_REQUIRE", _require)
 	_status_res = _env_string("PROXY_TARGETS_STATUS_RES", _status_res)
 	_timeout_seconds = _env_float("PROXY_TARGETS_TIMEOUT_SEC", _timeout_seconds)
+	_write_status()
 
 	root.add_child(_harness_root)
 	_consumer_script = _load_script_from_env("PROXY_TARGETS_CONSUMER_SCRIPT", "res://scripts/proxy_targets_consumer.gd")
@@ -71,6 +74,7 @@ func _initialize() -> void:
 
 func _process(delta: float) -> bool:
 	_elapsed += delta
+	_connect_ws()
 	_ws.poll()
 	_poll_ws_packets()
 	_write_status()
@@ -123,6 +127,7 @@ func _apply_payload(payload: String) -> void:
 	_message_type = str(parsed.get("type", "-"))
 	_sequence = int(parsed.get("sequence", _sequence))
 	_error = "-"
+	_update_depth_status(parsed)
 
 	if _adapter.apply_proxy_targets_message(parsed):
 		_live += 1
@@ -155,6 +160,8 @@ func _write_status() -> void:
 		"packet_bytes": _packet_bytes,
 		"packet_preview": _packet_preview,
 		"message_type": _message_type,
+		"depth_source": _last_depth_source,
+		"depth_confidence": _last_depth_confidence,
 		"error": _error,
 		"registered_targets": _card_wrapper.registered_targets.size(),
 		"attachments": _card_wrapper.attachments.size()
@@ -162,6 +169,18 @@ func _write_status() -> void:
 	var file := FileAccess.open(_status_res, FileAccess.WRITE)
 	if file:
 		file.store_string(JSON.stringify(status, "  "))
+
+
+func _update_depth_status(message: Dictionary) -> void:
+	var targets = message.get("targets", [])
+	if typeof(targets) != TYPE_ARRAY:
+		return
+	for target in targets:
+		if typeof(target) != TYPE_DICTIONARY:
+			continue
+		_last_depth_source = str(target.get("depth_source", "-"))
+		_last_depth_confidence = str(target.get("depth_confidence", "-"))
+		return
 
 
 func _env_string(name: String, fallback: String) -> String:

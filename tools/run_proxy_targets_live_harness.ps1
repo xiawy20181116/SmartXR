@@ -5,7 +5,8 @@ param(
     [string]$WsUrl = "ws://127.0.0.1:8766/proxy_targets",
     [double]$TimeoutSeconds = 10.0,
     [switch]$PrepareOnly,
-    [switch]$ScriptOnly
+    [switch]$ScriptOnly,
+    [string]$StatusFile = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -119,11 +120,25 @@ if (-not (Test-Path -LiteralPath (Join-Path $SourceProjectDir "project.godot")))
 $OldWsUrl = $env:PROXY_TARGETS_WS_URL
 $OldRequire = $env:PROXY_TARGETS_REQUIRE
 $OldTimeout = $env:PROXY_TARGETS_TIMEOUT_SEC
+$OldStatusRes = $env:PROXY_TARGETS_STATUS_RES
 $OldConsumerScript = $env:PROXY_TARGETS_CONSUMER_SCRIPT
 $OldCardAdapterScript = $env:PROXY_TARGETS_CARD_ADAPTER_SCRIPT
 $ExitCode = 0
+$StatusFullPath = ""
+
+if (-not [string]::IsNullOrWhiteSpace($StatusFile)) {
+    $StatusFullPath = [System.IO.Path]::GetFullPath($StatusFile)
+    Assert-PathUnderRepo -Path $StatusFullPath -RepoRoot $RepoRoot
+    $StatusParent = Split-Path -Parent $StatusFullPath
+    if (-not [string]::IsNullOrWhiteSpace($StatusParent)) {
+        New-Item -ItemType Directory -Force -Path $StatusParent | Out-Null
+    }
+    Remove-Item -LiteralPath $StatusFullPath -Force -ErrorAction SilentlyContinue
+}
 
 $ProjectDir = Build-HarnessProject
+$GodotLogFile = Join-Path -Path $ProjectDir -ChildPath "godot_harness.log"
+$ProjectHarnessScriptPath = Join-Path -Path $ProjectDir -ChildPath "tests\proxy_targets_live_harness.gd"
 Ensure-GodotUserLogsDir
 
 Write-Host "SmartXR proxy_targets non-XR live harness"
@@ -132,6 +147,10 @@ Write-Host "Stripped project: $ProjectDir"
 Write-Host "Script-only: $ScriptOnly"
 Write-Host "WebSocket: $WsUrl"
 Write-Host "Require: $Require"
+Write-Host "Godot log: $GodotLogFile"
+if (-not [string]::IsNullOrWhiteSpace($StatusFullPath)) {
+    Write-Host "Status file: $StatusFullPath"
+}
 
 if ($PrepareOnly) {
     exit 0
@@ -141,13 +160,16 @@ try {
     $env:PROXY_TARGETS_WS_URL = $WsUrl
     $env:PROXY_TARGETS_REQUIRE = $Require
     $env:PROXY_TARGETS_TIMEOUT_SEC = [string]$TimeoutSeconds
+    if (-not [string]::IsNullOrWhiteSpace($StatusFullPath)) {
+        $env:PROXY_TARGETS_STATUS_RES = $StatusFullPath.Replace("\", "/")
+    }
     $env:PROXY_TARGETS_CONSUMER_SCRIPT = ([System.IO.Path]::GetFullPath($ConsumerScriptPath)).Replace("\", "/")
     $env:PROXY_TARGETS_CARD_ADAPTER_SCRIPT = ([System.IO.Path]::GetFullPath($CardAdapterScriptPath)).Replace("\", "/")
 
     if ($ScriptOnly) {
-        & $GodotExe --headless --script $ScriptPath
+        & $GodotExe --headless --log-file $GodotLogFile --script $ScriptPath
     } else {
-        & $GodotExe --headless --path $ProjectDir --script $HarnessScript
+        & $GodotExe --headless --log-file $GodotLogFile --path $ProjectDir --script $ProjectHarnessScriptPath
     }
     $ExitCode = $LASTEXITCODE
 } finally {
@@ -167,6 +189,12 @@ try {
         Remove-Item Env:\PROXY_TARGETS_TIMEOUT_SEC -ErrorAction SilentlyContinue
     } else {
         $env:PROXY_TARGETS_TIMEOUT_SEC = $OldTimeout
+    }
+
+    if ($null -eq $OldStatusRes) {
+        Remove-Item Env:\PROXY_TARGETS_STATUS_RES -ErrorAction SilentlyContinue
+    } else {
+        $env:PROXY_TARGETS_STATUS_RES = $OldStatusRes
     }
 
     if ($null -eq $OldConsumerScript) {
