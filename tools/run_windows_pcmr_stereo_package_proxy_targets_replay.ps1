@@ -241,7 +241,7 @@ if ($DemoOnlyLiteral) {
     & $GxrExtensionSwitchLiteral -Mode disable -ProjectDir $ProjectDirLiteral
     `$env:PROXY_TARGETS_WS_URL = $WsUrlLiteral
     `$env:SMARTXR_STATUS_HUD_VISIBLE = "1"
-    & $GodotExeLiteral --path $ProjectDirLiteral *>&1 | Tee-Object -FilePath $ReceiverLogLiteral -Append
+    & $GodotExeLiteral --xr-mode off --path $ProjectDirLiteral *>&1 | Tee-Object -FilePath $ReceiverLogLiteral -Append
     `$ExitCode = `$LASTEXITCODE
   } finally {
     if (`$null -eq `$OldProxyTargetsWsUrl) {
