@@ -31,6 +31,7 @@ class GodotVSTDebugUITests(unittest.TestCase):
             "func build_raw_debug_panel(camera: Node3D) -> void:",
             "func update_world_bbox_frame(anchor_position: Vector3, anchor_depth_m: float, angular_size_deg: Vector2, orient_to_camera: Callable) -> void:",
             "func update_raw_image(right_img: Image, image_size: Vector2) -> void:",
+            "func update_raw_frame_metadata(frame_id: int, exposure_timestamp: int) -> void:",
             "func update_raw_bbox_overlay(boxes: PackedFloat32Array, image_size: Vector2) -> void:",
             "func set_world_bbox_visible(visible: bool) -> void:",
             "func set_raw_bbox_visible(visible: bool) -> void:",
@@ -55,6 +56,7 @@ class GodotVSTDebugUITests(unittest.TestCase):
         self.assertIn("_vst_debug_ui.build_raw_debug_panel(_camera)", card)
         self.assertIn("_vst_debug_ui.build_world_bbox_frame(self)", card)
         self.assertIn("_vst_debug_ui.update_raw_image(right_img, image_size)", card)
+        self.assertIn("_vst_debug_ui.update_raw_frame_metadata(frames, exposure_timestamp)", card)
         self.assertIn("_vst_debug_ui.update_raw_bbox_overlay(boxes, image_size)", card)
         self.assertIn("_vst_debug_ui.update_world_bbox_frame(", card)
         self.assertIn("func update_vst_target(target_id: String, transform: Transform3D, confidence: float, timestamp_ms: float) -> bool:", card)
@@ -85,6 +87,7 @@ class GodotVSTDebugUITests(unittest.TestCase):
         self.assertIn("world_bbox_frame_updates", probe)
         self.assertIn("raw_bbox_overlay_updates", probe)
         self.assertIn("raw_image_texture_updates", probe)
+        self.assertIn("raw_metadata_label_updates", probe)
         self.assertIn('"--script", $ProbeScript', runner)
         self.assertNotIn('"--path"', runner)
         self.assertIn("SMARTXR_VST_DEBUG_UI_SCRIPT", runner)

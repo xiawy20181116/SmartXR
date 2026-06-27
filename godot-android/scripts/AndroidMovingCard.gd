@@ -907,10 +907,11 @@ func _poll_vst_bbox() -> void:
 	_vst_capture.poll()
 
 
-func _on_vst_raw_right_image(right_img: Image, image_size: Vector2, frames: int) -> void:
+func _on_vst_raw_right_image(right_img: Image, image_size: Vector2, frames: int, exposure_timestamp: int) -> void:
 	_vst_right_image_size = image_size
 	_vst_right_frames = frames
 	_vst_debug_ui.update_raw_image(right_img, image_size)
+	_vst_debug_ui.update_raw_frame_metadata(frames, exposure_timestamp)
 
 
 func _on_vst_tracker_boxes(boxes: PackedFloat32Array, image_size: Vector2) -> void:

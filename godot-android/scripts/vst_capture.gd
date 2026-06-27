@@ -47,6 +47,7 @@ var _init_ok := false
 var _last_error := "not initialized"
 var _right_image_size := Vector2.ZERO
 var _right_frames := 0
+var _right_exposure_timestamp := -1
 var _first_box := PackedFloat32Array()
 var _box_count := 0
 var _tracker_latency_ms := -1.0
@@ -127,8 +128,9 @@ func poll() -> Dictionary:
 		if right_img != null:
 			_right_image_size = Vector2(right_img.get_width(), right_img.get_height())
 			_right_frames += 1
+			_right_exposure_timestamp = _read_right_exposure_timestamp()
 			if _on_raw_image.is_valid():
-				_on_raw_image.call(right_img, _right_image_size, _right_frames)
+				_on_raw_image.call(right_img, _right_image_size, _right_frames, _right_exposure_timestamp)
 	if _capture.has_method(&"get_right_tracker_boxes"):
 		var boxes: PackedFloat32Array = _capture.get_right_tracker_boxes()
 		_box_count = boxes.size() / 5
@@ -158,6 +160,7 @@ func status_snapshot() -> Dictionary:
 		"class_registered": _class_registered,
 		"init_ok": _init_ok,
 		"frames": _right_frames,
+		"exposure_timestamp": _right_exposure_timestamp,
 		"box_count": _box_count,
 		"latency_ms": _tracker_latency_ms,
 		"image_size": _right_image_size,
@@ -191,6 +194,20 @@ func right_eye_to_head_matrix() -> PackedFloat64Array:
 
 func uses_eye_to_head_anchor() -> bool:
 	return _uses_eye_to_head_anchor
+
+
+func _read_right_exposure_timestamp() -> int:
+	if _capture == null:
+		return -1
+	if _capture.has_method(&"get_right_exposure_timestamp"):
+		return int(_capture.get_right_exposure_timestamp())
+	if _capture.has_method(&"get_right_exposure_timestamp_us"):
+		return int(_capture.get_right_exposure_timestamp_us())
+	if _capture.has_method(&"get_right_frame_metadata"):
+		var metadata = _capture.get_right_frame_metadata()
+		if typeof(metadata) == TYPE_DICTIONARY:
+			return int(metadata.get("exposure_timestamp", metadata.get("exposure_timestamp_us", -1)))
+	return -1
 
 
 func anchor_from_bbox(center_px: Vector2, size_px: Vector2, image_size: Vector2, depth_m: float) -> Dictionary:
