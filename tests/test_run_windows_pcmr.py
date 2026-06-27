@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "tools" / "run_windows_pcmr.ps1"
 LIVE_RUNNER = ROOT / "tools" / "run_windows_pcmr_proxy_targets_live.ps1"
 STEREO_LIVE_RUNNER = ROOT / "tools" / "run_windows_pcmr_stereo_proxy_targets_live.ps1"
+STEREO_PACKAGE_REPLAY_RUNNER = ROOT / "tools" / "run_windows_pcmr_stereo_package_proxy_targets_replay.ps1"
 VISUAL_RUNNER = ROOT / "tools" / "run_windows_pcmr_overlay_visual_check.ps1"
 VISUAL_DOC = ROOT / "docs" / "pcmr_overlay_visual_check.md"
 
@@ -188,6 +189,25 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("Raw stream monitor failed; continuing to end-to-end health verdict.", source)
         self.assertIn("if (`$HealthExitCode -ne 0) {", source)
         self.assertIn("if (`$RawMonitorFailed) {", source)
+
+    def test_stereo_package_replay_runner_launches_sender_receiver_monitor_and_diagnostics(self):
+        self.assertTrue(STEREO_PACKAGE_REPLAY_RUNNER.exists())
+        source = STEREO_PACKAGE_REPLAY_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("[string]$PackageDir", source)
+        self.assertIn("antman_vst_stereo_package_proxy_targets_live_publisher.py", source)
+        self.assertIn('"--package-dir", $PackageDirLiteral', source)
+        self.assertIn('"--replay-timing", $ReplayTiming', source)
+        self.assertIn('"--source-hz", "$SourceHz"', source)
+        self.assertIn("depth_estimation_trace.jsonl", source)
+        self.assertIn("live_run_diagnostics.json", source)
+        self.assertIn("run_windows_pcmr.ps1", source)
+        self.assertIn("run_proxy_targets_live_monitor.ps1", source)
+        self.assertIn("analyze_live_run_diagnostics.py", source)
+        self.assertIn('Open-RunnerTab -WindowName $WindowName -Title "SmartXR package replay sender"', source)
+        self.assertIn('Open-RunnerTab -WindowName $WindowName -Title "SmartXR PCMR receiver"', source)
+        self.assertIn('Open-RunnerTab -WindowName $WindowName -Title "SmartXR proxy_targets monitor"', source)
+        self.assertIn("package proxy_targets live replay publisher listening", source)
 
     def test_overlay_visual_check_runner_holds_godot_open_for_manual_inspection(self):
         self.assertTrue(VISUAL_RUNNER.exists())
