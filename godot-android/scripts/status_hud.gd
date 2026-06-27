@@ -272,14 +272,14 @@ func _source_coordinate_summary(source_coordinate: Dictionary) -> String:
 	]
 
 
-func _format_vec3(value: Vector3) -> String:
-	return "%.2f %.2f %.2f" % [value.x, value.y, value.z]
+func _format_vec3(value) -> String:
+	if value is Vector3:
+		return "%.2f %.2f %.2f" % [value.x, value.y, value.z]
+	return "n/a"
 
 
 func _format_vec3_or_na(value) -> String:
-	if value is Vector3:
-		return _format_vec3(value)
-	return "n/a"
+	return _format_vec3(value)
 
 
 func _truthy(value) -> bool:
