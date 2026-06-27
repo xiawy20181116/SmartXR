@@ -180,10 +180,12 @@ def _normalize_event(row: dict[str, Any], index: int) -> dict[str, Any]:
         "index": index,
         "event": row.get("event", "accepted"),
         "sequence": row.get("sequence"),
+        "timestamp_ms": _float_or_none(row.get("timestamp_ms")),
         "reason": row.get("reason") or row.get("switch_reason"),
         "non_publish_reason": row.get("non_publish_reason"),
         "non_published_frames": row.get("non_published_frames") if isinstance(row.get("non_published_frames"), list) else [],
         "stage_timing_ms": row.get("stage_timing_ms") if isinstance(row.get("stage_timing_ms"), dict) else {},
+        "freshness": row.get("freshness") if isinstance(row.get("freshness"), dict) else {},
         "target_id": row.get("target_id"),
         "active_target_id": row.get("active_target_id"),
         "left_frame_id": left_frame_id,
@@ -227,10 +229,12 @@ def _context_item(event: dict[str, Any], pcmr_status: dict[str, Any]) -> dict[st
     return {
         "event": event.get("event"),
         "sequence": event.get("sequence"),
+        "timestamp_ms": event.get("timestamp_ms"),
         "reason": event.get("reason"),
         "non_publish_reason": event.get("non_publish_reason"),
         "non_published_frames": event.get("non_published_frames", []),
         "stage_timing_ms": event.get("stage_timing_ms"),
+        "freshness": event.get("freshness"),
         "target_id": event.get("target_id"),
         "active_target_id": event.get("active_target_id"),
         "left_frame_id": event.get("left_frame_id"),
@@ -323,6 +327,11 @@ def _trace_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             if (event.get("non_publish_reason") or event.get("reason")) is not None
         ),
         "non_published_frame_reasons": _counter_dict(non_published_frame_reasons),
+        "freshness_states": _counter_dict(
+            event.get("freshness", {}).get("state")
+            for event in accepted
+            if isinstance(event.get("freshness"), dict) and event.get("freshness", {}).get("state") is not None
+        ),
         "stage_timing_ms": _stage_timing_summary(events),
     }
 
@@ -331,7 +340,7 @@ def _adjacent_switch_count(values: list[Any]) -> int:
     return sum(1 for before, after in zip(values, values[1:]) if before != after)
 
 
-def _timestamp_ms(event: dict[str, Any]) -> float | None:
+def _source_timestamp_ms(event: dict[str, Any]) -> float | None:
     left = _float_or_none(event.get("left_capture_timestamp_us"))
     right = _float_or_none(event.get("right_capture_timestamp_us"))
     values = [value for value in (left, right) if value is not None]
@@ -340,9 +349,17 @@ def _timestamp_ms(event: dict[str, Any]) -> float | None:
     return min(values) / 1000.0
 
 
+def _event_timestamp_ms(event: dict[str, Any]) -> float | None:
+    timestamp_ms = _float_or_none(event.get("timestamp_ms"))
+    if timestamp_ms is not None:
+        return timestamp_ms
+    return _source_timestamp_ms(event)
+
+
 def _timeline(events: list[dict[str, Any]], raw_status: dict[str, Any], pcmr_status: dict[str, Any]) -> dict[str, Any]:
     accepted = [event for event in events if event.get("event") == "accepted"]
-    accepted_times = [value for value in (_timestamp_ms(event) for event in accepted) if value is not None]
+    accepted_times = [value for value in (_event_timestamp_ms(event) for event in accepted) if value is not None]
+    source_times = [value for value in (_source_timestamp_ms(event) for event in accepted) if value is not None]
     accepted_hz = None
     if len(accepted_times) >= 2:
         span_s = (max(accepted_times) - min(accepted_times)) / 1000.0
@@ -352,8 +369,8 @@ def _timeline(events: list[dict[str, Any]], raw_status: dict[str, Any], pcmr_sta
     right_frame_ids = [_int_or_none(event.get("right_frame_id")) for event in events]
     right_frame_ids = [value for value in right_frame_ids if value is not None]
     source_frame_hz = None
-    if len(accepted_times) >= 2 and left_frame_ids:
-        span_s = (max(accepted_times) - min(accepted_times)) / 1000.0
+    if len(source_times) >= 2 and left_frame_ids:
+        span_s = (max(source_times) - min(source_times)) / 1000.0
         source_frame_hz = (max(left_frame_ids) - min(left_frame_ids)) / span_s if span_s > 0 else None
     raw_realtime = raw_status.get("realtime") if isinstance(raw_status.get("realtime"), dict) else {}
     trace_sequence_gaps = 0
@@ -366,6 +383,7 @@ def _timeline(events: list[dict[str, Any]], raw_status: dict[str, Any], pcmr_sta
         "source_frame_hz": source_frame_hz,
         "accepted_hz": accepted_hz,
         "publish_interval_ms": _interval_summary(accepted_times),
+        "source_update_interval_ms": _interval_summary(source_times),
         "raw_stream": {
             "observed_packet_hz": raw_realtime.get("observed_packet_hz"),
             "expected_source_hz": raw_realtime.get("expected_source_hz"),
@@ -424,8 +442,8 @@ def _publish_stall_segments(
     threshold_ms = (1000.0 / max(0.1, expected_source_hz)) * 1.5
     stalls: list[dict[str, Any]] = []
     for before, after in zip(accepted, accepted[1:]):
-        before_ms = _timestamp_ms(before)
-        after_ms = _timestamp_ms(after)
+        before_ms = _event_timestamp_ms(before)
+        after_ms = _event_timestamp_ms(after)
         if before_ms is None or after_ms is None:
             continue
         interval = after_ms - before_ms

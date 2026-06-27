@@ -38,9 +38,11 @@ def accepted_row(
     sequence: int,
     depth_m: float,
     *,
+    event_timestamp_ms: float | None = None,
     left_frame_id: int | None = None,
     right_frame_id: int | None = None,
     capture_us: int | None = None,
+    freshness: str | None = None,
     raw_left_track_id: int = 1,
     raw_right_track_id: int = 2,
     switch_reason: str = "active_continuity",
@@ -54,6 +56,7 @@ def accepted_row(
     row = {
         "event": "accepted",
         "sequence": sequence,
+        "timestamp_ms": event_timestamp_ms,
         "target_id": "vst_stereo-active-1",
         "active_target_id": "active-1",
         "depth_m": depth_m,
@@ -92,6 +95,10 @@ def accepted_row(
             "last_disconnect": {"client_id": "client-1", "label": "godot", "reason": "client_closed"},
         },
     }
+    if event_timestamp_ms is None:
+        row.pop("timestamp_ms")
+    if freshness is not None:
+        row["freshness"] = {"state": freshness}
     row["stage_timing_ms"] = stage_timing_ms or {
         "frame_read_ms": 1.0,
         "left_detect_ms": 5.0,
@@ -319,6 +326,34 @@ class LiveRunDiagnosticsTests(unittest.TestCase):
         self.assertIn("--raw-status", source)
         self.assertIn("--pcmr-status", source)
         self.assertIn("--sender-log", source)
+
+    def test_decoupled_loop_publish_interval_uses_event_timestamps_not_reused_source_timestamps(self):
+        analyzer = load_module(TOOL, "analyze_live_run_diagnostics")
+        trace_path = self.tmp_path / "depth_estimation_trace.jsonl"
+        output_path = self.tmp_path / "live_run_diagnostics.json"
+
+        rows = [
+            accepted_row(0, 0.60, event_timestamp_ms=1_000.0, capture_us=10_000_000, freshness="fresh"),
+            accepted_row(1, 0.60, event_timestamp_ms=1_050.0, capture_us=10_000_000, freshness="stale", held_last_pose=True),
+            accepted_row(2, 0.60, event_timestamp_ms=1_100.0, capture_us=10_000_000, freshness="stale", held_last_pose=True),
+            accepted_row(3, 0.61, event_timestamp_ms=1_150.0, capture_us=10_150_000, freshness="fresh"),
+        ]
+        write_jsonl(trace_path, rows)
+
+        report = analyzer.analyze_live_run_diagnostics(
+            depth_trace_path=trace_path,
+            raw_status_path=None,
+            pcmr_status_path=None,
+            sender_log_path=None,
+            output_path=output_path,
+            top_n=3,
+            context_radius=1,
+        )
+
+        self.assertEqual(report["timeline"]["publish_interval_ms"]["p50"], 50.0)
+        self.assertEqual(report["timeline"]["publish_interval_ms"]["observed_hz"], 20.0)
+        self.assertEqual(report["timeline"]["source_update_interval_ms"]["p50"], 0.0)
+        self.assertEqual(report["trace"]["freshness_states"], {"fresh": 2, "stale": 2})
 
 
 if __name__ == "__main__":

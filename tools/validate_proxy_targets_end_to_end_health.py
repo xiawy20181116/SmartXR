@@ -234,7 +234,9 @@ def _card_pose_summary(pcmr_status: dict[str, Any]) -> dict[str, Any]:
 
 def _sender_summary(sender_log_text: str) -> dict[str, Any]:
     sent_matches = re.findall(
-        r"sent stereo seq=(?P<sequence>\d+)\s+target=(?P<target>\S+)\s+"
+        r"(?:sent stereo|published stereo|updated stereo detector)\s+"
+        r"seq=(?P<sequence>\d+)\s+target=(?P<target>\S+)\s+"
+        r"(?:freshness=(?P<freshness>\S+)\s+)?"
         r"depth_source=(?P<depth_source>\S+)\s+depth_confidence=(?P<depth_confidence>\S+)",
         sender_log_text,
     )
@@ -250,8 +252,9 @@ def _sender_summary(sender_log_text: str) -> dict[str, Any]:
         "sent_count": len(sent_matches),
         "last_sequence": int(last_sent[0]) if last_sent else None,
         "last_target_id": last_sent[1] if last_sent else None,
-        "last_depth_source": last_sent[2] if last_sent else None,
-        "last_depth_confidence": last_sent[3] if last_sent else None,
+        "last_freshness": last_sent[2] if last_sent else None,
+        "last_depth_source": last_sent[3] if last_sent else None,
+        "last_depth_confidence": last_sent[4] if last_sent else None,
         "last_empty_reason": last_diagnostic[0] if last_diagnostic else None,
         "last_empty_reads": int(last_diagnostic[1]) if last_diagnostic else None,
         "last_left_frames": int(last_diagnostic[2]) if last_diagnostic else None,
@@ -284,6 +287,15 @@ def _pcmr_connected(pcmr_status: dict[str, Any]) -> bool:
         and _count(pcmr_status, "packets") > 0
         and _count(pcmr_status, "parsed") > 0
         and _count(pcmr_status, "live") > 0
+    )
+
+
+def _pcmr_sustained_live(pcmr_status: dict[str, Any], min_packets: int) -> bool:
+    return (
+        _pcmr_connected(pcmr_status)
+        and _count(pcmr_status, "packets") >= min_packets
+        and _count(pcmr_status, "parsed") >= min_packets
+        and _count(pcmr_status, "live") >= min_packets
     )
 
 
@@ -389,8 +401,11 @@ def evaluate_health(
         if has_godot_active:
             verdicts.append("GODOT_CLIENT_ACTIVE")
         elif godot_disconnected:
-            verdicts.append("GODOT_CLIENT_NOT_ACTIVE")
-            errors.append("Godot client is not currently active in publisher clients; last_disconnect=godot")
+            if _pcmr_sustained_live(pcmr_status, min_packets=min_packets):
+                verdicts.append("GODOT_CLIENT_STATUS_AMBIGUOUS")
+            else:
+                verdicts.append("GODOT_CLIENT_NOT_ACTIVE")
+                errors.append("Godot client is not currently active in publisher clients; last_disconnect=godot")
 
     ok = (
         "SENDER_READY" in verdicts
