@@ -83,6 +83,11 @@ class GodotStatusHudTests(unittest.TestCase):
         self.assertNotIn('"--path"', runner)
         self.assertIn("SMARTXR_STATUS_HUD_SCRIPT", runner)
 
+    def test_status_hud_avoids_bool_constructor_calls(self):
+        source = STATUS_HUD.read_text(encoding="utf-8")
+
+        self.assertNotIn("bool(", source)
+
 
 if __name__ == "__main__":
     unittest.main()
