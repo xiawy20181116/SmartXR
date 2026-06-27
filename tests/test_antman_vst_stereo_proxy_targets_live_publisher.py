@@ -254,6 +254,68 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(event["pair_capture_delta_ms"], 12.5)
         self.assertEqual(event["frame_id_delta"], 0)
 
+    def test_live_stereo_trace_includes_header_timestamp_debug(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        class FakeReader:
+            def __init__(self, frame):
+                self.frame = frame
+                self.used = False
+
+            def read_latest(self):
+                if self.used:
+                    return True, -1, None
+                self.used = True
+                return True, 55, self.frame
+
+            def get_stats(self):
+                return {}
+
+        class FakeTracker:
+            def __init__(self, bbox):
+                self.bbox = bbox
+
+            def process_frame(self, frame):
+                return FakeTrackingResult([FakePerson(bbox=self.bbox)])
+
+        left_frame = {
+            "timestamp_us": 3_000_000,
+            "available_timestamp_keys": ["frame_id", "hardware_timestamp"],
+            "header_timestamp_debug": {"frame_id": 55, "hardware_timestamp": 3_000_000},
+        }
+        right_frame = {
+            "timestamp_us": 3_004_000,
+            "available_timestamp_keys": ["frame_id", "hardware_timestamp"],
+            "header_timestamp_debug": {"frame_id": 55, "hardware_timestamp": 3_004_000},
+        }
+
+        message, diagnostics = publisher.next_live_stereo_proxy_targets_message_with_diagnostics(
+            left_reader=FakeReader(left_frame),
+            right_reader=FakeReader(right_frame),
+            left_tracker=FakeTracker((640, 240, 720, 520)),
+            right_tracker=FakeTracker((608, 240, 688, 520)),
+            sequence=0,
+            max_read_attempts=1,
+            sleep_seconds=0,
+            max_pair_capture_delta_ms=10.0,
+        )
+
+        self.assertIsNotNone(message)
+        temporal = diagnostics["temporal"]
+        self.assertEqual(temporal["left_available_timestamp_keys"], ["frame_id", "hardware_timestamp"])
+        self.assertEqual(temporal["right_available_timestamp_keys"], ["frame_id", "hardware_timestamp"])
+        self.assertEqual(
+            temporal["left_header_timestamp_debug"],
+            {"frame_id": 55, "hardware_timestamp": 3_000_000},
+        )
+        self.assertEqual(
+            temporal["right_header_timestamp_debug"],
+            {"frame_id": 55, "hardware_timestamp": 3_004_000},
+        )
+
+        event = publisher.build_depth_trace_event(message=message, diagnostics=diagnostics)
+        self.assertEqual(event["temporal"], temporal)
+
     def test_live_stereo_converts_vst_ai_shm_nv12_mapping_before_tracking(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
 

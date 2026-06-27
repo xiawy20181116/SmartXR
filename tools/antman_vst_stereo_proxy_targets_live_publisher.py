@@ -243,6 +243,35 @@ def _frame_timestamp_info(frame: Any) -> tuple[int | None, str | None]:
     return None, None
 
 
+def _attr_or_key(value: Any, name: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(name)
+    if hasattr(value, name):
+        return getattr(value, name)
+    return None
+
+
+def _copy_json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _copy_json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_copy_json_safe(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return repr(value)
+
+
+def _frame_header_timestamp_debug(frame: Any) -> dict[str, Any]:
+    debug: dict[str, Any] = {}
+    available_keys = _attr_or_key(frame, "available_timestamp_keys")
+    if available_keys is not None:
+        debug["available_timestamp_keys"] = _copy_json_safe(available_keys)
+    header_debug = _attr_or_key(frame, "header_timestamp_debug")
+    if header_debug is not None:
+        debug["header_timestamp_debug"] = _copy_json_safe(header_debug)
+    return debug
+
+
 def _frame_for_tracker(frame: Any) -> Any:
     if not isinstance(frame, dict):
         return frame
@@ -393,6 +422,14 @@ def _pair_temporal_diagnostics(
         "left_tracker_latency_ms": _tracking_latency_ms(left_tracking_result),
         "right_tracker_latency_ms": _tracking_latency_ms(right_tracking_result),
     }
+    left_header_debug = _frame_header_timestamp_debug(left_frame)
+    if left_header_debug:
+        temporal["left_available_timestamp_keys"] = left_header_debug.get("available_timestamp_keys", [])
+        temporal["left_header_timestamp_debug"] = left_header_debug.get("header_timestamp_debug", {})
+    right_header_debug = _frame_header_timestamp_debug(right_frame)
+    if right_header_debug:
+        temporal["right_available_timestamp_keys"] = right_header_debug.get("available_timestamp_keys", [])
+        temporal["right_header_timestamp_debug"] = right_header_debug.get("header_timestamp_debug", {})
     if left_timestamp_us is not None and right_timestamp_us is not None:
         temporal["pair_capture_delta_ms"] = abs(float(left_timestamp_us) - float(right_timestamp_us)) / 1000.0
     else:

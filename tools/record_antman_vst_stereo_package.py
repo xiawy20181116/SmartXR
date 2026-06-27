@@ -24,6 +24,8 @@ from smartxr.stereo_depth import SCENE_STEREO_28  # noqa: E402
 
 
 DEFAULT_VST_AI_SHM_ROOT = Path("E:/xia/Antman/0422/0527/P1/vst_ai_shm")
+DEFAULT_HEADER_DEBUG_FRAMES = 10
+TIMESTAMP_DEBUG_KEY_TOKENS = ("time", "timestamp", "exposure", "frame", "pts")
 
 
 def _header_timestamp_us(header: dict[str, Any]) -> int | None:
@@ -34,15 +36,31 @@ def _header_timestamp_us(header: dict[str, Any]) -> int | None:
     return None
 
 
+def _header_timestamp_debug(header: dict[str, Any]) -> dict[str, Any]:
+    debug: dict[str, Any] = {}
+    for key in sorted(str(key) for key in header.keys()):
+        lowered = key.lower()
+        if not any(token in lowered for token in TIMESTAMP_DEBUG_KEY_TOKENS):
+            continue
+        value = header.get(key)
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            debug[key] = value
+        else:
+            debug[key] = repr(value)
+    return debug
+
+
 class VstAiShmConsumerReader:
     def __init__(
         self,
         *,
         consumer: Any,
         wait_timeout_ms: int,
+        header_debug_frames: int = DEFAULT_HEADER_DEBUG_FRAMES,
     ) -> None:
         self.consumer = consumer
         self.wait_timeout_ms = int(wait_timeout_ms)
+        self.header_debug_frames = max(0, int(header_debug_frames))
         self.frames_returned = 0
         self.empty_waits = 0
 
@@ -69,6 +87,19 @@ class VstAiShmConsumerReader:
         timestamp_us = _header_timestamp_us(header)
         if timestamp_us is not None:
             frame["timestamp_us"] = timestamp_us
+        if self.frames_returned <= self.header_debug_frames:
+            timestamp_debug = _header_timestamp_debug(header)
+            frame["available_timestamp_keys"] = list(timestamp_debug.keys())
+            frame["header_timestamp_debug"] = timestamp_debug
+            print(
+                "[vst_ai_shm_consumer] header debug frame_id=%s keys=%s values=%s"
+                % (
+                    frame_id,
+                    ",".join(frame["available_timestamp_keys"]) or "-",
+                    json.dumps(timestamp_debug, ensure_ascii=False, sort_keys=True),
+                ),
+                flush=True,
+            )
         return (
             True,
             frame_id,

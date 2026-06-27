@@ -350,6 +350,53 @@ class LiveStereoRecorderTests(unittest.TestCase):
         finally:
             shutil.rmtree(out_dir, ignore_errors=True)
 
+    def test_vst_ai_shm_consumer_reader_includes_header_timestamp_debug(self):
+        tool = load_module(ANTMAN_TOOL, "record_antman_vst_stereo_package")
+
+        class FakeConsumer:
+            def __init__(self):
+                self.frames_returned = 0
+
+            def wait_for_frame(self, timeout_ms):
+                return self.frames_returned == 0
+
+            def read_latest_frame(self):
+                self.frames_returned += 1
+                return (
+                    {
+                        "frame_id": 30,
+                        "width": 4,
+                        "height": 2,
+                        "stride": 4,
+                        "exposure_time_ns": 987_654_321,
+                        "pts": 12345,
+                        "random_value": 7,
+                    },
+                    FakeNv12Array(),
+                )
+
+            def acknowledge(self, frame_id):
+                pass
+
+            def close(self):
+                pass
+
+        reader = tool.VstAiShmConsumerReader(consumer=FakeConsumer(), wait_timeout_ms=1)
+
+        ok, frame_id, frame = reader.read_latest()
+
+        self.assertTrue(ok)
+        self.assertEqual(frame_id, 30)
+        self.assertEqual(frame["available_timestamp_keys"], ["exposure_time_ns", "frame_id", "pts"])
+        self.assertEqual(
+            frame["header_timestamp_debug"],
+            {
+                "exposure_time_ns": 987_654_321,
+                "frame_id": 30,
+                "pts": 12345,
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
