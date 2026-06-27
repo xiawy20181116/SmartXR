@@ -217,19 +217,33 @@ def _numeric_attr_or_key(value: Any, names: tuple[str, ...]) -> float | None:
 
 
 def _frame_timestamp_us(frame: Any) -> int | None:
+    timestamp_us, _source = _frame_timestamp_info(frame)
+    return timestamp_us
+
+
+def _frame_timestamp_info(frame: Any) -> tuple[int | None, str | None]:
     timestamp_us = _numeric_attr_or_key(
         frame,
         ("timestamp_us", "capture_timestamp_us", "ts_us", "timestampUsec", "timestamp_usec"),
     )
     if timestamp_us is not None:
-        return int(round(timestamp_us))
+        return int(round(timestamp_us)), "frame_timestamp_us"
     timestamp_ms = _numeric_attr_or_key(
         frame,
         ("timestamp_ms", "capture_timestamp_ms", "ts_ms", "timestampMillis"),
     )
     if timestamp_ms is not None:
-        return int(round(timestamp_ms * 1000.0))
-    return None
+        return int(round(timestamp_ms * 1000.0)), "frame_timestamp_ms"
+    return None, None
+
+
+def _pair_runtime_timestamp_ms(left_frame: Any, right_frame: Any) -> int:
+    left_timestamp_us = _frame_timestamp_us(left_frame)
+    right_timestamp_us = _frame_timestamp_us(right_frame)
+    timestamps = [value for value in (left_timestamp_us, right_timestamp_us) if value is not None]
+    if timestamps:
+        return int(min(timestamps) // 1000)
+    return int(time.time() * 1000)
 
 
 def _tracking_latency_ms(result: Any) -> float | None:
@@ -330,14 +344,16 @@ def _pair_temporal_diagnostics(
     left_tracking_result: Any,
     right_tracking_result: Any,
 ) -> dict[str, Any]:
-    left_timestamp_us = _frame_timestamp_us(left_frame)
-    right_timestamp_us = _frame_timestamp_us(right_frame)
+    left_timestamp_us, left_timestamp_source = _frame_timestamp_info(left_frame)
+    right_timestamp_us, right_timestamp_source = _frame_timestamp_info(right_frame)
     temporal: dict[str, Any] = {
         "left_frame_id": int(left_frame_id),
         "right_frame_id": int(right_frame_id),
         "frame_id_delta": int(left_frame_id) - int(right_frame_id),
         "left_capture_timestamp_us": left_timestamp_us,
         "right_capture_timestamp_us": right_timestamp_us,
+        "left_capture_timestamp_source": left_timestamp_source,
+        "right_capture_timestamp_source": right_timestamp_source,
         "left_receive_monotonic_ms": left_received_at_ms,
         "right_receive_monotonic_ms": right_received_at_ms,
         "left_tracker_latency_ms": _tracking_latency_ms(left_tracking_result),
@@ -448,6 +464,7 @@ def build_proxy_targets_message_from_stereo_bbox_record(
         ],
     }
     message = normalize_source_payload(source_payload, sequence=sequence, card_id=card_id)
+    message["timestamp_ms"] = source_payload["timestamp_ms"]
     if not message["targets"]:
         return None
     detection = source_payload["detections"][0]
@@ -664,7 +681,7 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
                 right_frame=right_frame,
                 left_tracking_result=left_tracking_result,
                 right_tracking_result=right_tracking_result,
-                timestamp_ms=int(time.time() * 1000),
+                timestamp_ms=_pair_runtime_timestamp_ms(left_frame, right_frame),
                 left_source_stats=diagnostics["left_source_stats"],
                 right_source_stats=diagnostics["right_source_stats"],
                 target_stabilizer=target_stabilizer,
