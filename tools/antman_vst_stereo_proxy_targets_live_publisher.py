@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import socket
 import sys
@@ -132,6 +133,37 @@ class BroadcastHub:
         for conn, reason in stale:
             self.remove_client(conn, reason=reason)
         return delivered
+
+
+class LatestStereoPublishState:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._latest_message: dict[str, Any] | None = None
+        self._latest_diagnostics: dict[str, Any] | None = None
+        self._latest_update_ms: float | None = None
+        self._last_diagnostics: dict[str, Any] | None = None
+        self._last_update_ms: float | None = None
+
+    def update(self, *, message: dict[str, Any] | None, diagnostics: dict[str, Any]) -> None:
+        now_ms = time.monotonic() * 1000.0
+        diagnostics_copy = copy.deepcopy(diagnostics)
+        with self._lock:
+            self._last_diagnostics = diagnostics_copy
+            self._last_update_ms = now_ms
+            if message is not None:
+                self._latest_message = copy.deepcopy(message)
+                self._latest_diagnostics = diagnostics_copy
+                self._latest_update_ms = now_ms
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "latest_message": copy.deepcopy(self._latest_message),
+                "latest_diagnostics": copy.deepcopy(self._latest_diagnostics),
+                "latest_update_ms": self._latest_update_ms,
+                "last_diagnostics": copy.deepcopy(self._last_diagnostics),
+                "last_update_ms": self._last_update_ms,
+            }
 
 
 def _empty_diagnostics(reason: str) -> dict[str, Any]:
@@ -727,6 +759,100 @@ def build_depth_trace_event(
     return event
 
 
+def _freshness_state(
+    *,
+    latest_update_ms: float | None,
+    last_diagnostics: dict[str, Any] | None,
+    now_ms: float,
+    stale_after_ms: float,
+) -> dict[str, Any]:
+    age_ms = None if latest_update_ms is None else max(0.0, now_ms - latest_update_ms)
+    last_reason = None
+    if isinstance(last_diagnostics, dict):
+        last_reason = last_diagnostics.get("non_publish_reason") or last_diagnostics.get("reason")
+    state = "fresh"
+    if last_reason and last_reason != "target_ready":
+        state = "held"
+    if age_ms is not None and age_ms > stale_after_ms:
+        state = "stale"
+    return {
+        "state": state,
+        "age_ms": age_ms,
+        "reason": last_reason,
+        "stale_after_ms": float(stale_after_ms),
+    }
+
+
+def _message_with_publish_freshness(
+    message: dict[str, Any],
+    *,
+    sequence: int,
+    freshness: dict[str, Any],
+) -> dict[str, Any]:
+    published = copy.deepcopy(message)
+    published["sequence"] = int(sequence)
+    published["publish_freshness"] = dict(freshness)
+    held = freshness.get("state") in ("held", "stale")
+    for target in published.get("targets", []):
+        if isinstance(target, dict):
+            target["freshness"] = dict(freshness)
+            target["held"] = bool(held)
+            target["tracking_confidence"] = freshness.get("state")
+    for card in published.get("cards", []):
+        if isinstance(card, dict):
+            card["target_freshness"] = dict(freshness)
+    return published
+
+
+def publish_latest_stereo_state_once(
+    *,
+    hub: BroadcastHub,
+    state: LatestStereoPublishState,
+    sequence: int,
+    depth_trace: Path | None,
+    stale_after_ms: float = 250.0,
+) -> dict[str, Any] | None:
+    if hub.client_count() == 0:
+        return None
+    snapshot = state.snapshot()
+    latest_message = snapshot.get("latest_message")
+    latest_diagnostics = snapshot.get("latest_diagnostics")
+    last_diagnostics = snapshot.get("last_diagnostics")
+    now_ms = time.monotonic() * 1000.0
+    clients = hub.status_summary()
+    if latest_message is None:
+        diagnostics = copy.deepcopy(last_diagnostics) if isinstance(last_diagnostics, dict) else _empty_diagnostics("no_target")
+        diagnostics["clients"] = clients
+        diagnostics["freshness"] = {
+            "state": "empty",
+            "age_ms": None,
+            "reason": diagnostics.get("non_publish_reason") or diagnostics.get("reason"),
+            "stale_after_ms": float(stale_after_ms),
+        }
+        event = build_depth_trace_event(message=None, diagnostics=diagnostics, sequence=sequence)
+        event["freshness"] = dict(diagnostics["freshness"])
+        write_depth_trace_event(depth_trace, event)
+        return event
+
+    freshness = _freshness_state(
+        latest_update_ms=snapshot.get("latest_update_ms"),
+        last_diagnostics=last_diagnostics if isinstance(last_diagnostics, dict) else None,
+        now_ms=now_ms,
+        stale_after_ms=stale_after_ms,
+    )
+    message = _message_with_publish_freshness(latest_message, sequence=sequence, freshness=freshness)
+    publish_started = time.perf_counter()
+    delivered = hub.broadcast(message)
+    diagnostics = copy.deepcopy(latest_diagnostics) if isinstance(latest_diagnostics, dict) else _empty_diagnostics("target_ready")
+    diagnostics.setdefault("stage_timing_ms", {})["publish_ms"] = _elapsed_ms(publish_started)
+    diagnostics["clients"] = clients
+    diagnostics["freshness"] = dict(freshness)
+    event = build_depth_trace_event(message=message, diagnostics=diagnostics, delivered_clients=delivered)
+    event["freshness"] = dict(freshness)
+    write_depth_trace_event(depth_trace, event)
+    return event
+
+
 def write_depth_trace_event(trace_path: Path | None, event: dict[str, Any]) -> None:
     if trace_path is None:
         return
@@ -875,6 +1001,77 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
     return None, diagnostics
 
 
+def _detector_loop(
+    state: LatestStereoPublishState,
+    hub: BroadcastHub,
+    *,
+    left_reader: Any,
+    right_reader: Any,
+    left_tracker: Any,
+    right_tracker: Any,
+    card_id: str,
+    min_confidence: float,
+    recorded_width: int,
+    recorded_height: int,
+    log_every: int,
+    max_empty_reads: int,
+    max_vertical_error_px: float | None,
+    max_pair_capture_delta_ms: float | None,
+    target_source_hz: float,
+) -> None:
+    detector_sequence = 0
+    empty_windows = 0
+    target_stabilizer = StereoActiveTargetStabilizer()
+    while True:
+        if hub.client_count() == 0:
+            time.sleep(0.05)
+            continue
+        message, diagnostics = next_live_stereo_proxy_targets_message_with_diagnostics(
+            left_reader=left_reader,
+            right_reader=right_reader,
+            left_tracker=left_tracker,
+            right_tracker=right_tracker,
+            sequence=detector_sequence,
+            card_id=card_id,
+            recorded_width=recorded_width,
+            recorded_height=recorded_height,
+            min_confidence=min_confidence,
+            max_empty_reads=max_empty_reads,
+            max_vertical_error_px=max_vertical_error_px,
+            target_stabilizer=target_stabilizer,
+            max_pair_capture_delta_ms=max_pair_capture_delta_ms,
+            target_source_hz=target_source_hz,
+        )
+        diagnostics["detector_sequence"] = detector_sequence
+        state.update(message=message, diagnostics=diagnostics)
+        if message is None:
+            empty_windows += 1
+            if log_every > 0 and empty_windows % log_every == 1:
+                print("No stereo target frames available from Left/Right VST SHM + HumanTrackor", flush=True)
+                print(format_stereo_diagnostics(diagnostics), flush=True)
+            continue
+
+        empty_windows = 0
+        if log_every > 0 and detector_sequence % log_every == 0:
+            target = message["targets"][0]
+            position = target.get("transform", {}).get("position", [0.0, 0.0, 0.0])
+            print(
+                "updated stereo detector seq=%d target=%s depth_source=%s depth_confidence=%s clients=%d pos=%.3f %.3f %.3f"
+                % (
+                    detector_sequence,
+                    target.get("target_id", "-"),
+                    target.get("depth_source", "-"),
+                    target.get("depth_confidence", "-"),
+                    hub.client_count(),
+                    position[0],
+                    position[1],
+                    position[2],
+                ),
+                flush=True,
+            )
+        detector_sequence += 1
+
+
 def _broadcast_loop(
     hub: BroadcastHub,
     *,
@@ -897,71 +1094,62 @@ def _broadcast_loop(
     interval_s = 1.0 / max(hz, 0.1)
     sequence = 0
     empty_windows = 0
-    target_stabilizer = StereoActiveTargetStabilizer()
+    state = LatestStereoPublishState()
+    threading.Thread(
+        target=_detector_loop,
+        kwargs={
+            "state": state,
+            "hub": hub,
+            "left_reader": left_reader,
+            "right_reader": right_reader,
+            "left_tracker": left_tracker,
+            "right_tracker": right_tracker,
+            "card_id": card_id,
+            "min_confidence": min_confidence,
+            "recorded_width": recorded_width,
+            "recorded_height": recorded_height,
+            "log_every": log_every,
+            "max_empty_reads": max_empty_reads,
+            "max_vertical_error_px": max_vertical_error_px,
+            "max_pair_capture_delta_ms": max_pair_capture_delta_ms,
+            "target_source_hz": target_source_hz,
+        },
+        daemon=True,
+    ).start()
     while True:
-        if hub.client_count() == 0:
-            time.sleep(interval_s)
-            continue
-        message, diagnostics = next_live_stereo_proxy_targets_message_with_diagnostics(
-            left_reader=left_reader,
-            right_reader=right_reader,
-            left_tracker=left_tracker,
-            right_tracker=right_tracker,
+        started = time.perf_counter()
+        event = publish_latest_stereo_state_once(
+            hub=hub,
+            state=state,
             sequence=sequence,
-            card_id=card_id,
-            recorded_width=recorded_width,
-            recorded_height=recorded_height,
-            min_confidence=min_confidence,
-            max_empty_reads=max_empty_reads,
-            max_vertical_error_px=max_vertical_error_px,
-            target_stabilizer=target_stabilizer,
-            max_pair_capture_delta_ms=max_pair_capture_delta_ms,
-            target_source_hz=target_source_hz,
+            depth_trace=depth_trace,
+            stale_after_ms=max(interval_s * 1000.0 * 2.0, 100.0),
         )
-        if message is None:
-            empty_windows += 1
-            diagnostics["clients"] = hub.status_summary()
-            write_depth_trace_event(
-                depth_trace,
-                build_depth_trace_event(message=None, diagnostics=diagnostics, sequence=sequence),
-            )
-            if log_every > 0 and empty_windows % log_every == 1:
-                print("No stereo target frames available from Left/Right VST SHM + HumanTrackor", flush=True)
-                print(format_stereo_diagnostics(diagnostics), flush=True)
+        if event is None:
             time.sleep(interval_s)
             continue
-
-        empty_windows = 0
-        publish_started = time.perf_counter()
-        delivered = hub.broadcast(message)
-        diagnostics.setdefault("stage_timing_ms", {})["publish_ms"] = _elapsed_ms(publish_started)
-        diagnostics["stage_timing_ms"]["total_ms"] = float(diagnostics["stage_timing_ms"].get("total_ms") or 0.0) + float(
-            diagnostics["stage_timing_ms"].get("publish_ms") or 0.0
-        )
-        diagnostics["clients"] = hub.status_summary()
-        write_depth_trace_event(
-            depth_trace,
-            build_depth_trace_event(message=message, diagnostics=diagnostics, delivered_clients=delivered),
-        )
-        if log_every > 0 and sequence % log_every == 0:
-            target = message["targets"][0]
-            position = target.get("transform", {}).get("position", [0.0, 0.0, 0.0])
-            print(
-                "sent stereo seq=%d target=%s depth_source=%s depth_confidence=%s clients=%d pos=%.3f %.3f %.3f"
-                % (
-                    sequence,
-                    target.get("target_id", "-"),
-                    target.get("depth_source", "-"),
-                    target.get("depth_confidence", "-"),
-                    delivered,
-                    position[0],
-                    position[1],
-                    position[2],
-                ),
-                flush=True,
-            )
+        if event.get("event") == "accepted":
+            empty_windows = 0
+            if log_every > 0 and sequence % log_every == 0:
+                print(
+                    "published stereo seq=%d target=%s freshness=%s depth_source=%s depth_confidence=%s clients=%d"
+                    % (
+                        sequence,
+                        event.get("target_id", "-"),
+                        (event.get("freshness") or {}).get("state", "-"),
+                        event.get("depth_source", "-"),
+                        event.get("depth_confidence", "-"),
+                        int(event.get("delivered_clients") or 0),
+                    ),
+                    flush=True,
+                )
+        else:
+            empty_windows += 1
+            if log_every > 0 and empty_windows % log_every == 1:
+                print("No latest stereo target available to publish", flush=True)
         sequence += 1
-        time.sleep(interval_s)
+        elapsed_s = time.perf_counter() - started
+        time.sleep(max(0.0, interval_s - elapsed_s))
 
 
 def _client_loop(conn: socket.socket, address: Any, hub: BroadcastHub) -> None:

@@ -356,6 +356,95 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(event["non_published_frames"][0]["reason"], "no_target")
         self.assertEqual(event["stage_timing_ms"], diagnostics["stage_timing_ms"])
 
+    def test_latest_state_publish_reuses_last_message_with_held_freshness(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        class FakeHub:
+            def __init__(self):
+                self.messages = []
+
+            def client_count(self):
+                return 1
+
+            def status_summary(self):
+                return {"active_client_count": 1, "active_clients": ["client-1=godot@127.0.0.1:1"]}
+
+            def broadcast(self, message):
+                self.messages.append(message)
+                return 1
+
+        message = {
+            "type": "proxy_targets",
+            "sequence": 10,
+            "timestamp_ms": 1234,
+            "targets": [
+                {
+                    "target_id": "vst_stereo-active-1",
+                    "depth_source": "bbox_top_center_fallback",
+                    "depth_confidence": "low",
+                    "transform": {"position": [0.1, 0.2, 0.3]},
+                }
+            ],
+            "cards": [{"card_id": "CardAnchor", "target_id": "vst_stereo-active-1"}],
+        }
+        diagnostics = {
+            "reason": "target_ready",
+            "non_publish_reason": None,
+            "stage_timing_ms": {"total_ms": 1.0},
+            "active_target_id": "active-1",
+            "held_last_pose": False,
+            "switch_reason": "active_continuity",
+        }
+        hub = FakeHub()
+        state = publisher.LatestStereoPublishState()
+        state.update(message=message, diagnostics=diagnostics)
+        state.update(message=None, diagnostics={"reason": "no_target", "non_publish_reason": "no_target"})
+
+        event = publisher.publish_latest_stereo_state_once(
+            hub=hub,
+            state=state,
+            sequence=11,
+            depth_trace=None,
+            stale_after_ms=10_000.0,
+        )
+
+        self.assertEqual(event["event"], "accepted")
+        self.assertEqual(event["sequence"], 11)
+        self.assertEqual(event["freshness"]["state"], "held")
+        self.assertEqual(event["freshness"]["reason"], "no_target")
+        self.assertEqual(len(hub.messages), 1)
+        self.assertEqual(hub.messages[0]["sequence"], 11)
+        self.assertTrue(hub.messages[0]["targets"][0]["held"])
+        self.assertEqual(hub.messages[0]["targets"][0]["freshness"]["state"], "held")
+
+    def test_latest_state_publish_writes_rejected_trace_when_no_latest_message_exists(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        class FakeHub:
+            def client_count(self):
+                return 1
+
+            def status_summary(self):
+                return {"active_client_count": 1, "active_clients": ["client-1=monitor@127.0.0.1:2"]}
+
+            def broadcast(self, message):
+                raise AssertionError(f"should not publish without a latest message: {message!r}")
+
+        state = publisher.LatestStereoPublishState()
+        state.update(message=None, diagnostics={"reason": "no_target", "non_publish_reason": "no_target"})
+
+        event = publisher.publish_latest_stereo_state_once(
+            hub=FakeHub(),
+            state=state,
+            sequence=3,
+            depth_trace=None,
+        )
+
+        self.assertEqual(event["event"], "rejected")
+        self.assertEqual(event["sequence"], 3)
+        self.assertEqual(event["non_publish_reason"], "no_target")
+        self.assertEqual(event["freshness"]["state"], "empty")
+
     def test_live_stereo_trace_includes_header_timestamp_debug(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
 
