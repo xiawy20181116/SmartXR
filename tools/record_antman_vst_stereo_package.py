@@ -217,6 +217,21 @@ def startup_error_status(exc: Exception, out_dir: Path) -> tuple[dict[str, Any],
     )
 
 
+def print_progress(progress: dict[str, Any]) -> None:
+    print(
+        "[live_stereo_recorder] progress attempts=%s elapsed=%.1fs left=%s right=%s stereo=%s read_failures=%s"
+        % (
+            progress.get("attempts", 0),
+            float(progress.get("elapsed_seconds", 0.0)),
+            progress.get("frames_seen_left", 0),
+            progress.get("frames_seen_right", 0),
+            progress.get("stereo_frames", 0),
+            progress.get("read_failures", 0),
+        ),
+        flush=True,
+    )
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Record Antman VST Left/Right SHM into a SmartXR stereo package."
@@ -236,7 +251,24 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--wait-for-producer-seconds", type=float, default=10.0)
     parser.add_argument("--recorded-width", type=int, default=880)
     parser.add_argument("--recorded-height", type=int, default=660)
-    parser.add_argument("--max-read-attempts", type=int, default=240)
+    parser.add_argument(
+        "--max-read-attempts",
+        type=int,
+        default=None,
+        help="Maximum left/right read loop attempts. Defaults to 240 without duration and unlimited with duration.",
+    )
+    parser.add_argument(
+        "--duration-seconds",
+        type=float,
+        default=None,
+        help="Record for this wall-clock duration; max-read-attempts remains a safety cap when >0.",
+    )
+    parser.add_argument(
+        "--progress-every-frames",
+        type=int,
+        default=30,
+        help="Print recorder progress every N stereo frames; pass 0 to disable.",
+    )
     parser.add_argument("--max-skew-frames", type=int, default=1)
     parser.add_argument("--sleep-seconds", type=float, default=0.005)
     parser.add_argument("--require-pair", action="store_true")
@@ -256,9 +288,16 @@ def main() -> int:
             right_reader=right_reader,
             out_dir=args.out_dir,
             calibration=calibration,
-            max_read_attempts=args.max_read_attempts,
+            max_read_attempts=(
+                args.max_read_attempts
+                if args.max_read_attempts is not None
+                else (0 if args.duration_seconds is not None else 240)
+            ),
             max_skew_frames=args.max_skew_frames,
             sleep_seconds=args.sleep_seconds,
+            duration_seconds=args.duration_seconds,
+            progress_every_frames=args.progress_every_frames,
+            progress_callback=print_progress,
         )
     except Exception as exc:
         status, exit_code = startup_error_status(exc, args.out_dir)

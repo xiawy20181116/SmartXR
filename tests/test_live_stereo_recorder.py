@@ -85,6 +85,20 @@ class FakeReader:
         self.released = True
 
 
+class InfiniteReader:
+    def __init__(self, *, start_frame_id: int = 1):
+        self.next_frame_id = start_frame_id
+        self.released = False
+
+    def read_latest(self):
+        frame = make_frame(self.next_frame_id)
+        self.next_frame_id += 1
+        return True, frame.frame_id, frame
+
+    def release(self):
+        self.released = True
+
+
 class FakeNv12Array:
     shape = (3, 4)
 
@@ -146,6 +160,55 @@ class LiveStereoRecorderTests(unittest.TestCase):
             self.assertEqual(metadata["pairing"]["stats"]["pair_count"], 2)
             self.assertEqual(metadata["pairing"]["stats"]["dropped_unpaired_left"], 1)
             self.assertEqual(metadata["pairing"]["stats"]["dropped_unpaired_right"], 1)
+
+    def test_record_stops_after_duration_without_estimating_attempts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            left = InfiniteReader(start_frame_id=1)
+            right = InfiniteReader(start_frame_id=1)
+
+            status = record_live_stereo_package(
+                left_reader=left,
+                right_reader=right,
+                out_dir=out_dir,
+                calibration=SCENE_STEREO_28.scaled_to(1164, 872),
+                max_read_attempts=10_000,
+                max_skew_frames=0,
+                sleep_seconds=0.001,
+                duration_seconds=0.01,
+            )
+
+            self.assertTrue(1 <= status["attempts"] < 10_000)
+            self.assertEqual(status["frames_seen_left"], status["attempts"])
+            self.assertEqual(status["frames_seen_right"], status["attempts"])
+            self.assertAlmostEqual(status["duration_seconds"], 0.01)
+            self.assertGreaterEqual(status["elapsed_seconds"], 0.0)
+            self.assertTrue(left.released)
+            self.assertTrue(right.released)
+
+    def test_record_reports_progress_every_n_stereo_frames(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            progress: list[dict] = []
+            left = FakeReader([make_frame(i) for i in range(1, 6)])
+            right = FakeReader([make_frame(i) for i in range(1, 6)])
+
+            status = record_live_stereo_package(
+                left_reader=left,
+                right_reader=right,
+                out_dir=Path(tmp),
+                calibration=SCENE_STEREO_28.scaled_to(1164, 872),
+                max_read_attempts=5,
+                max_skew_frames=0,
+                sleep_seconds=0.0,
+                progress_every_frames=2,
+                progress_callback=progress.append,
+            )
+
+            self.assertEqual(status["frames_seen_left"], 5)
+            self.assertEqual(status["frames_seen_right"], 5)
+            self.assertEqual([event["stereo_frames"] for event in progress], [2, 4])
+            self.assertEqual(progress[0]["frames_seen_left"], 2)
+            self.assertEqual(progress[0]["frames_seen_right"], 2)
 
     def test_coerce_mapping_frame_rejects_bad_payload_size(self):
         with self.assertRaises(LiveStereoRecorderError):
@@ -209,6 +272,10 @@ class LiveStereoRecorderTests(unittest.TestCase):
         self.assertIn("build_stereo_shm_names", tool_source)
         self.assertIn("record_antman_vst_stereo_package.py", runner_source)
         self.assertIn("Antman.VST.AI.v1", runner_source)
+        self.assertIn("--duration-seconds", tool_source)
+        self.assertIn("--progress-every-frames", tool_source)
+        self.assertIn("[double]$DurationSeconds", runner_source)
+        self.assertIn("[int]$ProgressEveryFrames", runner_source)
 
     def test_antman_tool_defaults_to_vst_ai_shm_consumer_module(self):
         tool = load_module(ANTMAN_TOOL, "record_antman_vst_stereo_package")
