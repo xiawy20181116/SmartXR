@@ -206,9 +206,23 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("run_proxy_targets_live_monitor.ps1", source)
         self.assertIn("analyze_live_run_diagnostics.py", source)
         self.assertIn('Open-RunnerTab -WindowName $WindowName -Title "SmartXR package replay sender"', source)
-        self.assertIn('Open-RunnerTab -WindowName $WindowName -Title "SmartXR PCMR receiver"', source)
+        self.assertIn('Open-RunnerTab -WindowName $WindowName -Title "SmartXR package replay receiver"', source)
         self.assertIn('Open-RunnerTab -WindowName $WindowName -Title "SmartXR proxy_targets monitor"', source)
         self.assertIn("package proxy_targets live replay publisher listening", source)
+
+    def test_stereo_package_replay_runner_supports_demo_only_receiver(self):
+        self.assertTrue(STEREO_PACKAGE_REPLAY_RUNNER.exists())
+        source = STEREO_PACKAGE_REPLAY_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("[switch]$DemoOnly", source)
+        self.assertIn("$ProjectDir = Join-Path -Path $RepoRoot -ChildPath \"godot-android\"", source)
+        self.assertIn("$GxrExtensionSwitch = Join-Path -Path $RepoRoot -ChildPath \"tools\\set_gxr_extension.ps1\"", source)
+        self.assertIn("if ($DemoOnlyLiteral) {", source)
+        self.assertIn("& $GxrExtensionSwitchLiteral -Mode disable -ProjectDir $ProjectDirLiteral", source)
+        self.assertIn('$env:PROXY_TARGETS_WS_URL = $WsUrlLiteral', source)
+        self.assertIn('$env:SMARTXR_STATUS_HUD_VISIBLE = "1"', source)
+        self.assertIn("& $GodotExeLiteral --path $ProjectDirLiteral", source)
+        self.assertIn("& $GxrExtensionSwitchLiteral -Mode enable -ProjectDir $ProjectDirLiteral", source)
 
     def test_overlay_visual_check_runner_holds_godot_open_for_manual_inspection(self):
         self.assertTrue(VISUAL_RUNNER.exists())

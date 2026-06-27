@@ -19,17 +19,20 @@ param(
     [double]$MonitorTimeoutSeconds = 20.0,
     [switch]$UseAntmanPassthroughOverlay,
     [switch]$KeepReceiverOpen,
+    [switch]$DemoOnly,
     [string]$PythonExe = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = [string](Resolve-Path (Join-Path -Path $PSScriptRoot -ChildPath ".."))
+$ProjectDir = Join-Path -Path $RepoRoot -ChildPath "godot-android"
 $Publisher = Join-Path -Path $RepoRoot -ChildPath "tools\antman_vst_stereo_package_proxy_targets_live_publisher.py"
 $PcmrRunner = Join-Path -Path $RepoRoot -ChildPath "tools\run_windows_pcmr.ps1"
 $MonitorRunner = Join-Path -Path $RepoRoot -ChildPath "tools\run_proxy_targets_live_monitor.ps1"
 $HealthValidator = Join-Path -Path $RepoRoot -ChildPath "tools\validate_proxy_targets_end_to_end_health.py"
 $RunDiagnosticsAnalyzer = Join-Path -Path $RepoRoot -ChildPath "tools\analyze_live_run_diagnostics.py"
+$GxrExtensionSwitch = Join-Path -Path $RepoRoot -ChildPath "tools\set_gxr_extension.ps1"
 $WorkDir = Join-Path -Path $RepoRoot -ChildPath ".tmp\windows_pcmr_stereo_package_proxy_targets_replay"
 $SenderScript = Join-Path -Path $WorkDir -ChildPath "sender.ps1"
 $ReceiverScript = Join-Path -Path $WorkDir -ChildPath "receiver.ps1"
@@ -143,7 +146,13 @@ if ($PythonExe -eq "") {
 }
 
 $ResolvedPackageDir = [string](Resolve-Path -LiteralPath $PackageDir)
-foreach ($RequiredPath in @($Publisher, $PcmrRunner, $MonitorRunner, $HealthValidator, $RunDiagnosticsAnalyzer, $ResolvedPackageDir)) {
+$RequiredPaths = @($Publisher, $MonitorRunner, $HealthValidator, $RunDiagnosticsAnalyzer, $ResolvedPackageDir)
+if ($DemoOnly) {
+    $RequiredPaths += @($GodotExe, $ProjectDir, $GxrExtensionSwitch)
+} else {
+    $RequiredPaths += @($PcmrRunner)
+}
+foreach ($RequiredPath in $RequiredPaths) {
     if (-not (Test-Path -LiteralPath $RequiredPath)) {
         throw "Required path not found: $RequiredPath"
     }
@@ -159,10 +168,12 @@ Remove-Item -LiteralPath $SenderLog, $ReceiverLog, $MonitorLog, $DepthTraceFile,
 $RepoRootLiteral = ConvertTo-PowerShellLiteral $RepoRoot
 $PythonExeLiteral = ConvertTo-PowerShellLiteral $PythonExe
 $PublisherLiteral = ConvertTo-PowerShellLiteral $Publisher
+$ProjectDirLiteral = ConvertTo-PowerShellLiteral $ProjectDir
 $PcmrRunnerLiteral = ConvertTo-PowerShellLiteral $PcmrRunner
 $MonitorRunnerLiteral = ConvertTo-PowerShellLiteral $MonitorRunner
 $HealthValidatorLiteral = ConvertTo-PowerShellLiteral $HealthValidator
 $RunDiagnosticsAnalyzerLiteral = ConvertTo-PowerShellLiteral $RunDiagnosticsAnalyzer
+$GxrExtensionSwitchLiteral = ConvertTo-PowerShellLiteral $GxrExtensionSwitch
 $PackageDirLiteral = ConvertTo-PowerShellLiteral $ResolvedPackageDir
 $ReplayTimingLiteral = ConvertTo-PowerShellLiteral $ReplayTiming
 $AntmanRootLiteral = ConvertTo-PowerShellLiteral $AntmanRoot
@@ -179,6 +190,7 @@ $PcmrStatusFileLiteral = ConvertTo-PowerShellLiteral $PcmrStatusFile
 $SenderReadyFileLiteral = ConvertTo-PowerShellLiteral $SenderReadyFile
 $UseOverlayLiteral = if ($UseAntmanPassthroughOverlay) { "`$true" } else { "`$false" }
 $KeepReceiverOpenLiteral = if ($KeepReceiverOpen) { "`$true" } else { "`$false" }
+$DemoOnlyLiteral = if ($DemoOnly) { "`$true" } else { "`$false" }
 
 $SenderContent = @"
 `$ErrorActionPreference = "Stop"
@@ -213,30 +225,55 @@ exit `$ExitCode
 
 $ReceiverContent = @"
 `$ErrorActionPreference = "Stop"
-`$Host.UI.RawUI.WindowTitle = "SmartXR PCMR receiver"
+`$Host.UI.RawUI.WindowTitle = "SmartXR package replay receiver"
 Set-Location -LiteralPath $RepoRootLiteral
-Write-Host "[receiver] SmartXR PCMR receiver"
+Write-Host "[receiver] SmartXR package replay receiver"
 Write-Host "[receiver] Using proxy_targets: $WsUrl"
 Write-Host "[receiver] Waiting for sender_ready marker; receiver waits for sender_ready."
 while (-not (Test-Path -LiteralPath $SenderReadyFileLiteral)) {
   Start-Sleep -Milliseconds 250
 }
-Write-Host "[receiver] Sender ready; starting PCMR validation."
-`$ArgsList = @{
-  GodotExe = $GodotExeLiteral
-  ValidateProxyTargets = `$true
-  ProxyTargetsWsUrl = $WsUrlLiteral
-  ProxyTargetsTimeoutSeconds = $ProxyTargetsTimeoutSeconds
+if ($DemoOnlyLiteral) {
+  Write-Host "[receiver] Sender ready; starting demo_run without PCMR validation."
+  `$OldProxyTargetsWsUrl = `$env:PROXY_TARGETS_WS_URL
+  `$OldStatusHudVisible = `$env:SMARTXR_STATUS_HUD_VISIBLE
+  try {
+    & $GxrExtensionSwitchLiteral -Mode disable -ProjectDir $ProjectDirLiteral
+    `$env:PROXY_TARGETS_WS_URL = $WsUrlLiteral
+    `$env:SMARTXR_STATUS_HUD_VISIBLE = "1"
+    & $GodotExeLiteral --path $ProjectDirLiteral *>&1 | Tee-Object -FilePath $ReceiverLogLiteral -Append
+    `$ExitCode = `$LASTEXITCODE
+  } finally {
+    if (`$null -eq `$OldProxyTargetsWsUrl) {
+      Remove-Item Env:\PROXY_TARGETS_WS_URL -ErrorAction SilentlyContinue
+    } else {
+      `$env:PROXY_TARGETS_WS_URL = `$OldProxyTargetsWsUrl
+    }
+    if (`$null -eq `$OldStatusHudVisible) {
+      Remove-Item Env:\SMARTXR_STATUS_HUD_VISIBLE -ErrorAction SilentlyContinue
+    } else {
+      `$env:SMARTXR_STATUS_HUD_VISIBLE = `$OldStatusHudVisible
+    }
+    & $GxrExtensionSwitchLiteral -Mode enable -ProjectDir $ProjectDirLiteral
+  }
+} else {
+  Write-Host "[receiver] Sender ready; starting PCMR validation."
+  `$ArgsList = @{
+    GodotExe = $GodotExeLiteral
+    ValidateProxyTargets = `$true
+    ProxyTargetsWsUrl = $WsUrlLiteral
+    ProxyTargetsTimeoutSeconds = $ProxyTargetsTimeoutSeconds
+  }
+  if ($UseOverlayLiteral) {
+    `$ArgsList["UseAntmanPassthroughOverlay"] = `$true
+  }
+  if ($KeepReceiverOpenLiteral) {
+    `$ArgsList["KeepGodotOpen"] = `$true
+  }
+  & $PcmrRunnerLiteral @ArgsList *>&1 | Tee-Object -FilePath $ReceiverLogLiteral -Append
+  `$ExitCode = `$LASTEXITCODE
 }
-if ($UseOverlayLiteral) {
-  `$ArgsList["UseAntmanPassthroughOverlay"] = `$true
-}
-if ($KeepReceiverOpenLiteral) {
-  `$ArgsList["KeepGodotOpen"] = `$true
-}
-& $PcmrRunnerLiteral @ArgsList *>&1 | Tee-Object -FilePath $ReceiverLogLiteral -Append
-`$ExitCode = `$LASTEXITCODE
-Write-Host "[receiver] PCMR receiver exited with code `$ExitCode"
+Write-Host "[receiver] Package replay receiver exited with code `$ExitCode"
 exit `$ExitCode
 "@
 
@@ -317,6 +354,7 @@ Write-Host "It falls back to three visible PowerShell windows otherwise."
 Write-Host "WebSocket: $WsUrl"
 Write-Host "Package:   $ResolvedPackageDir"
 Write-Host "Timing:    $ReplayTiming source_hz=$SourceHz publish_hz=$Hz"
+Write-Host "Demo only: $DemoOnly"
 Write-Host "Work dir:  $WorkDir"
 Write-Host "Depth trace: $DepthTraceFile"
 Write-Host ""
@@ -336,7 +374,7 @@ $SenderLogTail
 }
 Set-Content -LiteralPath $SenderReadyFile -Value "ready" -Encoding ASCII
 
-Open-RunnerTab -WindowName $WindowName -Title "SmartXR PCMR receiver" -RunnerPath $ReceiverScript
+Open-RunnerTab -WindowName $WindowName -Title "SmartXR package replay receiver" -RunnerPath $ReceiverScript
 Open-RunnerTab -WindowName $WindowName -Title "SmartXR proxy_targets monitor" -RunnerPath $MonitorScript
 
 Write-Host ""

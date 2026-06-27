@@ -35,6 +35,23 @@ from smartxr.stereo_package import StereoPair, load_stereo_package  # noqa: E402
 ReplayTiming = str
 
 
+class StereoPackageReplayClock:
+    def __init__(self, monotonic_fn: Callable[[], float]) -> None:
+        self.monotonic_fn = monotonic_fn
+        self.started_at_s: float | None = None
+
+    def now(self) -> float:
+        now_s = self.monotonic_fn()
+        if self.started_at_s is None:
+            self.started_at_s = now_s
+        return now_s
+
+    def elapsed_s(self) -> float:
+        now_s = self.now()
+        assert self.started_at_s is not None
+        return max(0.0, now_s - self.started_at_s)
+
+
 class StereoPackageReplayReader:
     def __init__(
         self,
@@ -45,6 +62,7 @@ class StereoPackageReplayReader:
         source_hz: float,
         monotonic_fn: Callable[[], float] = time.monotonic,
         sleep_fn: Callable[[float], None] = time.sleep,
+        clock: StereoPackageReplayClock | None = None,
     ) -> None:
         if replay_timing not in ("capture", "fixed", "fast"):
             raise ValueError(f"unsupported replay_timing: {replay_timing!r}")
@@ -54,25 +72,52 @@ class StereoPackageReplayReader:
         self.source_hz = float(source_hz)
         self.monotonic_fn = monotonic_fn
         self.sleep_fn = sleep_fn
-        self.started_at_s: float | None = None
+        self.clock = clock or StereoPackageReplayClock(monotonic_fn)
         self.first_timestamp_us = self.refs[0].timestamp_us if self.refs else 0
         self.next_index = 0
+        self.last_returned_index = -1
         self.frames_returned = 0
+        self.frames_skipped_by_clock = 0
         self.empty_reads = 0
         self.total_sleep_s = 0.0
         self.last_frame_id: int | None = None
         self.last_timestamp_us: int | None = None
+        self.last_source_frame_index_gap = 0
+        self.last_replay_clock_lag_ms = 0.0
+        self.last_detector_backlog = 0
+        self.max_detector_backlog = 0
+        self.last_package_index: int | None = None
 
     def read_latest(self) -> tuple[bool, int, dict[str, Any] | None]:
-        if self.next_index >= len(self.refs):
+        if not self.refs:
             self.empty_reads += 1
             return True, -1, None
-        if self.started_at_s is None:
-            self.started_at_s = self.monotonic_fn()
 
-        ref = self.refs[self.next_index]
-        self._wait_until_due(ref)
-        self.next_index += 1
+        if self.replay_timing == "fast":
+            index = self.next_index
+            if index >= len(self.refs):
+                self.empty_reads += 1
+                return True, -1, None
+            self.next_index += 1
+            self.last_source_frame_index_gap = 1 if self.last_returned_index >= 0 else 0
+            self.last_detector_backlog = 0
+            self.last_replay_clock_lag_ms = 0.0
+        else:
+            index = self._latest_due_index()
+            if index <= self.last_returned_index:
+                self.empty_reads += 1
+                self.last_source_frame_index_gap = 0
+                self.last_detector_backlog = 0
+                return True, -1, None
+            gap = index - self.last_returned_index
+            self.last_source_frame_index_gap = gap if self.last_returned_index >= 0 else 0
+            self.last_detector_backlog = max(0, gap - 1)
+            self.max_detector_backlog = max(self.max_detector_backlog, self.last_detector_backlog)
+            self.frames_skipped_by_clock += self.last_detector_backlog
+            self.next_index = max(self.next_index, index + 1)
+            self.last_replay_clock_lag_ms = self._replay_clock_lag_ms(index)
+
+        ref = self.refs[index]
 
         packet = read_packet_file(ref.path, index=ref.index)
         payload = packet.y_plane + packet.uv_plane
@@ -94,43 +139,62 @@ class StereoPackageReplayReader:
             "source": "stereo_package_replay",
             "eye": self.eye,
             "packet_path": str(ref.path),
+            "package_index": int(index),
         }
         self.frames_returned += 1
+        self.last_returned_index = index
+        self.last_package_index = int(index)
         self.last_frame_id = int(ref.frame_id)
         self.last_timestamp_us = timestamp_us
         return True, int(ref.frame_id), frame
 
-    def _wait_until_due(self, ref: Any) -> None:
-        delay_s = self._scheduled_elapsed_s(ref)
-        if delay_s <= 0.0 or self.replay_timing == "fast":
-            return
-        assert self.started_at_s is not None
-        due_at_s = self.started_at_s + delay_s
-        remaining_s = due_at_s - self.monotonic_fn()
-        if remaining_s <= 0.0:
-            return
-        self.total_sleep_s += remaining_s
-        self.sleep_fn(remaining_s)
+    def _latest_due_index(self) -> int:
+        elapsed_s = self.clock.elapsed_s()
+        if self.replay_timing == "fixed":
+            due_index = int(elapsed_s * max(self.source_hz, 0.1))
+            return min(max(0, due_index), len(self.refs) - 1)
 
-    def _scheduled_elapsed_s(self, ref: Any) -> float:
+        due_index = self.last_returned_index
+        start_index = max(0, self.last_returned_index + 1)
+        for index in range(start_index, len(self.refs)):
+            if self._scheduled_elapsed_s_for_index(index) <= elapsed_s + 1e-9:
+                due_index = index
+            else:
+                break
+        return max(0, due_index)
+
+    def _scheduled_elapsed_s_for_index(self, index: int) -> float:
+        if self.replay_timing == "fixed":
+            return float(index) / max(self.source_hz, 0.1)
+        ref = self.refs[index]
+        return max(0.0, (int(ref.timestamp_us) - int(self.first_timestamp_us)) / 1_000_000.0)
+
+    def _replay_clock_lag_ms(self, index: int) -> float:
         if self.replay_timing == "fast":
             return 0.0
-        if self.replay_timing == "fixed":
-            return float(self.next_index) / max(self.source_hz, 0.1)
-        return max(0.0, (int(ref.timestamp_us) - int(self.first_timestamp_us)) / 1_000_000.0)
+        elapsed_s = self.clock.elapsed_s()
+        due_s = self._scheduled_elapsed_s_for_index(index)
+        return max(0.0, (elapsed_s - due_s) * 1000.0)
 
     def get_stats(self) -> dict[str, Any]:
         return {
             "reader": "stereo_package_replay",
             "eye": self.eye,
             "replay_timing": self.replay_timing,
+            "source_clock_mode": "sequential" if self.replay_timing == "fast" else "latest_due_frame",
             "source_hz": self.source_hz,
             "frames_total": len(self.refs),
             "frames_returned": self.frames_returned,
+            "frames_skipped_by_clock": self.frames_skipped_by_clock,
             "empty_reads": self.empty_reads,
-            "remaining_frames": max(0, len(self.refs) - self.next_index),
+            "remaining_frames": max(0, len(self.refs) - max(self.next_index, self.last_returned_index + 1)),
             "last_frame_id": self.last_frame_id,
             "last_timestamp_us": self.last_timestamp_us,
+            "last_package_index": self.last_package_index,
+            "source_frame_index_gap": self.last_source_frame_index_gap,
+            "replay_clock_lag_ms": self.last_replay_clock_lag_ms,
+            "detector_backlog": self.last_detector_backlog,
+            "max_detector_backlog": self.max_detector_backlog,
             "total_sleep_s": self.total_sleep_s,
         }
 
@@ -150,6 +214,7 @@ def create_stereo_package_replay_readers(
     pairs: list[StereoPair] = list(summary.pairs)
     left_refs = [pair.left for pair in pairs]
     right_refs = [pair.right for pair in pairs]
+    clock = StereoPackageReplayClock(monotonic_fn)
     return (
         StereoPackageReplayReader(
             eye="left",
@@ -158,6 +223,7 @@ def create_stereo_package_replay_readers(
             source_hz=source_hz,
             monotonic_fn=monotonic_fn,
             sleep_fn=sleep_fn,
+            clock=clock,
         ),
         StereoPackageReplayReader(
             eye="right",
@@ -166,6 +232,7 @@ def create_stereo_package_replay_readers(
             source_hz=source_hz,
             monotonic_fn=monotonic_fn,
             sleep_fn=sleep_fn,
+            clock=clock,
         ),
     )
 

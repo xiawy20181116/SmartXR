@@ -671,6 +671,25 @@ def build_depth_trace_event(
         "sync": diagnostics.get("sync", {}),
         "realtime": diagnostics.get("realtime", {}),
     }
+    left_source_stats = event["left_source_stats"] if isinstance(event["left_source_stats"], dict) else {}
+    right_source_stats = event["right_source_stats"] if isinstance(event["right_source_stats"], dict) else {}
+    replay_stat_keys = (
+        "source_frame_index_gap",
+        "replay_clock_lag_ms",
+        "detector_backlog",
+    )
+    for key in replay_stat_keys:
+        left_key = f"left_{key}"
+        right_key = f"right_{key}"
+        left_value = left_source_stats.get(key)
+        right_value = right_source_stats.get(key)
+        if left_value is not None:
+            event[left_key] = left_value
+        if right_value is not None:
+            event[right_key] = right_value
+        values = [value for value in (left_value, right_value) if isinstance(value, (int, float))]
+        if values:
+            event[key] = max(values)
     clients = diagnostics.get("clients")
     if isinstance(clients, dict):
         event["clients"] = dict(clients)

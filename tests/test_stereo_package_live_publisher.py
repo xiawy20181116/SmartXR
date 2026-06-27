@@ -65,9 +65,18 @@ def write_eye_session(package_dir: Path, eye: str, frame_ids: list[int], timesta
     )
 
 
-def write_stereo_package(package_dir: Path) -> None:
-    write_eye_session(package_dir, "left", [100, 101], [1_000_000, 1_033_333])
-    write_eye_session(package_dir, "right", [100, 101], [1_000_120, 1_033_450])
+def write_stereo_package(
+    package_dir: Path,
+    *,
+    frame_ids: list[int] | None = None,
+    left_timestamps_us: list[int] | None = None,
+    right_timestamps_us: list[int] | None = None,
+) -> None:
+    frame_ids = frame_ids or [100, 101]
+    left_timestamps_us = left_timestamps_us or [1_000_000, 1_033_333]
+    right_timestamps_us = right_timestamps_us or [1_000_120, 1_033_450]
+    write_eye_session(package_dir, "left", frame_ids, left_timestamps_us)
+    write_eye_session(package_dir, "right", frame_ids, right_timestamps_us)
     metadata = build_stereo_session_metadata(
         SCENE_STEREO_28.scaled_to(1164, 872),
         pair_count=2,
@@ -147,7 +156,7 @@ class StereoPackageLivePublisherTests(unittest.TestCase):
                 sleep_fn=capture_clock.sleep,
             )
             capture_left.read_latest()
-            capture_left.read_latest()
+            capture_ok, capture_frame_id, capture_frame = capture_left.read_latest()
 
             fixed_clock = FakeClock()
             fixed_left, _fixed_right = publisher.create_stereo_package_replay_readers(
@@ -158,10 +167,86 @@ class StereoPackageLivePublisherTests(unittest.TestCase):
                 sleep_fn=fixed_clock.sleep,
             )
             fixed_left.read_latest()
-            fixed_left.read_latest()
+            fixed_ok, fixed_frame_id, fixed_frame = fixed_left.read_latest()
 
-            self.assertAlmostEqual(capture_clock.sleeps[-1], 0.033333, places=5)
-            self.assertAlmostEqual(fixed_clock.sleeps[-1], 1.0 / 45.0, places=5)
+            self.assertTrue(capture_ok)
+            self.assertEqual(capture_frame_id, -1)
+            self.assertIsNone(capture_frame)
+            self.assertEqual(capture_clock.sleeps, [])
+            self.assertTrue(fixed_ok)
+            self.assertEqual(fixed_frame_id, -1)
+            self.assertIsNone(fixed_frame)
+            self.assertEqual(fixed_clock.sleeps, [])
+
+            capture_clock.now = 0.033334
+            fixed_clock.now = 1.0 / 45.0
+            self.assertEqual(capture_left.read_latest()[1], 101)
+            self.assertEqual(fixed_left.read_latest()[1], 101)
+
+    def test_package_replay_reader_clocked_modes_return_latest_due_frame_without_draining(self):
+        publisher = load_module(PACKAGE_PUBLISHER, "antman_vst_stereo_package_proxy_targets_live_publisher")
+        with temporary_package_dir() as tmp:
+            package_dir = Path(tmp)
+            write_stereo_package(
+                package_dir,
+                frame_ids=[100, 101, 102, 103],
+                left_timestamps_us=[1_000_000, 1_022_222, 1_044_444, 1_066_666],
+                right_timestamps_us=[1_000_100, 1_022_322, 1_044_544, 1_066_766],
+            )
+            clock = FakeClock()
+            left_reader, _right_reader = publisher.create_stereo_package_replay_readers(
+                package_dir,
+                replay_timing="fixed",
+                source_hz=45.0,
+                monotonic_fn=clock.monotonic,
+                sleep_fn=clock.sleep,
+            )
+
+            self.assertEqual(left_reader.read_latest()[1], 100)
+            self.assertEqual(left_reader.read_latest()[1], -1)
+
+            clock.now = 3.0 / 45.0
+            ok, frame_id, frame = left_reader.read_latest()
+
+            self.assertTrue(ok)
+            self.assertEqual(frame_id, 103)
+            self.assertIsNotNone(frame)
+            stats = left_reader.get_stats()
+            self.assertEqual(stats["frames_returned"], 2)
+            self.assertEqual(stats["source_frame_index_gap"], 3)
+            self.assertEqual(stats["detector_backlog"], 2)
+            self.assertEqual(stats["frames_skipped_by_clock"], 2)
+            self.assertIn("replay_clock_lag_ms", stats)
+
+    def test_package_replay_source_clock_stats_are_promoted_to_trace_event(self):
+        live = load_module(
+            ROOT / "tools" / "antman_vst_stereo_proxy_targets_live_publisher.py",
+            "antman_vst_stereo_proxy_targets_live_publisher_for_trace",
+        )
+
+        event = live.build_depth_trace_event(
+            message=None,
+            sequence=7,
+            diagnostics={
+                "reason": "no_target",
+                "left_source_stats": {
+                    "source_frame_index_gap": 4,
+                    "replay_clock_lag_ms": 11.5,
+                    "detector_backlog": 3,
+                },
+                "right_source_stats": {
+                    "source_frame_index_gap": 2,
+                    "replay_clock_lag_ms": 7.0,
+                    "detector_backlog": 1,
+                },
+            },
+        )
+
+        self.assertEqual(event["source_frame_index_gap"], 4)
+        self.assertEqual(event["left_source_frame_index_gap"], 4)
+        self.assertEqual(event["right_source_frame_index_gap"], 2)
+        self.assertEqual(event["replay_clock_lag_ms"], 11.5)
+        self.assertEqual(event["detector_backlog"], 3)
 
     def test_package_replay_parse_args_exposes_timing_modes_and_trace(self):
         publisher = load_module(PACKAGE_PUBLISHER, "antman_vst_stereo_package_proxy_targets_live_publisher")
