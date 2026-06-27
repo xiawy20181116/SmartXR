@@ -198,6 +198,7 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
             sequence=0,
             max_read_attempts=1,
             sleep_seconds=0,
+            max_pair_capture_delta_ms=15.0,
         )
 
         self.assertIsNotNone(message)
@@ -216,6 +217,108 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(event["temporal"], temporal)
         self.assertEqual(event["pair_capture_delta_ms"], 12.5)
         self.assertEqual(event["frame_id_delta"], 0)
+
+    def test_live_stereo_pairs_closest_capture_timestamps_before_tracking(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        class FakeReader:
+            def __init__(self, frames):
+                self.frames = list(frames)
+
+            def read_latest(self):
+                if not self.frames:
+                    return True, -1, None
+                return self.frames.pop(0)
+
+            def get_stats(self):
+                return {}
+
+        class FakeTracker:
+            def __init__(self, bbox):
+                self.bbox = bbox
+                self.frames = []
+
+            def process_frame(self, frame):
+                self.frames.append(frame.timestamp_us)
+                return FakeTrackingResult([FakePerson(bbox=self.bbox)])
+
+        left_tracker = FakeTracker((640, 240, 720, 520))
+        right_tracker = FakeTracker((608, 240, 688, 520))
+
+        message, diagnostics = publisher.next_live_stereo_proxy_targets_message_with_diagnostics(
+            left_reader=FakeReader(
+                [
+                    (True, 100, FakeFrame(timestamp_us=1_000_000)),
+                    (True, 101, FakeFrame(timestamp_us=1_022_222)),
+                ]
+            ),
+            right_reader=FakeReader([(True, 201, FakeFrame(timestamp_us=1_000_500))]),
+            left_tracker=left_tracker,
+            right_tracker=right_tracker,
+            sequence=0,
+            max_read_attempts=2,
+            sleep_seconds=0,
+            max_pair_capture_delta_ms=5.0,
+        )
+
+        self.assertIsNotNone(message)
+        self.assertEqual(left_tracker.frames, [1_000_000])
+        self.assertEqual(right_tracker.frames, [1_000_500])
+        self.assertEqual(diagnostics["reason"], "target_ready")
+        self.assertEqual(diagnostics["temporal"]["left_frame_id"], 100)
+        self.assertEqual(diagnostics["temporal"]["right_frame_id"], 201)
+        self.assertEqual(diagnostics["temporal"]["pair_capture_delta_ms"], 0.5)
+        self.assertEqual(diagnostics["sync"]["pairing_strategy"], "capture_timestamp")
+
+        event = publisher.build_depth_trace_event(message=message, diagnostics=diagnostics)
+        self.assertEqual(event["left_frame_id"], 100)
+        self.assertEqual(event["right_frame_id"], 201)
+        self.assertEqual(event["sync"]["pairing_strategy"], "capture_timestamp")
+
+    def test_live_stereo_rejects_timestamp_mismatch_and_reports_drops(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        class FakeReader:
+            def __init__(self, frames):
+                self.frames = list(frames)
+
+            def read_latest(self):
+                if not self.frames:
+                    return True, -1, None
+                return self.frames.pop(0)
+
+            def get_stats(self):
+                return {}
+
+        class FakeTracker:
+            calls = 0
+
+            def process_frame(self, frame):
+                self.calls += 1
+                return FakeTrackingResult([FakePerson()])
+
+        left_tracker = FakeTracker()
+        right_tracker = FakeTracker()
+
+        message, diagnostics = publisher.next_live_stereo_proxy_targets_message_with_diagnostics(
+            left_reader=FakeReader([(True, 10, FakeFrame(timestamp_us=1_000_000))]),
+            right_reader=FakeReader([(True, 11, FakeFrame(timestamp_us=1_030_000))]),
+            left_tracker=left_tracker,
+            right_tracker=right_tracker,
+            sequence=0,
+            max_read_attempts=1,
+            sleep_seconds=0,
+            max_pair_capture_delta_ms=5.0,
+        )
+
+        self.assertIsNone(message)
+        self.assertEqual(left_tracker.calls, 0)
+        self.assertEqual(right_tracker.calls, 0)
+        self.assertEqual(diagnostics["reason"], "temporal_mismatch")
+        self.assertEqual(diagnostics["sync"]["temporal_mismatch_count"], 1)
+        self.assertEqual(diagnostics["realtime"]["target_source_hz"], 45.0)
+        self.assertEqual(diagnostics["realtime"]["frames_seen_left"], 1)
+        self.assertEqual(diagnostics["realtime"]["frames_seen_right"], 1)
 
     def test_live_stereo_message_uses_stable_active_target_and_traces_raw_ids(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")

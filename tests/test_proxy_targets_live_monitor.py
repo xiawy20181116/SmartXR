@@ -125,6 +125,52 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         self.assertEqual(status["missing_depth_confidence_count"], 0)
         self.assertEqual(status["missing_depth_source_count"], 0)
 
+    def test_analyzes_realtime_rate_and_sequence_drops_against_45hz(self):
+        monitor = load_module(MONITOR, "monitor_proxy_targets_live_stream")
+
+        def message(sequence, timestamp_ms):
+            return {
+                "type": "proxy_targets",
+                "schema_version": 1,
+                "sequence": sequence,
+                "targets": [
+                    {
+                        "target_id": "vst_stereo-active-1",
+                        "source": "vst",
+                        "coordinate_space": "head",
+                        "transform_space": "head",
+                        "state": "tracked",
+                        "confidence": 0.9,
+                        "depth_source": "bbox_top_center_fallback",
+                        "depth_confidence": "low",
+                        "timestamp_ms": timestamp_ms,
+                        "transform": {
+                            "position": [0.0, 0.0, -1.0 - sequence * 0.01],
+                            "rotation_xyzw": [0.0, 0.0, 0.0, 1.0],
+                            "scale": [1.0, 1.0, 1.0],
+                        },
+                    }
+                ],
+                "cards": [{"card_id": "CardAnchor", "target_id": "vst_stereo-active-1", "offset_rule": {}}],
+            }
+
+        status = monitor.analyze_messages(
+            [
+                message(0, 1_000),
+                message(1, 1_022),
+                message(3, 1_088),
+            ],
+            min_packets=3,
+            expected_source_hz=45.0,
+        )
+
+        self.assertFalse(status["ok"])
+        self.assertEqual(status["realtime"]["expected_source_hz"], 45.0)
+        self.assertEqual(status["realtime"]["sequence_gap_count"], 1)
+        self.assertEqual(status["realtime"]["packet_drop_count"], 1)
+        self.assertEqual(status["realtime"]["late_interval_count"], 1)
+        self.assertAlmostEqual(status["realtime"]["observed_packet_hz"], 22.7, places=1)
+
     def test_depth_confidence_validator_requires_expected_distribution(self):
         validator = load_module(DEPTH_VALIDATOR, "validate_proxy_targets_depth_confidence_stream")
         status = {
@@ -448,6 +494,19 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
                             "switch_reason": "initial",
                             "active_age_frames": 1,
                             "held_last_pose": False,
+                            "sync": {
+                                "pairing_strategy": "capture_timestamp",
+                                "temporal_mismatch_count": 1,
+                                "dropped_left_frames": 1,
+                                "dropped_right_frames": 0,
+                            },
+                            "realtime": {
+                                "target_source_hz": 45.0,
+                                "frames_seen_left": 10,
+                                "frames_seen_right": 9,
+                                "estimated_left_dropped_frames": 2,
+                                "estimated_right_dropped_frames": 3,
+                            },
                         }
                     ),
                     json.dumps(
@@ -526,6 +585,11 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         self.assertEqual(status["tracking"]["raw_track_switch_count"], 1)
         self.assertEqual(status["tracking"]["last_switch_reason"], "switch_confirmed")
         self.assertEqual(status["tracking"]["last_active_age_frames"], 1)
+        self.assertEqual(status["tracking"]["sync"]["pairing_strategy"], "capture_timestamp")
+        self.assertEqual(status["tracking"]["sync"]["temporal_mismatch_count"], 1)
+        self.assertEqual(status["tracking"]["realtime"]["target_source_hz"], 45.0)
+        self.assertEqual(status["tracking"]["realtime"]["estimated_left_dropped_frames"], 2)
+        self.assertEqual(status["tracking"]["realtime"]["estimated_right_dropped_frames"], 3)
 
     def test_classifies_connection_refused_with_actionable_hint(self):
         monitor = load_module(MONITOR, "monitor_proxy_targets_live_stream")

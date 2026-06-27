@@ -37,6 +37,8 @@ def summarize_depth_trace(path: Path | None) -> dict[str, Any]:
             "held_last_pose_count": 0,
             "last_switch_reason": None,
             "last_active_age_frames": None,
+            "sync": {},
+            "realtime": {},
         }
     accepted = 0
     rejected = 0
@@ -50,6 +52,8 @@ def summarize_depth_trace(path: Path | None) -> dict[str, Any]:
     last_switch_reason: str | None = None
     last_active_age_frames: int | None = None
     max_candidate_count = 0
+    sync_summary: dict[str, Any] = {}
+    realtime_summary: dict[str, Any] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
@@ -90,6 +94,30 @@ def summarize_depth_trace(path: Path | None) -> dict[str, Any]:
             max_candidate_count = max(max_candidate_count, int(event.get("candidate_count", 0)))
         except (TypeError, ValueError):
             pass
+        sync = event.get("sync")
+        if isinstance(sync, dict):
+            sync_summary["pairing_strategy"] = sync.get("pairing_strategy") or sync_summary.get("pairing_strategy")
+            for key in ("temporal_mismatch_count", "dropped_left_frames", "dropped_right_frames"):
+                try:
+                    sync_summary[key] = max(int(sync_summary.get(key, 0)), int(sync.get(key, 0)))
+                except (TypeError, ValueError):
+                    pass
+        realtime = event.get("realtime")
+        if isinstance(realtime, dict):
+            for key in (
+                "target_source_hz",
+                "expected_frame_interval_ms",
+                "frames_seen_left",
+                "frames_seen_right",
+                "estimated_left_dropped_frames",
+                "estimated_right_dropped_frames",
+                "left_frame_min",
+                "left_frame_max",
+                "right_frame_min",
+                "right_frame_max",
+            ):
+                if key in realtime:
+                    realtime_summary[key] = realtime[key]
     return {
         "available": True,
         "accepted_count": accepted,
@@ -102,6 +130,8 @@ def summarize_depth_trace(path: Path | None) -> dict[str, Any]:
         "last_switch_reason": last_switch_reason,
         "last_active_age_frames": last_active_age_frames,
         "max_candidate_count": max_candidate_count,
+        "sync": sync_summary,
+        "realtime": realtime_summary,
     }
 
 

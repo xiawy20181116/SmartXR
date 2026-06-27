@@ -39,6 +39,8 @@ from smartxr.transport import (  # noqa: E402
 
 
 _DEPTH_TRACE_CONTEXT: dict[int, dict[str, Any]] = {}
+DEFAULT_MAX_PAIR_CAPTURE_DELTA_MS = 10.0
+DEFAULT_SOURCE_HZ = 45.0
 
 
 def is_proxy_targets_request(first_line: str) -> bool:
@@ -144,6 +146,21 @@ def _empty_diagnostics(reason: str) -> dict[str, Any]:
         "stereo_rejection_reason": None,
         "left_source_stats": {},
         "right_source_stats": {},
+        "sync": {
+            "pairing_strategy": "none",
+            "max_pair_capture_delta_ms": DEFAULT_MAX_PAIR_CAPTURE_DELTA_MS,
+            "temporal_mismatch_count": 0,
+            "dropped_left_frames": 0,
+            "dropped_right_frames": 0,
+        },
+        "realtime": {
+            "target_source_hz": DEFAULT_SOURCE_HZ,
+            "expected_frame_interval_ms": 1000.0 / DEFAULT_SOURCE_HZ,
+            "frames_seen_left": 0,
+            "frames_seen_right": 0,
+            "estimated_left_dropped_frames": 0,
+            "estimated_right_dropped_frames": 0,
+        },
     }
 
 
@@ -217,6 +234,89 @@ def _frame_timestamp_us(frame: Any) -> int | None:
 
 def _tracking_latency_ms(result: Any) -> float | None:
     return _numeric_attr_or_key(result, ("frame_latency_ms", "latency_ms", "processing_latency_ms"))
+
+
+def _frame_id_drop_count(seen: set[int]) -> int:
+    if not seen:
+        return 0
+    return max(0, max(seen) - min(seen) + 1 - len(seen))
+
+
+def _update_realtime_diagnostics(
+    diagnostics: dict[str, Any],
+    *,
+    seen_left: set[int],
+    seen_right: set[int],
+    target_source_hz: float = DEFAULT_SOURCE_HZ,
+) -> None:
+    diagnostics["realtime"] = {
+        "target_source_hz": float(target_source_hz),
+        "expected_frame_interval_ms": 1000.0 / max(float(target_source_hz), 0.1),
+        "frames_seen_left": len(seen_left),
+        "frames_seen_right": len(seen_right),
+        "left_frame_min": min(seen_left) if seen_left else None,
+        "left_frame_max": max(seen_left) if seen_left else None,
+        "right_frame_min": min(seen_right) if seen_right else None,
+        "right_frame_max": max(seen_right) if seen_right else None,
+        "estimated_left_dropped_frames": _frame_id_drop_count(seen_left),
+        "estimated_right_dropped_frames": _frame_id_drop_count(seen_right),
+    }
+
+
+def _select_next_pair_by_sync(
+    *,
+    pending_left: dict[int, Any],
+    pending_right: dict[int, Any],
+    pending_left_received_at_ms: dict[int, float] | None = None,
+    pending_right_received_at_ms: dict[int, float] | None = None,
+    max_pair_capture_delta_ms: float | None,
+    diagnostics: dict[str, Any],
+) -> tuple[int, int] | None:
+    if not pending_left or not pending_right:
+        return None
+
+    timestamped_pairs: list[tuple[float, int, int]] = []
+    for left_id, left_frame in pending_left.items():
+        left_ts = _frame_timestamp_us(left_frame)
+        if left_ts is None:
+            continue
+        for right_id, right_frame in pending_right.items():
+            right_ts = _frame_timestamp_us(right_frame)
+            if right_ts is None:
+                continue
+            timestamped_pairs.append((abs(float(left_ts) - float(right_ts)) / 1000.0, left_id, right_id))
+
+    if timestamped_pairs:
+        best_delta_ms, left_id, right_id = min(timestamped_pairs, key=lambda item: item[0])
+        sync = diagnostics.setdefault("sync", {})
+        sync["pairing_strategy"] = "capture_timestamp"
+        sync["best_pair_capture_delta_ms"] = best_delta_ms
+        sync["max_pair_capture_delta_ms"] = max_pair_capture_delta_ms
+        if max_pair_capture_delta_ms is None or best_delta_ms <= float(max_pair_capture_delta_ms):
+            return left_id, right_id
+        left_ts = _frame_timestamp_us(pending_left[left_id])
+        right_ts = _frame_timestamp_us(pending_right[right_id])
+        if left_ts is not None and right_ts is not None and left_ts <= right_ts:
+            pending_left.pop(left_id, None)
+            if pending_left_received_at_ms is not None:
+                pending_left_received_at_ms.pop(left_id, None)
+            sync["dropped_left_frames"] = int(sync.get("dropped_left_frames", 0)) + 1
+        else:
+            pending_right.pop(right_id, None)
+            if pending_right_received_at_ms is not None:
+                pending_right_received_at_ms.pop(right_id, None)
+            sync["dropped_right_frames"] = int(sync.get("dropped_right_frames", 0)) + 1
+        sync["temporal_mismatch_count"] = int(sync.get("temporal_mismatch_count", 0)) + 1
+        diagnostics["reason"] = "temporal_mismatch"
+        diagnostics["stereo_rejection_reason"] = "temporal_mismatch"
+        return None
+
+    common_frame_ids = sorted(set(pending_left).intersection(pending_right))
+    if common_frame_ids:
+        diagnostics.setdefault("sync", {})["pairing_strategy"] = "frame_id"
+        frame_id = common_frame_ids[0]
+        return frame_id, frame_id
+    return None
 
 
 def _pair_temporal_diagnostics(
@@ -391,6 +491,8 @@ def build_depth_trace_event(
         "stereo_rejection_reason": diagnostics.get("stereo_rejection_reason"),
         "left_source_stats": diagnostics.get("left_source_stats", {}),
         "right_source_stats": diagnostics.get("right_source_stats", {}),
+        "sync": diagnostics.get("sync", {}),
+        "realtime": diagnostics.get("realtime", {}),
     }
     if delivered_clients is not None:
         event["delivered_clients"] = delivered_clients
@@ -431,6 +533,8 @@ def build_depth_trace_event(
     source_frame = source_coordinate.get("source_frame", {})
     stereo = trace_context.get("stereo", target.get("stereo", {}))
     stereo_frame_id = stereo.get("frame_id", diagnostics.get("last_pair_frame_id"))
+    left_frame_id = temporal.get("left_frame_id") if isinstance(temporal, dict) else stereo_frame_id
+    right_frame_id = temporal.get("right_frame_id") if isinstance(temporal, dict) else stereo_frame_id
     depth_m = source_frame.get("anchor_depth")
     if depth_m is None:
         depth_m = source_coordinate.get("depth_m")
@@ -445,8 +549,8 @@ def build_depth_trace_event(
             "sequence": message.get("sequence"),
             "target_id": target.get("target_id"),
             "card_id": message.get("cards", [{}])[0].get("card_id"),
-            "left_frame_id": stereo_frame_id,
-            "right_frame_id": stereo_frame_id,
+            "left_frame_id": left_frame_id,
+            "right_frame_id": right_frame_id,
             "depth_m": depth_m,
             "depth_source": target.get("depth_source") or source_coordinate.get("depth_source"),
             "depth_confidence": target.get("depth_confidence") or source_coordinate.get("depth_confidence"),
@@ -499,6 +603,8 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
     sleep_seconds: float = 0.005,
     max_vertical_error_px: float | None = None,
     target_stabilizer: StereoActiveTargetStabilizer | None = None,
+    max_pair_capture_delta_ms: float | None = DEFAULT_MAX_PAIR_CAPTURE_DELTA_MS,
+    target_source_hz: float = DEFAULT_SOURCE_HZ,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     attempts = max_read_attempts if max_read_attempts is not None else max_empty_reads
     diagnostics = _empty_diagnostics("no_pair")
@@ -508,6 +614,7 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
     pending_right_received_at_ms: dict[int, float] = {}
     seen_left: set[int] = set()
     seen_right: set[int] = set()
+    diagnostics["sync"]["max_pair_capture_delta_ms"] = max_pair_capture_delta_ms
     for _ in range(max(1, int(attempts if attempts is not None else 120))):
         diagnostics["read_attempts"] += 1
         _read_one_eye(left_reader, pending_left, seen_left, pending_left_received_at_ms)
@@ -518,17 +625,32 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
         diagnostics["right_pending"] = len(pending_right)
         diagnostics["left_source_stats"] = left_reader.get_stats() if hasattr(left_reader, "get_stats") else {}
         diagnostics["right_source_stats"] = right_reader.get_stats() if hasattr(right_reader, "get_stats") else {}
+        _update_realtime_diagnostics(
+            diagnostics,
+            seen_left=seen_left,
+            seen_right=seen_right,
+            target_source_hz=target_source_hz,
+        )
 
-        for frame_id in sorted(set(pending_left).intersection(pending_right)):
-            left_frame = pending_left.pop(frame_id)
-            right_frame = pending_right.pop(frame_id)
-            left_received_at_ms = pending_left_received_at_ms.pop(frame_id, None)
-            right_received_at_ms = pending_right_received_at_ms.pop(frame_id, None)
+        pair_ids = _select_next_pair_by_sync(
+            pending_left=pending_left,
+            pending_right=pending_right,
+            pending_left_received_at_ms=pending_left_received_at_ms,
+            pending_right_received_at_ms=pending_right_received_at_ms,
+            max_pair_capture_delta_ms=max_pair_capture_delta_ms,
+            diagnostics=diagnostics,
+        )
+        if pair_ids is not None:
+            left_frame_id, right_frame_id = pair_ids
+            left_frame = pending_left.pop(left_frame_id)
+            right_frame = pending_right.pop(right_frame_id)
+            left_received_at_ms = pending_left_received_at_ms.pop(left_frame_id, None)
+            right_received_at_ms = pending_right_received_at_ms.pop(right_frame_id, None)
             left_tracking_result = left_tracker.process_frame(left_frame)
             right_tracking_result = right_tracker.process_frame(right_frame)
             diagnostics["temporal"] = _pair_temporal_diagnostics(
-                left_frame_id=frame_id,
-                right_frame_id=frame_id,
+                left_frame_id=left_frame_id,
+                right_frame_id=right_frame_id,
                 left_frame=left_frame,
                 right_frame=right_frame,
                 left_received_at_ms=left_received_at_ms,
@@ -537,7 +659,7 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
                 right_tracking_result=right_tracking_result,
             )
             record = build_stereo_bbox_pair_record(
-                frame_id=frame_id,
+                frame_id=left_frame_id,
                 left_frame=left_frame,
                 right_frame=right_frame,
                 left_tracking_result=left_tracking_result,
@@ -547,7 +669,7 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
                 right_source_stats=diagnostics["right_source_stats"],
                 target_stabilizer=target_stabilizer,
             )
-            diagnostics["last_pair_frame_id"] = frame_id
+            diagnostics["last_pair_frame_id"] = left_frame_id
             if record is None:
                 diagnostics["reason"] = "no_target"
                 continue
@@ -588,6 +710,8 @@ def _broadcast_loop(
     max_empty_reads: int,
     max_vertical_error_px: float | None,
     depth_trace: Path | None,
+    max_pair_capture_delta_ms: float | None,
+    target_source_hz: float,
 ) -> None:
     interval_s = 1.0 / max(hz, 0.1)
     sequence = 0
@@ -610,6 +734,8 @@ def _broadcast_loop(
             max_empty_reads=max_empty_reads,
             max_vertical_error_px=max_vertical_error_px,
             target_stabilizer=target_stabilizer,
+            max_pair_capture_delta_ms=max_pair_capture_delta_ms,
+            target_source_hz=target_source_hz,
         )
         if message is None:
             empty_windows += 1
@@ -716,6 +842,8 @@ def serve(args: argparse.Namespace) -> int:
                     "max_empty_reads": args.max_empty_reads,
                     "max_vertical_error_px": args.max_vertical_error_px,
                     "depth_trace": args.depth_trace,
+                    "max_pair_capture_delta_ms": args.max_pair_capture_delta_ms,
+                    "target_source_hz": args.target_source_hz,
                 },
                 daemon=True,
             ).start()
@@ -748,6 +876,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--min-confidence", type=float, default=0.5)
     parser.add_argument("--max-empty-reads", type=int, default=120)
     parser.add_argument("--max-vertical-error-px", type=float, default=None)
+    parser.add_argument("--max-pair-capture-delta-ms", type=float, default=DEFAULT_MAX_PAIR_CAPTURE_DELTA_MS)
+    parser.add_argument("--target-source-hz", type=float, default=DEFAULT_SOURCE_HZ)
     parser.add_argument("--depth-trace", type=Path, default=None)
     parser.add_argument("--recorded-width", type=int, default=880)
     parser.add_argument("--recorded-height", type=int, default=660)
