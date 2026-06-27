@@ -50,15 +50,18 @@ class VstAiShmConsumerReader:
         frame_id = int(header["frame_id"])
         self.consumer.acknowledge(frame_id)
         self.frames_returned += 1
+        frame = {
+            "width": int(header["width"]),
+            "height": int(header["height"]),
+            "stride": int(header["stride"]),
+            "payload": nv12.tobytes(),
+        }
+        if "timestamp_us" in header and header["timestamp_us"] is not None:
+            frame["timestamp_us"] = int(header["timestamp_us"])
         return (
             True,
             frame_id,
-            {
-                "width": int(header["width"]),
-                "height": int(header["height"]),
-                "stride": int(header["stride"]),
-                "payload": nv12.tobytes(),
-            },
+            frame,
         )
 
     def get_stats(self) -> dict[str, Any]:
