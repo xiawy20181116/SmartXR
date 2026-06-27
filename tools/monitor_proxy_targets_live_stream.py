@@ -101,7 +101,59 @@ def _perform_client_handshake(conn: socket.socket, host: str, port: int, path: s
         raise ConnectionError(f"websocket handshake failed: {first_line}")
 
 
-def analyze_messages(messages: list[dict[str, Any]], min_packets: int) -> dict[str, Any]:
+def _message_timestamp_ms(message: dict[str, Any]) -> float | None:
+    value = message.get("timestamp_ms")
+    if value is None:
+        targets = message.get("targets")
+        if isinstance(targets, list) and targets and isinstance(targets[0], dict):
+            value = targets[0].get("timestamp_ms")
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _realtime_summary(
+    messages: list[dict[str, Any]],
+    *,
+    sequences: list[int],
+    expected_source_hz: float,
+) -> dict[str, Any]:
+    timestamps = [
+        timestamp
+        for timestamp in (_message_timestamp_ms(message) for message in messages)
+        if timestamp is not None
+    ]
+    intervals = [current - previous for previous, current in zip(timestamps, timestamps[1:]) if current >= previous]
+    expected_interval_ms = 1000.0 / max(float(expected_source_hz), 0.1)
+    observed_packet_hz = None
+    if intervals:
+        mean_interval_ms = sum(intervals) / len(intervals)
+        if mean_interval_ms > 0.0:
+            observed_packet_hz = 1000.0 / mean_interval_ms
+    packet_drop_count = 0
+    sequence_gap_count = 0
+    for previous, current in zip(sequences, sequences[1:]):
+        gap = current - previous - 1
+        if gap > 0:
+            sequence_gap_count += 1
+            packet_drop_count += gap
+    return {
+        "expected_source_hz": float(expected_source_hz),
+        "expected_interval_ms": expected_interval_ms,
+        "timestamp_count": len(timestamps),
+        "interval_count": len(intervals),
+        "min_interval_ms": min(intervals) if intervals else None,
+        "max_interval_ms": max(intervals) if intervals else None,
+        "mean_interval_ms": (sum(intervals) / len(intervals)) if intervals else None,
+        "observed_packet_hz": observed_packet_hz,
+        "late_interval_count": sum(1 for interval in intervals if interval > expected_interval_ms * 1.5),
+        "sequence_gap_count": sequence_gap_count,
+        "packet_drop_count": packet_drop_count,
+    }
+
+
+def analyze_messages(messages: list[dict[str, Any]], min_packets: int, expected_source_hz: float = 45.0) -> dict[str, Any]:
     errors: list[str] = []
     sequences: list[int] = []
     target_ids: set[str] = set()
@@ -158,6 +210,8 @@ def analyze_messages(messages: list[dict[str, Any]], min_packets: int) -> dict[s
     elif messages:
         errors.append("sequence missing from one or more packets")
 
+    realtime = _realtime_summary(messages, sequences=sequences, expected_source_hz=expected_source_hz)
+
     return {
         "ok": not errors,
         "packets": len(messages),
@@ -172,6 +226,7 @@ def analyze_messages(messages: list[dict[str, Any]], min_packets: int) -> dict[s
         "depth_sources": dict(sorted(depth_sources.items())),
         "missing_depth_confidence_count": missing_depth_confidence_count,
         "missing_depth_source_count": missing_depth_source_count,
+        "realtime": realtime,
         "errors": errors,
     }
 
@@ -235,7 +290,13 @@ def status_from_exception(
     }
 
 
-def monitor_stream(url: str, min_packets: int, timeout_seconds: float, subscribe_stream: str = "proxy_targets") -> dict[str, Any]:
+def monitor_stream(
+    url: str,
+    min_packets: int,
+    timeout_seconds: float,
+    subscribe_stream: str = "proxy_targets",
+    expected_source_hz: float = 45.0,
+) -> dict[str, Any]:
     parsed = urlparse(url)
     if parsed.scheme != "ws":
         raise ValueError(f"only ws:// URLs are supported: {url}")
@@ -281,7 +342,7 @@ def monitor_stream(url: str, min_packets: int, timeout_seconds: float, subscribe
             last_sequence=last_sequence,
         )
 
-    status = analyze_messages(messages, min_packets=min_packets)
+    status = analyze_messages(messages, min_packets=min_packets, expected_source_hz=expected_source_hz)
     status["url"] = url
     status["timeout_seconds"] = timeout_seconds
     status["client_label"] = "monitor"
@@ -299,6 +360,7 @@ def main() -> int:
     parser.add_argument("--min-packets", type=int, default=5)
     parser.add_argument("--timeout-seconds", type=float, default=10.0)
     parser.add_argument("--subscribe-stream", default="proxy_targets")
+    parser.add_argument("--expected-source-hz", type=float, default=45.0)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
@@ -308,6 +370,7 @@ def main() -> int:
             min_packets=max(1, args.min_packets),
             timeout_seconds=max(0.1, args.timeout_seconds),
             subscribe_stream=args.subscribe_stream,
+            expected_source_hz=max(0.1, args.expected_source_hz),
         )
     except Exception as exc:
         status = status_from_exception(exc, args.url, args.timeout_seconds)

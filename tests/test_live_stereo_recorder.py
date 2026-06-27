@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import shutil
 import tempfile
 import unittest
 from pathlib import Path, PureWindowsPath
@@ -84,6 +85,20 @@ class FakeReader:
         self.released = True
 
 
+class InfiniteReader:
+    def __init__(self, *, start_frame_id: int = 1):
+        self.next_frame_id = start_frame_id
+        self.released = False
+
+    def read_latest(self):
+        frame = make_frame(self.next_frame_id)
+        self.next_frame_id += 1
+        return True, frame.frame_id, frame
+
+    def release(self):
+        self.released = True
+
+
 class FakeNv12Array:
     shape = (3, 4)
 
@@ -145,6 +160,55 @@ class LiveStereoRecorderTests(unittest.TestCase):
             self.assertEqual(metadata["pairing"]["stats"]["pair_count"], 2)
             self.assertEqual(metadata["pairing"]["stats"]["dropped_unpaired_left"], 1)
             self.assertEqual(metadata["pairing"]["stats"]["dropped_unpaired_right"], 1)
+
+    def test_record_stops_after_duration_without_estimating_attempts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            left = InfiniteReader(start_frame_id=1)
+            right = InfiniteReader(start_frame_id=1)
+
+            status = record_live_stereo_package(
+                left_reader=left,
+                right_reader=right,
+                out_dir=out_dir,
+                calibration=SCENE_STEREO_28.scaled_to(1164, 872),
+                max_read_attempts=10_000,
+                max_skew_frames=0,
+                sleep_seconds=0.001,
+                duration_seconds=0.01,
+            )
+
+            self.assertTrue(1 <= status["attempts"] < 10_000)
+            self.assertEqual(status["frames_seen_left"], status["attempts"])
+            self.assertEqual(status["frames_seen_right"], status["attempts"])
+            self.assertAlmostEqual(status["duration_seconds"], 0.01)
+            self.assertGreaterEqual(status["elapsed_seconds"], 0.0)
+            self.assertTrue(left.released)
+            self.assertTrue(right.released)
+
+    def test_record_reports_progress_every_n_stereo_frames(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            progress: list[dict] = []
+            left = FakeReader([make_frame(i) for i in range(1, 6)])
+            right = FakeReader([make_frame(i) for i in range(1, 6)])
+
+            status = record_live_stereo_package(
+                left_reader=left,
+                right_reader=right,
+                out_dir=Path(tmp),
+                calibration=SCENE_STEREO_28.scaled_to(1164, 872),
+                max_read_attempts=5,
+                max_skew_frames=0,
+                sleep_seconds=0.0,
+                progress_every_frames=2,
+                progress_callback=progress.append,
+            )
+
+            self.assertEqual(status["frames_seen_left"], 5)
+            self.assertEqual(status["frames_seen_right"], 5)
+            self.assertEqual([event["stereo_frames"] for event in progress], [2, 4])
+            self.assertEqual(progress[0]["frames_seen_left"], 2)
+            self.assertEqual(progress[0]["frames_seen_right"], 2)
 
     def test_coerce_mapping_frame_rejects_bad_payload_size(self):
         with self.assertRaises(LiveStereoRecorderError):
@@ -208,6 +272,10 @@ class LiveStereoRecorderTests(unittest.TestCase):
         self.assertIn("build_stereo_shm_names", tool_source)
         self.assertIn("record_antman_vst_stereo_package.py", runner_source)
         self.assertIn("Antman.VST.AI.v1", runner_source)
+        self.assertIn("--duration-seconds", tool_source)
+        self.assertIn("--progress-every-frames", tool_source)
+        self.assertIn("[double]$DurationSeconds", runner_source)
+        self.assertIn("[int]$ProgressEveryFrames", runner_source)
 
     def test_antman_tool_defaults_to_vst_ai_shm_consumer_module(self):
         tool = load_module(ANTMAN_TOOL, "record_antman_vst_stereo_package")
@@ -219,6 +287,271 @@ class LiveStereoRecorderTests(unittest.TestCase):
         tool_source = ANTMAN_TOOL.read_text(encoding="utf-8")
         self.assertIn("VstAiShmConsumer", tool_source)
         self.assertIn("--vst-ai-shm-root", tool_source)
+
+    def test_vst_ai_shm_consumer_reader_preserves_header_timestamp_us_in_recorded_package(self):
+        tool = load_module(ANTMAN_TOOL, "record_antman_vst_stereo_package")
+
+        class FakeConsumer:
+            def __init__(self, frame_id: int, timestamp_us: int):
+                self.frame_id = frame_id
+                self.timestamp_us = timestamp_us
+                self.frames_returned = 0
+                self.acknowledged = []
+                self.closed = False
+                self.shm_name = f"fake-{frame_id}"
+                self.event_name = f"fake-event-{frame_id}"
+
+            def wait_for_frame(self, timeout_ms):
+                return self.frames_returned == 0
+
+            def read_latest_frame(self):
+                self.frames_returned += 1
+                return (
+                    {
+                        "frame_id": self.frame_id,
+                        "width": 4,
+                        "height": 2,
+                        "stride": 4,
+                        "timestamp_us": self.timestamp_us,
+                    },
+                    FakeNv12Array(),
+                )
+
+            def acknowledge(self, frame_id):
+                self.acknowledged.append(frame_id)
+
+            def close(self):
+                self.closed = True
+
+        left_consumer = FakeConsumer(frame_id=10, timestamp_us=123_456)
+        right_consumer = FakeConsumer(frame_id=10, timestamp_us=123_789)
+        left_reader = tool.VstAiShmConsumerReader(consumer=left_consumer, wait_timeout_ms=1)
+        right_reader = tool.VstAiShmConsumerReader(consumer=right_consumer, wait_timeout_ms=1)
+
+        out_dir = ROOT / ".tmp" / "test_live_stereo_recorder" / "vst_ai_shm_timestamp"
+        shutil.rmtree(out_dir, ignore_errors=True)
+        try:
+            status = record_live_stereo_package(
+                left_reader=left_reader,
+                right_reader=right_reader,
+                out_dir=out_dir,
+                calibration=SCENE_STEREO_28.scaled_to(1164, 872),
+                max_read_attempts=1,
+                max_skew_frames=0,
+                sleep_seconds=0.0,
+            )
+
+            self.assertEqual(status["pair_count"], 1)
+            self.assertEqual(left_consumer.acknowledged, [10])
+            self.assertEqual(right_consumer.acknowledged, [10])
+            self.assertTrue(left_consumer.closed)
+            self.assertTrue(right_consumer.closed)
+
+            left_metadata = json.loads((out_dir / LEFT_EYE_DIR / "metadata.json").read_text(encoding="utf-8"))
+            right_metadata = json.loads((out_dir / RIGHT_EYE_DIR / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(left_metadata["timestamps_us"], [123_456])
+            self.assertEqual(right_metadata["timestamps_us"], [123_789])
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
+
+    def test_vst_ai_shm_consumer_reader_uses_exposure_timestamp_header(self):
+        tool = load_module(ANTMAN_TOOL, "record_antman_vst_stereo_package")
+
+        class FakeConsumer:
+            def __init__(self, frame_id: int, exposure_timestamp: int):
+                self.frame_id = frame_id
+                self.exposure_timestamp = exposure_timestamp
+                self.frames_returned = 0
+                self.acknowledged = []
+                self.closed = False
+
+            def wait_for_frame(self, timeout_ms):
+                return self.frames_returned == 0
+
+            def read_latest_frame(self):
+                self.frames_returned += 1
+                return (
+                    {
+                        "frame_id": self.frame_id,
+                        "width": 4,
+                        "height": 2,
+                        "stride": 4,
+                        "exposure_timestamp": self.exposure_timestamp,
+                    },
+                    FakeNv12Array(),
+                )
+
+            def acknowledge(self, frame_id):
+                self.acknowledged.append(frame_id)
+
+            def close(self):
+                self.closed = True
+
+        left_reader = tool.VstAiShmConsumerReader(
+            consumer=FakeConsumer(frame_id=20, exposure_timestamp=234_567),
+            wait_timeout_ms=1,
+        )
+        right_reader = tool.VstAiShmConsumerReader(
+            consumer=FakeConsumer(frame_id=20, exposure_timestamp=234_890),
+            wait_timeout_ms=1,
+        )
+
+        out_dir = ROOT / ".tmp" / "test_live_stereo_recorder" / "vst_ai_shm_exposure_timestamp"
+        shutil.rmtree(out_dir, ignore_errors=True)
+        try:
+            status = record_live_stereo_package(
+                left_reader=left_reader,
+                right_reader=right_reader,
+                out_dir=out_dir,
+                calibration=SCENE_STEREO_28.scaled_to(1164, 872),
+                max_read_attempts=1,
+                max_skew_frames=0,
+                sleep_seconds=0.0,
+            )
+
+            self.assertEqual(status["pair_count"], 1)
+            left_metadata = json.loads((out_dir / LEFT_EYE_DIR / "metadata.json").read_text(encoding="utf-8"))
+            right_metadata = json.loads((out_dir / RIGHT_EYE_DIR / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(left_metadata["timestamps_us"], [234_567])
+            self.assertEqual(right_metadata["timestamps_us"], [234_890])
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
+
+    def test_vst_ai_shm_consumer_reader_uses_exposure_us_header(self):
+        tool = load_module(ANTMAN_TOOL, "record_antman_vst_stereo_package")
+
+        class FakeConsumer:
+            def __init__(self, frame_id: int, exposure_us: int):
+                self.frame_id = frame_id
+                self.exposure_us = exposure_us
+                self.frames_returned = 0
+
+            def wait_for_frame(self, timeout_ms):
+                return self.frames_returned == 0
+
+            def read_latest_frame(self):
+                self.frames_returned += 1
+                return (
+                    {
+                        "frame_id": self.frame_id,
+                        "width": 4,
+                        "height": 2,
+                        "stride": 4,
+                        "exposure_us": self.exposure_us,
+                    },
+                    FakeNv12Array(),
+                )
+
+            def acknowledge(self, frame_id):
+                pass
+
+            def close(self):
+                pass
+
+        reader = tool.VstAiShmConsumerReader(
+            consumer=FakeConsumer(frame_id=25, exposure_us=345_678),
+            wait_timeout_ms=1,
+        )
+
+        ok, frame_id, frame = reader.read_latest()
+
+        self.assertTrue(ok)
+        self.assertEqual(frame_id, 25)
+        self.assertEqual(frame["timestamp_us"], 345_678)
+        self.assertEqual(frame["exposure_us"], 345_678)
+
+    def test_vst_ai_shm_consumer_reader_includes_header_timestamp_debug(self):
+        tool = load_module(ANTMAN_TOOL, "record_antman_vst_stereo_package")
+
+        class FakeConsumer:
+            def __init__(self):
+                self.frames_returned = 0
+
+            def wait_for_frame(self, timeout_ms):
+                return self.frames_returned == 0
+
+            def read_latest_frame(self):
+                self.frames_returned += 1
+                return (
+                    {
+                        "frame_id": 30,
+                        "width": 4,
+                        "height": 2,
+                        "stride": 4,
+                        "exposure_time_ns": 987_654_321,
+                        "pts": 12345,
+                        "random_value": 7,
+                    },
+                    FakeNv12Array(),
+                )
+
+            def acknowledge(self, frame_id):
+                pass
+
+            def close(self):
+                pass
+
+        reader = tool.VstAiShmConsumerReader(consumer=FakeConsumer(), wait_timeout_ms=1)
+
+        ok, frame_id, frame = reader.read_latest()
+
+        self.assertTrue(ok)
+        self.assertEqual(frame_id, 30)
+        self.assertEqual(frame["available_timestamp_keys"], ["exposure_time_ns", "frame_id", "pts"])
+        self.assertEqual(
+            frame["header_timestamp_debug"],
+            {
+                "exposure_time_ns": 987_654_321,
+                "frame_id": 30,
+                "pts": 12345,
+            },
+        )
+
+    def test_vst_ai_shm_consumer_reader_stats_keep_recent_header_timestamp_debug(self):
+        tool = load_module(ANTMAN_TOOL, "record_antman_vst_stereo_package")
+
+        class FakeConsumer:
+            def __init__(self):
+                self.next_frame_id = 40
+
+            def wait_for_frame(self, timeout_ms):
+                return True
+
+            def read_latest_frame(self):
+                frame_id = self.next_frame_id
+                self.next_frame_id += 1
+                return (
+                    {
+                        "frame_id": frame_id,
+                        "width": 4,
+                        "height": 2,
+                        "stride": 4,
+                        "exposure_us": 900_000 + frame_id,
+                    },
+                    FakeNv12Array(),
+                )
+
+            def acknowledge(self, frame_id):
+                pass
+
+            def close(self):
+                pass
+
+        reader = tool.VstAiShmConsumerReader(
+            consumer=FakeConsumer(),
+            wait_timeout_ms=1,
+            header_debug_frames=2,
+        )
+
+        reader.read_latest()
+        reader.read_latest()
+        reader.read_latest()
+        stats = reader.get_stats()
+
+        self.assertEqual(len(stats["recent_header_timestamp_debug"]), 2)
+        self.assertEqual(stats["recent_header_timestamp_debug"][0]["frame_id"], 41)
+        self.assertEqual(stats["recent_header_timestamp_debug"][1]["frame_id"], 42)
+        self.assertEqual(stats["last_header_timestamp_debug"]["values"]["exposure_us"], 900_042)
 
 
 if __name__ == "__main__":

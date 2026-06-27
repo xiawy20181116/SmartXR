@@ -12,7 +12,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from .nv12_reader import (
     HEADER_SIZE,
@@ -170,19 +170,38 @@ def record_live_stereo_package(
     max_read_attempts: int,
     max_skew_frames: int,
     sleep_seconds: float = 0.005,
+    duration_seconds: float | None = None,
+    progress_every_frames: int = 0,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Read live L/R frames and write a validated stereo package."""
     out_dir = Path(out_dir)
-    max_read_attempts = _coerce_positive_int(max_read_attempts, "max_read_attempts")
+    max_read_attempts = _coerce_non_negative_int(max_read_attempts, "max_read_attempts")
+    if max_read_attempts == 0 and duration_seconds is None:
+        raise LiveStereoRecorderError("max_read_attempts must be positive without duration_seconds")
     max_skew_frames = _coerce_non_negative_int(max_skew_frames, "max_skew_frames")
+    duration_seconds = _coerce_optional_positive_float(duration_seconds, "duration_seconds")
+    progress_every_frames = _coerce_non_negative_int(
+        progress_every_frames,
+        "progress_every_frames",
+    )
     left_frames: list[CapturedNv12Frame] = []
     right_frames: list[CapturedNv12Frame] = []
     seen_left: set[int] = set()
     seen_right: set[int] = set()
     read_failures = 0
+    attempts = 0
+    next_progress_frames = progress_every_frames if progress_every_frames > 0 else None
+    started_at = time.monotonic()
 
     try:
-        for _attempt in range(max_read_attempts):
+        while True:
+            elapsed_seconds = time.monotonic() - started_at
+            if duration_seconds is not None and attempts > 0 and elapsed_seconds >= duration_seconds:
+                break
+            if max_read_attempts > 0 and attempts >= max_read_attempts:
+                break
+            attempts += 1
             read_failures += _read_one_eye(
                 left_reader,
                 left_frames,
@@ -193,6 +212,19 @@ def record_live_stereo_package(
                 right_frames,
                 seen_right,
             )
+            if next_progress_frames is not None:
+                stereo_frames = min(len(left_frames), len(right_frames))
+                if stereo_frames >= next_progress_frames:
+                    _emit_progress(
+                        progress_callback,
+                        attempts=attempts,
+                        elapsed_seconds=time.monotonic() - started_at,
+                        frames_seen_left=len(left_frames),
+                        frames_seen_right=len(right_frames),
+                        read_failures=read_failures,
+                    )
+                    while next_progress_frames <= stereo_frames:
+                        next_progress_frames += progress_every_frames
             if sleep_seconds > 0.0:
                 time.sleep(sleep_seconds)
     finally:
@@ -223,12 +255,38 @@ def record_live_stereo_package(
         "frames_seen_left": len(left_frames),
         "frames_seen_right": len(right_frames),
         "read_failures": read_failures,
+        "attempts": attempts,
+        "duration_seconds": duration_seconds,
+        "elapsed_seconds": time.monotonic() - started_at,
         "pair_count": summary.pair_count,
         "dropped_unpaired_left": summary.dropped_unpaired_left,
         "dropped_unpaired_right": summary.dropped_unpaired_right,
         "max_skew_frames": summary.max_skew_frames,
         "validation_errors": validation_errors,
     }
+
+
+def _emit_progress(
+    progress_callback: Callable[[dict[str, Any]], None] | None,
+    *,
+    attempts: int,
+    elapsed_seconds: float,
+    frames_seen_left: int,
+    frames_seen_right: int,
+    read_failures: int,
+) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(
+        {
+            "attempts": attempts,
+            "elapsed_seconds": elapsed_seconds,
+            "frames_seen_left": frames_seen_left,
+            "frames_seen_right": frames_seen_right,
+            "stereo_frames": min(frames_seen_left, frames_seen_right),
+            "read_failures": read_failures,
+        }
+    )
 
 
 def _read_one_eye(
@@ -327,4 +385,15 @@ def _coerce_non_negative_int(value: Any, name: str) -> int:
         )
     if value < 0:
         raise LiveStereoRecorderError(f"{name} must be non-negative, got {value}")
+    return value
+
+
+def _coerce_optional_positive_float(value: Any, name: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise LiveStereoRecorderError(f"{name} must be a positive number, got {value!r}")
+    value = float(value)
+    if value <= 0.0:
+        raise LiveStereoRecorderError(f"{name} must be positive, got {value}")
     return value

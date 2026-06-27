@@ -344,7 +344,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         # The anchor-mode line is rendered by StatusHud from the vst snapshot.
         self.assertIn('"uses_eye_to_head_anchor": _uses_eye_to_head_anchor', vst_capture)
         self.assertIn("Anchor: %s", hud)
-        self.assertIn('"eye2head" if bool(vst.get("uses_eye_to_head_anchor", false)) else "raw-fov"', hud)
+        self.assertIn('"eye2head" if _truthy(vst.get("uses_eye_to_head_anchor", false)) else "raw-fov"', hud)
 
     def test_vst_tracker_boxes_draw_visible_3d_bbox_frame(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -573,7 +573,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('"packet_preview": _last_packet_preview', fragment)
         self.assertIn('"source_coordinate": _last_source_coordinate', fragment)
         self.assertIn('"source_coordinate_summary": _source_coordinate_summary(proxy.get("source_coordinate", {}))', hud)
-        self.assertIn("func _source_coordinate_summary(source_coordinate: Dictionary) -> String:", hud)
+        self.assertIn("func _source_coordinate_summary(source_coordinate) -> String:", hud)
         self.assertLess(receiver.index("_target_source.apply_proxy_targets_json(payload)"), receiver.index('_set_last_command("proxy_live")'))
         self.assertIn("ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s src=%s err=%s", hud)
         self.assertIn('_set_last_command("proxy_live")', receiver)

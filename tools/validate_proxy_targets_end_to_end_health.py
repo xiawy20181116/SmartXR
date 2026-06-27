@@ -37,6 +37,9 @@ def summarize_depth_trace(path: Path | None) -> dict[str, Any]:
             "held_last_pose_count": 0,
             "last_switch_reason": None,
             "last_active_age_frames": None,
+            "sync": {},
+            "realtime": {},
+            "clients": {},
         }
     accepted = 0
     rejected = 0
@@ -50,6 +53,9 @@ def summarize_depth_trace(path: Path | None) -> dict[str, Any]:
     last_switch_reason: str | None = None
     last_active_age_frames: int | None = None
     max_candidate_count = 0
+    sync_summary: dict[str, Any] = {}
+    realtime_summary: dict[str, Any] = {}
+    client_summary: dict[str, Any] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
@@ -58,6 +64,9 @@ def summarize_depth_trace(path: Path | None) -> dict[str, Any]:
         except json.JSONDecodeError:
             rejected += 1
             continue
+        clients = event.get("clients")
+        if isinstance(clients, dict):
+            client_summary = dict(clients)
         if event.get("event") != "accepted":
             rejected += 1
             continue
@@ -90,6 +99,30 @@ def summarize_depth_trace(path: Path | None) -> dict[str, Any]:
             max_candidate_count = max(max_candidate_count, int(event.get("candidate_count", 0)))
         except (TypeError, ValueError):
             pass
+        sync = event.get("sync")
+        if isinstance(sync, dict):
+            sync_summary["pairing_strategy"] = sync.get("pairing_strategy") or sync_summary.get("pairing_strategy")
+            for key in ("temporal_mismatch_count", "dropped_left_frames", "dropped_right_frames"):
+                try:
+                    sync_summary[key] = max(int(sync_summary.get(key, 0)), int(sync.get(key, 0)))
+                except (TypeError, ValueError):
+                    pass
+        realtime = event.get("realtime")
+        if isinstance(realtime, dict):
+            for key in (
+                "target_source_hz",
+                "expected_frame_interval_ms",
+                "frames_seen_left",
+                "frames_seen_right",
+                "estimated_left_dropped_frames",
+                "estimated_right_dropped_frames",
+                "left_frame_min",
+                "left_frame_max",
+                "right_frame_min",
+                "right_frame_max",
+            ):
+                if key in realtime:
+                    realtime_summary[key] = realtime[key]
     return {
         "available": True,
         "accepted_count": accepted,
@@ -102,6 +135,9 @@ def summarize_depth_trace(path: Path | None) -> dict[str, Any]:
         "last_switch_reason": last_switch_reason,
         "last_active_age_frames": last_active_age_frames,
         "max_candidate_count": max_candidate_count,
+        "sync": sync_summary,
+        "realtime": realtime_summary,
+        "clients": client_summary,
     }
 
 
@@ -198,7 +234,9 @@ def _card_pose_summary(pcmr_status: dict[str, Any]) -> dict[str, Any]:
 
 def _sender_summary(sender_log_text: str) -> dict[str, Any]:
     sent_matches = re.findall(
-        r"sent stereo seq=(?P<sequence>\d+)\s+target=(?P<target>\S+)\s+"
+        r"(?:sent stereo|published stereo|updated stereo detector)\s+"
+        r"seq=(?P<sequence>\d+)\s+target=(?P<target>\S+)\s+"
+        r"(?:freshness=(?P<freshness>\S+)\s+)?"
         r"depth_source=(?P<depth_source>\S+)\s+depth_confidence=(?P<depth_confidence>\S+)",
         sender_log_text,
     )
@@ -214,8 +252,9 @@ def _sender_summary(sender_log_text: str) -> dict[str, Any]:
         "sent_count": len(sent_matches),
         "last_sequence": int(last_sent[0]) if last_sent else None,
         "last_target_id": last_sent[1] if last_sent else None,
-        "last_depth_source": last_sent[2] if last_sent else None,
-        "last_depth_confidence": last_sent[3] if last_sent else None,
+        "last_freshness": last_sent[2] if last_sent else None,
+        "last_depth_source": last_sent[3] if last_sent else None,
+        "last_depth_confidence": last_sent[4] if last_sent else None,
         "last_empty_reason": last_diagnostic[0] if last_diagnostic else None,
         "last_empty_reads": int(last_diagnostic[1]) if last_diagnostic else None,
         "last_left_frames": int(last_diagnostic[2]) if last_diagnostic else None,
@@ -248,6 +287,15 @@ def _pcmr_connected(pcmr_status: dict[str, Any]) -> bool:
         and _count(pcmr_status, "packets") > 0
         and _count(pcmr_status, "parsed") > 0
         and _count(pcmr_status, "live") > 0
+    )
+
+
+def _pcmr_sustained_live(pcmr_status: dict[str, Any], min_packets: int) -> bool:
+    return (
+        _pcmr_connected(pcmr_status)
+        and _count(pcmr_status, "packets") >= min_packets
+        and _count(pcmr_status, "parsed") >= min_packets
+        and _count(pcmr_status, "live") >= min_packets
     )
 
 
@@ -300,6 +348,7 @@ def evaluate_health(
     verdicts: list[str] = []
     errors: list[str] = []
     sender = _sender_summary(sender_log_text)
+    trace_summary = depth_trace_summary if depth_trace_summary is not None else summarize_depth_trace(None)
 
     if sender["ready"]:
         verdicts.append("SENDER_READY")
@@ -340,6 +389,24 @@ def evaluate_health(
     if _low_confidence_only(raw_status):
         verdicts.append("LOW_CONFIDENCE_DEPTH_ONLY")
 
+    clients = trace_summary.get("clients", {}) if isinstance(trace_summary, dict) else {}
+    if not isinstance(clients, dict):
+        clients = {}
+    active_clients = _list_strings(clients.get("active_clients"))
+    last_disconnect_value = clients.get("last_disconnect")
+    last_disconnect = last_disconnect_value if isinstance(last_disconnect_value, dict) else {}
+    has_godot_active = any("=godot@" in client for client in active_clients)
+    godot_disconnected = str(last_disconnect.get("label", "")).strip().lower() == "godot"
+    if clients and active_clients:
+        if has_godot_active:
+            verdicts.append("GODOT_CLIENT_ACTIVE")
+        elif godot_disconnected:
+            if _pcmr_sustained_live(pcmr_status, min_packets=min_packets):
+                verdicts.append("GODOT_CLIENT_STATUS_AMBIGUOUS")
+            else:
+                verdicts.append("GODOT_CLIENT_NOT_ACTIVE")
+                errors.append("Godot client is not currently active in publisher clients; last_disconnect=godot")
+
     ok = (
         "SENDER_READY" in verdicts
         and "SENDER_STEREO_TARGETS" in verdicts
@@ -347,6 +414,7 @@ def evaluate_health(
         and "GODOT_CONNECTED" in verdicts
         and "CARD_BOUND_TO_LIVE_TARGET" in verdicts
         and "SAMPLE_FALLBACK_ACTIVE" not in verdicts
+        and "GODOT_CLIENT_NOT_ACTIVE" not in verdicts
     )
     return {
         "ok": ok,
@@ -385,7 +453,7 @@ def evaluate_health(
             "proxy_target_ids": _list_strings(pcmr_status.get("proxy_target_ids")),
             **_card_pose_summary(pcmr_status),
         },
-        "tracking": depth_trace_summary if depth_trace_summary is not None else summarize_depth_trace(None),
+        "tracking": trace_summary,
     }
 
 

@@ -24,6 +24,30 @@ from smartxr.stereo_depth import SCENE_STEREO_28  # noqa: E402
 
 
 DEFAULT_VST_AI_SHM_ROOT = Path("E:/xia/Antman/0422/0527/P1/vst_ai_shm")
+DEFAULT_HEADER_DEBUG_FRAMES = 10
+TIMESTAMP_DEBUG_KEY_TOKENS = ("time", "timestamp", "exposure", "frame", "pts")
+
+
+def _header_timestamp_us(header: dict[str, Any]) -> int | None:
+    for key in ("exposure_timestamp", "exposure_us", "timestamp_us", "capture_timestamp_us", "ts_us"):
+        value = header.get(key)
+        if value is not None:
+            return int(value)
+    return None
+
+
+def _header_timestamp_debug(header: dict[str, Any]) -> dict[str, Any]:
+    debug: dict[str, Any] = {}
+    for key in sorted(str(key) for key in header.keys()):
+        lowered = key.lower()
+        if not any(token in lowered for token in TIMESTAMP_DEBUG_KEY_TOKENS):
+            continue
+        value = header.get(key)
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            debug[key] = value
+        else:
+            debug[key] = repr(value)
+    return debug
 
 
 class VstAiShmConsumerReader:
@@ -32,11 +56,14 @@ class VstAiShmConsumerReader:
         *,
         consumer: Any,
         wait_timeout_ms: int,
+        header_debug_frames: int = DEFAULT_HEADER_DEBUG_FRAMES,
     ) -> None:
         self.consumer = consumer
         self.wait_timeout_ms = int(wait_timeout_ms)
+        self.header_debug_frames = max(0, int(header_debug_frames))
         self.frames_returned = 0
         self.empty_waits = 0
+        self.recent_header_timestamp_debug: list[dict[str, Any]] = []
 
     def read_latest(self):
         if not self.consumer.wait_for_frame(timeout_ms=self.wait_timeout_ms):
@@ -50,15 +77,46 @@ class VstAiShmConsumerReader:
         frame_id = int(header["frame_id"])
         self.consumer.acknowledge(frame_id)
         self.frames_returned += 1
+        frame = {
+            "width": int(header["width"]),
+            "height": int(header["height"]),
+            "stride": int(header["stride"]),
+            "payload": nv12.tobytes(),
+        }
+        if "exposure_timestamp" in header and header["exposure_timestamp"] is not None:
+            frame["exposure_timestamp"] = int(header["exposure_timestamp"])
+        if "exposure_us" in header and header["exposure_us"] is not None:
+            frame["exposure_us"] = int(header["exposure_us"])
+        timestamp_us = _header_timestamp_us(header)
+        if timestamp_us is not None:
+            frame["timestamp_us"] = timestamp_us
+        timestamp_debug = _header_timestamp_debug(header)
+        debug_record = {
+            "frame_id": frame_id,
+            "available_timestamp_keys": list(timestamp_debug.keys()),
+            "values": timestamp_debug,
+        }
+        self.recent_header_timestamp_debug.append(debug_record)
+        if self.header_debug_frames > 0:
+            self.recent_header_timestamp_debug = self.recent_header_timestamp_debug[-self.header_debug_frames :]
+        else:
+            self.recent_header_timestamp_debug = []
+        if self.frames_returned <= self.header_debug_frames:
+            frame["available_timestamp_keys"] = list(timestamp_debug.keys())
+            frame["header_timestamp_debug"] = timestamp_debug
+            print(
+                "[vst_ai_shm_consumer] header debug frame_id=%s keys=%s values=%s"
+                % (
+                    frame_id,
+                    ",".join(frame["available_timestamp_keys"]) or "-",
+                    json.dumps(timestamp_debug, ensure_ascii=False, sort_keys=True),
+                ),
+                flush=True,
+            )
         return (
             True,
             frame_id,
-            {
-                "width": int(header["width"]),
-                "height": int(header["height"]),
-                "stride": int(header["stride"]),
-                "payload": nv12.tobytes(),
-            },
+            frame,
         )
 
     def get_stats(self) -> dict[str, Any]:
@@ -68,6 +126,10 @@ class VstAiShmConsumerReader:
             "empty_waits": self.empty_waits,
             "shm_name": getattr(self.consumer, "shm_name", ""),
             "event_name": getattr(self.consumer, "event_name", ""),
+            "recent_header_timestamp_debug": list(self.recent_header_timestamp_debug),
+            "last_header_timestamp_debug": dict(self.recent_header_timestamp_debug[-1])
+            if self.recent_header_timestamp_debug
+            else None,
         }
 
     def release(self) -> None:
@@ -155,6 +217,21 @@ def startup_error_status(exc: Exception, out_dir: Path) -> tuple[dict[str, Any],
     )
 
 
+def print_progress(progress: dict[str, Any]) -> None:
+    print(
+        "[live_stereo_recorder] progress attempts=%s elapsed=%.1fs left=%s right=%s stereo=%s read_failures=%s"
+        % (
+            progress.get("attempts", 0),
+            float(progress.get("elapsed_seconds", 0.0)),
+            progress.get("frames_seen_left", 0),
+            progress.get("frames_seen_right", 0),
+            progress.get("stereo_frames", 0),
+            progress.get("read_failures", 0),
+        ),
+        flush=True,
+    )
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Record Antman VST Left/Right SHM into a SmartXR stereo package."
@@ -174,7 +251,24 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--wait-for-producer-seconds", type=float, default=10.0)
     parser.add_argument("--recorded-width", type=int, default=880)
     parser.add_argument("--recorded-height", type=int, default=660)
-    parser.add_argument("--max-read-attempts", type=int, default=240)
+    parser.add_argument(
+        "--max-read-attempts",
+        type=int,
+        default=None,
+        help="Maximum left/right read loop attempts. Defaults to 240 without duration and unlimited with duration.",
+    )
+    parser.add_argument(
+        "--duration-seconds",
+        type=float,
+        default=None,
+        help="Record for this wall-clock duration; max-read-attempts remains a safety cap when >0.",
+    )
+    parser.add_argument(
+        "--progress-every-frames",
+        type=int,
+        default=30,
+        help="Print recorder progress every N stereo frames; pass 0 to disable.",
+    )
     parser.add_argument("--max-skew-frames", type=int, default=1)
     parser.add_argument("--sleep-seconds", type=float, default=0.005)
     parser.add_argument("--require-pair", action="store_true")
@@ -194,9 +288,16 @@ def main() -> int:
             right_reader=right_reader,
             out_dir=args.out_dir,
             calibration=calibration,
-            max_read_attempts=args.max_read_attempts,
+            max_read_attempts=(
+                args.max_read_attempts
+                if args.max_read_attempts is not None
+                else (0 if args.duration_seconds is not None else 240)
+            ),
             max_skew_frames=args.max_skew_frames,
             sleep_seconds=args.sleep_seconds,
+            duration_seconds=args.duration_seconds,
+            progress_every_frames=args.progress_every_frames,
+            progress_callback=print_progress,
         )
     except Exception as exc:
         status, exit_code = startup_error_status(exc, args.out_dir)

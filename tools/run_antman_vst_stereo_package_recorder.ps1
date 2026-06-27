@@ -10,7 +10,9 @@ param(
     [double]$WaitForProducerSeconds = 10.0,
     [int]$RecordedWidth = 880,
     [int]$RecordedHeight = 660,
-    [int]$MaxReadAttempts = 240,
+    [int]$MaxReadAttempts = 0,
+    [double]$DurationSeconds = 0.0,
+    [int]$ProgressEveryFrames = 30,
     [int]$MaxSkewFrames = 1,
     [double]$SleepSeconds = 0.005,
     [switch]$RequirePair,
@@ -45,8 +47,19 @@ Write-Host "VST SHM root: $VstAiShmRoot"
 Write-Host "VST reader:   $VstReader"
 Write-Host "Output:      $OutDir"
 Write-Host "Python:      $PythonExe"
+if ($DurationSeconds -gt 0.0) {
+    Write-Host "Duration:    $DurationSeconds seconds"
+} else {
+    Write-Host "Max reads:   $MaxReadAttempts"
+}
+Write-Host "Progress:   every $ProgressEveryFrames stereo frames"
 Write-Host "Source:      Antman.VST.AI.v1 Left/Right SHM"
 Write-Host "Need headset: connect/start the headset VST producer before expecting frames."
+
+$EffectiveMaxReadAttempts = $MaxReadAttempts
+if (($EffectiveMaxReadAttempts -le 0) -and ($DurationSeconds -le 0.0)) {
+    $EffectiveMaxReadAttempts = 240
+}
 
 $recorderArgs = @(
     $Recorder,
@@ -59,11 +72,15 @@ $recorderArgs = @(
     "--wait-for-producer-seconds", "$WaitForProducerSeconds",
     "--recorded-width", "$RecordedWidth",
     "--recorded-height", "$RecordedHeight",
-    "--max-read-attempts", "$MaxReadAttempts",
+    "--max-read-attempts", "$EffectiveMaxReadAttempts",
+    "--progress-every-frames", "$ProgressEveryFrames",
     "--max-skew-frames", "$MaxSkewFrames",
     "--sleep-seconds", "$SleepSeconds"
 )
 
+if ($DurationSeconds -gt 0.0) {
+    $recorderArgs += @("--duration-seconds", "$DurationSeconds")
+}
 if ($ShmNamespace -ne "") {
     $recorderArgs += @("--shm-namespace", $ShmNamespace)
 }

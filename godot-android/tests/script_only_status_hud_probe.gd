@@ -63,7 +63,7 @@ func _run_checks() -> String:
 
 	# 2. Snapshot-driven label rendering.
 	var snapshot := _make_snapshot()
-	hud.update_status_label(snapshot)
+	hud.update_status_label(snapshot, 0.0, true)
 	var text: String = label.text
 	_checks["label_anchor_header"] = text.contains("3DoF Anchor")
 	_checks["label_ws_connected"] = text.contains("WS: connected")
@@ -107,6 +107,20 @@ func _run_checks() -> String:
 	var sanitized: String = hud_script.sanitize_status_text("a\nb\r" + "x".repeat(200))
 	_checks["sanitize_escapes_newlines"] = sanitized.begins_with("a\\nb\\r")
 	_checks["sanitize_truncates_to_160"] = sanitized.length() == 160
+
+	# 5. First-frame snapshots can contain null source_coordinate before a
+	# live packet has supplied the full metadata. The HUD must render and write
+	# status instead of tripping GDScript's typed argument checks.
+	var null_source_snapshot := _make_snapshot()
+	null_source_snapshot["proxy_targets"]["source_coordinate"] = null
+	hud.update_status_label(null_source_snapshot, 0.0, true)
+	_checks["null_source_coordinate_label_summary"] = label.text.contains("src=-")
+	hud.write_status_files(null_source_snapshot, 0.3)
+	var null_source_proxy_status = _read_json(hud.proxy_targets_status_path)
+	_checks["null_source_coordinate_status_summary"] = (
+		typeof(null_source_proxy_status) == TYPE_DICTIONARY
+		and str(null_source_proxy_status.get("source_coordinate_summary", "")) == "-"
+	)
 
 	parent.free()
 	hud.free()

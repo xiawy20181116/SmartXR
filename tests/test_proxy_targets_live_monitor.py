@@ -125,6 +125,52 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         self.assertEqual(status["missing_depth_confidence_count"], 0)
         self.assertEqual(status["missing_depth_source_count"], 0)
 
+    def test_analyzes_realtime_rate_and_sequence_drops_against_45hz(self):
+        monitor = load_module(MONITOR, "monitor_proxy_targets_live_stream")
+
+        def message(sequence, timestamp_ms):
+            return {
+                "type": "proxy_targets",
+                "schema_version": 1,
+                "sequence": sequence,
+                "targets": [
+                    {
+                        "target_id": "vst_stereo-active-1",
+                        "source": "vst",
+                        "coordinate_space": "head",
+                        "transform_space": "head",
+                        "state": "tracked",
+                        "confidence": 0.9,
+                        "depth_source": "bbox_top_center_fallback",
+                        "depth_confidence": "low",
+                        "timestamp_ms": timestamp_ms,
+                        "transform": {
+                            "position": [0.0, 0.0, -1.0 - sequence * 0.01],
+                            "rotation_xyzw": [0.0, 0.0, 0.0, 1.0],
+                            "scale": [1.0, 1.0, 1.0],
+                        },
+                    }
+                ],
+                "cards": [{"card_id": "CardAnchor", "target_id": "vst_stereo-active-1", "offset_rule": {}}],
+            }
+
+        status = monitor.analyze_messages(
+            [
+                message(0, 1_000),
+                message(1, 1_022),
+                message(3, 1_088),
+            ],
+            min_packets=3,
+            expected_source_hz=45.0,
+        )
+
+        self.assertFalse(status["ok"])
+        self.assertEqual(status["realtime"]["expected_source_hz"], 45.0)
+        self.assertEqual(status["realtime"]["sequence_gap_count"], 1)
+        self.assertEqual(status["realtime"]["packet_drop_count"], 1)
+        self.assertEqual(status["realtime"]["late_interval_count"], 1)
+        self.assertAlmostEqual(status["realtime"]["observed_packet_hz"], 22.7, places=1)
+
     def test_depth_confidence_validator_requires_expected_distribution(self):
         validator = load_module(DEPTH_VALIDATOR, "validate_proxy_targets_depth_confidence_stream")
         status = {
@@ -169,8 +215,8 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
             "sequence_contiguous": True,
             "position_changed": True,
             "target_ids": ["vst_stereo-person-2-3"],
-            "depth_confidences": {"low": 10},
-            "depth_sources": {"bbox_top_center_fallback": 10},
+            "depth_confidences": {"high": 10},
+            "depth_sources": {"pov_stereo_triangulation": 10},
             "missing_depth_confidence_count": 0,
             "missing_depth_source_count": 0,
         }
@@ -191,7 +237,7 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         sender_log = "\n".join(
             [
                 "stereo proxy_targets live publisher listening on ws://127.0.0.1:8766/proxy_targets",
-                "sent stereo seq=20 target=vst_stereo-person-2-3 depth_source=bbox_top_center_fallback depth_confidence=low",
+                "sent stereo seq=20 target=vst_stereo-person-2-3 depth_source=pov_stereo_triangulation depth_confidence=high",
             ]
         )
 
@@ -201,7 +247,7 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         self.assertIn("STREAM_OK", status["verdicts"])
         self.assertIn("GODOT_NOT_CONNECTED", status["verdicts"])
         self.assertIn("SAMPLE_FALLBACK_ACTIVE", status["verdicts"])
-        self.assertIn("LOW_CONFIDENCE_DEPTH_ONLY", status["verdicts"])
+        self.assertNotIn("LOW_CONFIDENCE_DEPTH_ONLY", status["verdicts"])
         self.assertIn("PCMR/card is still on proxy_sample/person-7", status["errors"])
 
     def test_end_to_end_health_passes_when_card_binds_live_stereo_target(self):
@@ -267,6 +313,118 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         self.assertEqual(status["pcmr"]["head_z_sign"], "negative")
         self.assertEqual(status["pcmr"]["camera_z_sign"], "positive")
         self.assertEqual(status["pcmr"]["world_z_sign"], "positive")
+        self.assertEqual(status["errors"], [])
+
+    def test_end_to_end_health_reports_when_godot_client_is_not_active(self):
+        health = load_module(HEALTH_MONITOR, "validate_proxy_targets_end_to_end_health")
+        raw_status = {
+            "ok": True,
+            "packets": 10,
+            "parsed": 10,
+            "sequence_contiguous": True,
+            "position_changed": True,
+            "target_ids": ["vst_stereo-active-1"],
+            "depth_confidences": {"low": 10},
+            "depth_sources": {"bbox_top_center_fallback": 10},
+            "missing_depth_confidence_count": 0,
+            "missing_depth_source_count": 0,
+        }
+        pcmr_status = {
+            "last_command": "proxy_live",
+            "ws_connected": True,
+            "ws_subscribed": True,
+            "packets": 5,
+            "parsed": 5,
+            "live": 5,
+            "card_target_id": "vst_stereo-active-1",
+            "card_attach_target_id": "vst_stereo-active-1",
+            "proxy_target_ids": ["vst_stereo-active-1"],
+            "card_node_position": "0.20 0.10 -0.50",
+            "card_resolved_position": "0.20 0.10 -0.50",
+        }
+        sender_log = "\n".join(
+            [
+                "stereo proxy_targets live publisher listening on ws://127.0.0.1:8766/proxy_targets",
+                "sent stereo seq=20 target=vst_stereo-active-1 depth_source=bbox_top_center_fallback depth_confidence=low",
+            ]
+        )
+        depth_trace_summary = {
+            "clients": {
+                "active_client_count": 1,
+                "active_clients": ["client-2=monitor@127.0.0.1:13285"],
+                "last_disconnect": {"client_id": "client-1", "label": "godot", "reason": "client_closed"},
+            }
+        }
+
+        status = health.evaluate_health(
+            sender_log,
+            raw_status,
+            pcmr_status,
+            min_packets=10,
+            depth_trace_summary=depth_trace_summary,
+        )
+
+        self.assertFalse(status["ok"])
+        self.assertIn("GODOT_CLIENT_NOT_ACTIVE", status["verdicts"])
+        self.assertEqual(status["tracking"]["clients"]["last_disconnect"]["label"], "godot")
+        self.assertTrue(any("Godot client is not currently active" in error for error in status["errors"]))
+
+    def test_end_to_end_health_accepts_decoupled_published_logs_and_sustained_pcmr_live(self):
+        health = load_module(HEALTH_MONITOR, "validate_proxy_targets_end_to_end_health")
+        raw_status = {
+            "ok": True,
+            "packets": 10,
+            "parsed": 10,
+            "sequence_contiguous": True,
+            "position_changed": True,
+            "target_ids": ["vst_stereo-active-1"],
+            "depth_confidences": {"low": 10},
+            "depth_sources": {"bbox_top_center_fallback": 10},
+            "missing_depth_confidence_count": 0,
+            "missing_depth_source_count": 0,
+        }
+        pcmr_status = {
+            "last_command": "proxy_live",
+            "ws_connected": True,
+            "ws_subscribed": True,
+            "packets": 1146,
+            "parsed": 1146,
+            "live": 1146,
+            "sequence": 1257,
+            "card_target_id": "vst_stereo-active-1",
+            "card_attach_target_id": "vst_stereo-active-1",
+            "proxy_target_ids": ["vst_stereo-active-1"],
+            "card_node_position": "0.20 0.10 -0.50",
+            "card_resolved_position": "0.20 0.10 -0.50",
+        }
+        sender_log = "\n".join(
+            [
+                "stereo proxy_targets live publisher listening on ws://127.0.0.1:8766/proxy_targets",
+                "updated stereo detector seq=298 target=vst_stereo-active-1 depth_source=bbox_top_center_fallback depth_confidence=low clients=2",
+                "published stereo seq=694 target=vst_stereo-active-1 freshness=stale depth_source=bbox_top_center_fallback depth_confidence=low clients=1",
+            ]
+        )
+        depth_trace_summary = {
+            "clients": {
+                "active_client_count": 1,
+                "active_clients": ["client-2=monitor@127.0.0.1:13285"],
+                "last_disconnect": {"client_id": "client-1", "label": "godot", "reason": "client_closed"},
+            }
+        }
+
+        status = health.evaluate_health(
+            sender_log,
+            raw_status,
+            pcmr_status,
+            min_packets=10,
+            depth_trace_summary=depth_trace_summary,
+        )
+
+        self.assertTrue(status["ok"])
+        self.assertIn("SENDER_STEREO_TARGETS", status["verdicts"])
+        self.assertIn("GODOT_CLIENT_STATUS_AMBIGUOUS", status["verdicts"])
+        self.assertNotIn("GODOT_CLIENT_NOT_ACTIVE", status["verdicts"])
+        self.assertEqual(status["sender"]["last_target_id"], "vst_stereo-active-1")
         self.assertEqual(status["errors"], [])
 
     def test_end_to_end_health_does_not_flag_sample_when_card_is_live_but_sample_target_remains_registered(self):
@@ -448,6 +606,19 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
                             "switch_reason": "initial",
                             "active_age_frames": 1,
                             "held_last_pose": False,
+                            "sync": {
+                                "pairing_strategy": "capture_timestamp",
+                                "temporal_mismatch_count": 1,
+                                "dropped_left_frames": 1,
+                                "dropped_right_frames": 0,
+                            },
+                            "realtime": {
+                                "target_source_hz": 45.0,
+                                "frames_seen_left": 10,
+                                "frames_seen_right": 9,
+                                "estimated_left_dropped_frames": 2,
+                                "estimated_right_dropped_frames": 3,
+                            },
                         }
                     ),
                     json.dumps(
@@ -526,6 +697,11 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         self.assertEqual(status["tracking"]["raw_track_switch_count"], 1)
         self.assertEqual(status["tracking"]["last_switch_reason"], "switch_confirmed")
         self.assertEqual(status["tracking"]["last_active_age_frames"], 1)
+        self.assertEqual(status["tracking"]["sync"]["pairing_strategy"], "capture_timestamp")
+        self.assertEqual(status["tracking"]["sync"]["temporal_mismatch_count"], 1)
+        self.assertEqual(status["tracking"]["realtime"]["target_source_hz"], 45.0)
+        self.assertEqual(status["tracking"]["realtime"]["estimated_left_dropped_frames"], 2)
+        self.assertEqual(status["tracking"]["realtime"]["estimated_right_dropped_frames"], 3)
 
     def test_classifies_connection_refused_with_actionable_hint(self):
         monitor = load_module(MONITOR, "monitor_proxy_targets_live_stream")
