@@ -25,6 +25,7 @@ $Publisher = Join-Path -Path $RepoRoot -ChildPath "tools\antman_vst_stereo_proxy
 $PcmrRunner = Join-Path -Path $RepoRoot -ChildPath "tools\run_windows_pcmr.ps1"
 $MonitorRunner = Join-Path -Path $RepoRoot -ChildPath "tools\run_proxy_targets_live_monitor.ps1"
 $HealthValidator = Join-Path -Path $RepoRoot -ChildPath "tools\validate_proxy_targets_end_to_end_health.py"
+$RunDiagnosticsAnalyzer = Join-Path -Path $RepoRoot -ChildPath "tools\analyze_live_run_diagnostics.py"
 $WorkDir = Join-Path -Path $RepoRoot -ChildPath ".tmp\windows_pcmr_stereo_proxy_targets_live"
 $SenderScript = Join-Path -Path $WorkDir -ChildPath "sender.ps1"
 $ReceiverScript = Join-Path -Path $WorkDir -ChildPath "receiver.ps1"
@@ -34,6 +35,7 @@ $ReceiverLog = Join-Path -Path $WorkDir -ChildPath "receiver.log"
 $MonitorLog = Join-Path -Path $WorkDir -ChildPath "monitor.log"
 $DepthTraceFile = Join-Path -Path $WorkDir -ChildPath "depth_estimation_trace.jsonl"
 $HealthStatusFile = Join-Path -Path $WorkDir -ChildPath "end_to_end_health_status.json"
+$RunDiagnosticsFile = Join-Path -Path $WorkDir -ChildPath "live_run_diagnostics.json"
 $RawMonitorStatusFile = Join-Path -Path $RepoRoot -ChildPath ".tmp\proxy_targets_live_monitor\proxy_targets_live_monitor_status.json"
 $PcmrStatusFile = Join-Path -Path $env:APPDATA -ChildPath "Godot\app_userdata\demo_run\proxy_targets_live_status.json"
 $SenderReadyFile = Join-Path -Path $WorkDir -ChildPath "sender_ready.txt"
@@ -136,7 +138,7 @@ if ($PythonExe -eq "") {
     }
 }
 
-foreach ($RequiredPath in @($Publisher, $PcmrRunner, $MonitorRunner, $HealthValidator)) {
+foreach ($RequiredPath in @($Publisher, $PcmrRunner, $MonitorRunner, $HealthValidator, $RunDiagnosticsAnalyzer)) {
     if (-not (Test-Path -LiteralPath $RequiredPath)) {
         throw "Required file not found: $RequiredPath"
     }
@@ -147,7 +149,7 @@ if ($PythonExe -ne "python" -and -not (Test-Path -LiteralPath $PythonExe)) {
 }
 
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-Remove-Item -LiteralPath $SenderLog, $ReceiverLog, $MonitorLog, $DepthTraceFile, $HealthStatusFile, $SenderReadyFile -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $SenderLog, $ReceiverLog, $MonitorLog, $DepthTraceFile, $HealthStatusFile, $RunDiagnosticsFile, $SenderReadyFile -Force -ErrorAction SilentlyContinue
 
 $RepoRootLiteral = ConvertTo-PowerShellLiteral $RepoRoot
 $PythonExeLiteral = ConvertTo-PowerShellLiteral $PythonExe
@@ -155,6 +157,7 @@ $PublisherLiteral = ConvertTo-PowerShellLiteral $Publisher
 $PcmrRunnerLiteral = ConvertTo-PowerShellLiteral $PcmrRunner
 $MonitorRunnerLiteral = ConvertTo-PowerShellLiteral $MonitorRunner
 $HealthValidatorLiteral = ConvertTo-PowerShellLiteral $HealthValidator
+$RunDiagnosticsAnalyzerLiteral = ConvertTo-PowerShellLiteral $RunDiagnosticsAnalyzer
 $AntmanRootLiteral = ConvertTo-PowerShellLiteral $AntmanRoot
 $VstAiShmRootLiteral = ConvertTo-PowerShellLiteral $VstAiShmRoot
 $GodotExeLiteral = ConvertTo-PowerShellLiteral $GodotExe
@@ -164,6 +167,7 @@ $ReceiverLogLiteral = ConvertTo-PowerShellLiteral $ReceiverLog
 $MonitorLogLiteral = ConvertTo-PowerShellLiteral $MonitorLog
 $DepthTraceFileLiteral = ConvertTo-PowerShellLiteral $DepthTraceFile
 $HealthStatusFileLiteral = ConvertTo-PowerShellLiteral $HealthStatusFile
+$RunDiagnosticsFileLiteral = ConvertTo-PowerShellLiteral $RunDiagnosticsFile
 $RawMonitorStatusFileLiteral = ConvertTo-PowerShellLiteral $RawMonitorStatusFile
 $PcmrStatusFileLiteral = ConvertTo-PowerShellLiteral $PcmrStatusFile
 $SenderReadyFileLiteral = ConvertTo-PowerShellLiteral $SenderReadyFile
@@ -278,8 +282,25 @@ Write-Host "[monitor] Godot/card pose summary includes: proxy_world_position / c
 & $PythonExeLiteral @HealthArgs *>&1 | Tee-Object -FilePath $MonitorLogLiteral -Append
 `$HealthExitCode = `$LASTEXITCODE
 Write-Host "[monitor] End-to-end health monitor exited with code `$HealthExitCode"
+Write-Host "[monitor] Generating run-level diagnostics: TIMESTAMP_SYNC_OK / PUBLISH_RATE_LOW / LOW_CONFIDENCE_DEPTH_ONLY / HELD_POSE_TOO_MUCH / RAW_PAIR_SWITCHING / GODOT_CLIENT_DISCONNECTED_OR_LABEL_AMBIGUOUS / CARD_POSE_STALE"
+`$RunDiagnosticsArgs = @(
+  $RunDiagnosticsAnalyzerLiteral,
+  "--depth-trace", $DepthTraceFileLiteral,
+  "--raw-status", $RawMonitorStatusFileLiteral,
+  "--pcmr-status", $PcmrStatusFileLiteral,
+  "--sender-log", $SenderLogLiteral,
+  "--output", $RunDiagnosticsFileLiteral,
+  "--top-n", "10",
+  "--context-radius", "5"
+)
+& $PythonExeLiteral @RunDiagnosticsArgs *>&1 | Tee-Object -FilePath $MonitorLogLiteral -Append
+`$RunDiagnosticsExitCode = `$LASTEXITCODE
+Write-Host "[monitor] Run-level diagnostics exited with code `$RunDiagnosticsExitCode"
 if (`$HealthExitCode -ne 0) {
   exit `$HealthExitCode
+}
+if (`$RunDiagnosticsExitCode -ne 0) {
+  exit `$RunDiagnosticsExitCode
 }
 if (`$RawMonitorFailed) {
   exit `$RawMonitorExitCode
@@ -332,4 +353,5 @@ Write-Host "  Receiver: $ReceiverLog"
 Write-Host "  Monitor:  $MonitorLog"
 Write-Host "  Depth trace: $DepthTraceFile"
 Write-Host "  Health:   $HealthStatusFile"
+Write-Host "  Run diagnostics: $RunDiagnosticsFile"
 Write-Host "  PCMR status copy: .tmp\windows_pcmr_proxy_targets\proxy_targets_live_status.json"
