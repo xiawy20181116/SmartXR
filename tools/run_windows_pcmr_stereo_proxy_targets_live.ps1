@@ -180,7 +180,7 @@ $SenderContent = @"
 Set-Location -LiteralPath $RepoRootLiteral
 Write-Host "[sender] SmartXR stereo sender"
 Write-Host "[sender] WebSocket: $WsUrl"
-Write-Host "[sender] Expected depth_source=bbox_top_center_fallback depth_confidence=low"
+Write-Host "[sender] Expected depth_source=pov_stereo_triangulation depth_confidence=high"
 Write-Host "[sender] Depth trace: $DepthTraceFile"
 Write-Host "[sender] VST AI SHM root: $VstAiShmRoot"
 Write-Host "[sender] A later healthy run should print sent stereo seq=..."

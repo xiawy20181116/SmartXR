@@ -604,8 +604,8 @@ def build_proxy_targets_message_from_stereo_bbox_record(
                 "confidence": float(record.get("confidence", 1.0)),
                 "bbox": _bbox_dict_from_xyxy(left_bbox),
                 "depth_m": float(stereo_record["depth_m"]),
-                "depth_source": "bbox_top_center_fallback",
-                "depth_confidence": "low",
+                "depth_source": stereo_record["depth_source"],
+                "depth_confidence": "high",
                 "stereo": {
                     "pair_id": stereo_record["pair_id"],
                     "frame_id": stereo_record["frame_id"],
@@ -625,6 +625,7 @@ def build_proxy_targets_message_from_stereo_bbox_record(
     if not message["targets"]:
         return None
     detection = source_payload["detections"][0]
+    message["targets"][0]["stereo"] = copy.deepcopy(detection["stereo"])
     _DEPTH_TRACE_CONTEXT[id(message)] = {
         "bbox": detection["bbox"],
         "stereo": detection["stereo"],

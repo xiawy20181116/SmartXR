@@ -149,10 +149,11 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertIsNotNone(message)
         self.assertEqual(message["sequence"], 3)
         self.assertEqual(message["targets"][0]["target_id"], "vst_stereo-person-2-4")
-        self.assertEqual(message["targets"][0]["depth_source"], "bbox_top_center_fallback")
-        self.assertEqual(message["targets"][0]["depth_confidence"], "low")
-        self.assertEqual(message["targets"][0]["source_coordinate"]["depth_source"], "bbox_top_center_fallback")
-        self.assertEqual(message["targets"][0]["source_coordinate"]["depth_confidence"], "low")
+        self.assertEqual(message["targets"][0]["depth_source"], "pov_stereo_triangulation")
+        self.assertEqual(message["targets"][0]["depth_confidence"], "high")
+        self.assertEqual(message["targets"][0]["source_coordinate"]["depth_source"], "pov_stereo_triangulation")
+        self.assertEqual(message["targets"][0]["source_coordinate"]["depth_confidence"], "high")
+        self.assertEqual(message["targets"][0]["stereo"]["pair_id"], "pair-000010")
         self.assertEqual(message["cards"][0]["card_id"], "StereoCard")
         self.assertEqual(validator.validate_message(message), [])
 
@@ -191,7 +192,7 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(message)
-        self.assertEqual(message["targets"][0]["depth_source"], "bbox_top_center_fallback")
+        self.assertEqual(message["targets"][0]["depth_source"], "pov_stereo_triangulation")
         self.assertEqual(diagnostics["reason"], "target_ready")
         self.assertEqual(diagnostics["frames_seen_left"], 2)
         self.assertEqual(diagnostics["frames_seen_right"], 1)
@@ -895,8 +896,8 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(event["target_id"], "vst_stereo-person-2-4")
         self.assertEqual(event["left_frame_id"], 10)
         self.assertEqual(event["right_frame_id"], 10)
-        self.assertEqual(event["depth_source"], "bbox_top_center_fallback")
-        self.assertEqual(event["depth_confidence"], "low")
+        self.assertEqual(event["depth_source"], "pov_stereo_triangulation")
+        self.assertEqual(event["depth_confidence"], "high")
         self.assertIsInstance(event["depth_m"], float)
         self.assertEqual(event["source_frame"]["anchor_depth"], event["depth_m"])
         self.assertIn("camera_point_m", event)
@@ -907,6 +908,41 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(len(event["head_position_m"]), 3)
         self.assertIn("bbox", event)
         self.assertEqual(event["stereo"]["pair_id"], "pair-000010")
+
+    def test_depth_trace_event_preserves_stereo_fields_after_context_is_consumed(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        stereo_record = {
+            "source": "vst_stereo_bbox",
+            "frame_id": 10,
+            "pair_id": "pair-000010",
+            "person_id": "person-2-4",
+            "timestamp_ms": 1780911169157,
+            "left_bbox_xyxy": [640, 240, 720, 520],
+            "right_bbox_xyxy": [608, 240, 688, 520],
+            "confidence": 0.91,
+        }
+        message = publisher.build_proxy_targets_message_from_stereo_bbox_record(
+            stereo_record,
+            sequence=3,
+            card_id="StereoCard",
+            recorded_width=880,
+            recorded_height=660,
+        )
+
+        first = publisher.build_depth_trace_event(
+            message=message,
+            diagnostics={"reason": "target_ready", "last_pair_frame_id": 10},
+        )
+        stale = publisher.build_depth_trace_event(
+            message=message,
+            diagnostics={"reason": "target_ready", "last_pair_frame_id": 10, "held_last_pose": True},
+        )
+
+        self.assertEqual(first["stereo"]["pair_id"], "pair-000010")
+        self.assertEqual(stale["stereo"]["pair_id"], "pair-000010")
+        self.assertEqual(stale["stereo"]["depth_source"], "pov_stereo_triangulation")
+        self.assertTrue(stale["held_last_pose"])
 
     def test_depth_trace_writer_appends_rejected_events_as_jsonl(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")

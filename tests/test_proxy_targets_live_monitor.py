@@ -215,8 +215,8 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
             "sequence_contiguous": True,
             "position_changed": True,
             "target_ids": ["vst_stereo-person-2-3"],
-            "depth_confidences": {"low": 10},
-            "depth_sources": {"bbox_top_center_fallback": 10},
+            "depth_confidences": {"high": 10},
+            "depth_sources": {"pov_stereo_triangulation": 10},
             "missing_depth_confidence_count": 0,
             "missing_depth_source_count": 0,
         }
@@ -237,7 +237,7 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         sender_log = "\n".join(
             [
                 "stereo proxy_targets live publisher listening on ws://127.0.0.1:8766/proxy_targets",
-                "sent stereo seq=20 target=vst_stereo-person-2-3 depth_source=bbox_top_center_fallback depth_confidence=low",
+                "sent stereo seq=20 target=vst_stereo-person-2-3 depth_source=pov_stereo_triangulation depth_confidence=high",
             ]
         )
 
@@ -247,7 +247,7 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         self.assertIn("STREAM_OK", status["verdicts"])
         self.assertIn("GODOT_NOT_CONNECTED", status["verdicts"])
         self.assertIn("SAMPLE_FALLBACK_ACTIVE", status["verdicts"])
-        self.assertIn("LOW_CONFIDENCE_DEPTH_ONLY", status["verdicts"])
+        self.assertNotIn("LOW_CONFIDENCE_DEPTH_ONLY", status["verdicts"])
         self.assertIn("PCMR/card is still on proxy_sample/person-7", status["errors"])
 
     def test_end_to_end_health_passes_when_card_binds_live_stereo_target(self):

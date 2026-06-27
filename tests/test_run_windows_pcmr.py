@@ -84,7 +84,7 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("ValidateProxyTargets = `$true", source)
         self.assertIn("ProxyTargetsWsUrl = $WsUrlLiteral", source)
         self.assertIn("ws://${HostName}:${Port}/proxy_targets", source)
-        self.assertIn("depth_confidence=low", source)
+        self.assertIn("depth_confidence=high", source)
 
     def test_stereo_live_runner_uses_antman_stack_style_tabs_and_readiness_gates(self):
         self.assertTrue(STEREO_LIVE_RUNNER.exists())
