@@ -252,8 +252,8 @@ func _format_vst_status_line(vst: Dictionary) -> String:
 	]
 
 
-func _source_coordinate_summary(source_coordinate: Dictionary) -> String:
-	if source_coordinate.is_empty():
+func _source_coordinate_summary(source_coordinate) -> String:
+	if typeof(source_coordinate) != TYPE_DICTIONARY or source_coordinate.is_empty():
 		return "-"
 	var space := str(source_coordinate.get("coordinate_space", "-"))
 	var anchor := str(source_coordinate.get("anchor", "-"))
