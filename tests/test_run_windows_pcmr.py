@@ -221,7 +221,10 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("& $GxrExtensionSwitchLiteral -Mode disable -ProjectDir $ProjectDirLiteral", source)
         self.assertIn('$env:PROXY_TARGETS_WS_URL = $WsUrlLiteral', source)
         self.assertIn('$env:SMARTXR_STATUS_HUD_VISIBLE = "1"', source)
+        self.assertIn('`$OldGodotErrorActionPreference = `$ErrorActionPreference', source)
+        self.assertIn('`$ErrorActionPreference = "Continue"', source)
         self.assertIn("& $GodotExeLiteral --xr-mode off --path $ProjectDirLiteral", source)
+        self.assertIn('`$ErrorActionPreference = `$OldGodotErrorActionPreference', source)
         self.assertIn("& $GxrExtensionSwitchLiteral -Mode enable -ProjectDir $ProjectDirLiteral", source)
 
     def test_overlay_visual_check_runner_holds_godot_open_for_manual_inspection(self):

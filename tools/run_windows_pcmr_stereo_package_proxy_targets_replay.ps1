@@ -241,8 +241,14 @@ if ($DemoOnlyLiteral) {
     & $GxrExtensionSwitchLiteral -Mode disable -ProjectDir $ProjectDirLiteral
     `$env:PROXY_TARGETS_WS_URL = $WsUrlLiteral
     `$env:SMARTXR_STATUS_HUD_VISIBLE = "1"
-    & $GodotExeLiteral --xr-mode off --path $ProjectDirLiteral *>&1 | Tee-Object -FilePath $ReceiverLogLiteral -Append
-    `$ExitCode = `$LASTEXITCODE
+    `$OldGodotErrorActionPreference = `$ErrorActionPreference
+    `$ErrorActionPreference = "Continue"
+    try {
+      & $GodotExeLiteral --xr-mode off --path $ProjectDirLiteral *>&1 | Tee-Object -FilePath $ReceiverLogLiteral -Append
+      `$ExitCode = `$LASTEXITCODE
+    } finally {
+      `$ErrorActionPreference = `$OldGodotErrorActionPreference
+    }
   } finally {
     if (`$null -eq `$OldProxyTargetsWsUrl) {
       Remove-Item Env:\PROXY_TARGETS_WS_URL -ErrorAction SilentlyContinue
