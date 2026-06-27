@@ -1,5 +1,6 @@
 param(
     [string]$AntmanRoot = "E:\xia\Antman_smart",
+    [string]$VstAiShmRoot = "E:\xia\Antman\0422\0527\P1\vst_ai_shm",
     [string]$GodotExe = "E:\xia\Godot_v4.6.2-stable_win64.exe\Godot_v4.6.2-stable_win64.exe",
     [string]$HostName = "127.0.0.1",
     [int]$Port = 8766,
@@ -155,6 +156,7 @@ $PcmrRunnerLiteral = ConvertTo-PowerShellLiteral $PcmrRunner
 $MonitorRunnerLiteral = ConvertTo-PowerShellLiteral $MonitorRunner
 $HealthValidatorLiteral = ConvertTo-PowerShellLiteral $HealthValidator
 $AntmanRootLiteral = ConvertTo-PowerShellLiteral $AntmanRoot
+$VstAiShmRootLiteral = ConvertTo-PowerShellLiteral $VstAiShmRoot
 $GodotExeLiteral = ConvertTo-PowerShellLiteral $GodotExe
 $WsUrlLiteral = ConvertTo-PowerShellLiteral $WsUrl
 $SenderLogLiteral = ConvertTo-PowerShellLiteral $SenderLog
@@ -176,10 +178,13 @@ Write-Host "[sender] SmartXR stereo sender"
 Write-Host "[sender] WebSocket: $WsUrl"
 Write-Host "[sender] Expected depth_source=bbox_top_center_fallback depth_confidence=low"
 Write-Host "[sender] Depth trace: $DepthTraceFile"
+Write-Host "[sender] VST AI SHM root: $VstAiShmRoot"
 Write-Host "[sender] A later healthy run should print sent stereo seq=..."
 `$PublisherArgs = @(
   $PublisherLiteral,
   "--antman-root", $AntmanRootLiteral,
+  "--vst-reader", "vst_ai_shm",
+  "--vst-ai-shm-root", $VstAiShmRootLiteral,
   "--host", "$HostName",
   "--port", "$Port",
   "--hz", "$Hz",
@@ -291,6 +296,7 @@ Write-Host "This opens one Windows Terminal window with three tabs when wt.exe i
 Write-Host "It falls back to three visible PowerShell windows otherwise."
 Write-Host "WebSocket: $WsUrl"
 Write-Host "Work dir:  $WorkDir"
+Write-Host "VST AI SHM root: $VstAiShmRoot"
 Write-Host "Keep receiver Godot open: $KeepReceiverOpen"
 Write-Host "Depth trace: $DepthTraceFile"
 Write-Host ""

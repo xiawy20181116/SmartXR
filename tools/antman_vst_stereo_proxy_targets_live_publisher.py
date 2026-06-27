@@ -511,6 +511,9 @@ def build_depth_trace_event(
         "sync": diagnostics.get("sync", {}),
         "realtime": diagnostics.get("realtime", {}),
     }
+    clients = diagnostics.get("clients")
+    if isinstance(clients, dict):
+        event["clients"] = dict(clients)
     if delivered_clients is not None:
         event["delivered_clients"] = delivered_clients
     temporal = diagnostics.get("temporal")
@@ -756,6 +759,7 @@ def _broadcast_loop(
         )
         if message is None:
             empty_windows += 1
+            diagnostics["clients"] = hub.status_summary()
             write_depth_trace_event(
                 depth_trace,
                 build_depth_trace_event(message=None, diagnostics=diagnostics, sequence=sequence),
@@ -768,6 +772,7 @@ def _broadcast_loop(
 
         empty_windows = 0
         delivered = hub.broadcast(message)
+        diagnostics["clients"] = hub.status_summary()
         write_depth_trace_event(
             depth_trace,
             build_depth_trace_event(message=message, diagnostics=diagnostics, delivered_clients=delivered),
@@ -898,6 +903,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--depth-trace", type=Path, default=None)
     parser.add_argument("--recorded-width", type=int, default=880)
     parser.add_argument("--recorded-height", type=int, default=660)
+    parser.add_argument("--vst-reader", choices=("vst_ai_shm", "legacy"), default="vst_ai_shm")
+    parser.add_argument("--vst-ai-shm-root", type=Path, default=Path("E:/xia/Antman/0422/0527/P1/vst_ai_shm"))
     parser.add_argument("--shm-name", default="Antman.VST.AI.v1")
     parser.add_argument("--shm-namespace", default=None)
     parser.add_argument("--wait-timeout-ms", type=int, default=1000)

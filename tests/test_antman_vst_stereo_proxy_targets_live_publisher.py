@@ -94,6 +94,30 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(summary["last_disconnect"]["label"], "monitor")
         self.assertEqual(summary["last_disconnect"]["reason"], "connection_reset")
 
+    def test_depth_trace_event_includes_publisher_client_status(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        event = publisher.build_depth_trace_event(
+            message=None,
+            diagnostics={
+                "reason": "no_pair",
+                "clients": {
+                    "active_client_count": 1,
+                    "active_clients": ["client-2=monitor@127.0.0.1:12345"],
+                    "last_disconnect": {
+                        "client_id": "client-1",
+                        "label": "godot",
+                        "address": "127.0.0.1:12344",
+                        "reason": "client_closed",
+                    },
+                },
+            },
+            sequence=7,
+        )
+
+        self.assertEqual(event["clients"]["active_client_count"], 1)
+        self.assertEqual(event["clients"]["last_disconnect"]["label"], "godot")
+
     def test_builds_schema_valid_message_from_stereo_bbox_pair(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
         validator = load_module(VALIDATOR, "validate_proxy_targets_payload_schema")

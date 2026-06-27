@@ -315,6 +315,60 @@ class ProxyTargetsLiveMonitorTests(unittest.TestCase):
         self.assertEqual(status["pcmr"]["world_z_sign"], "positive")
         self.assertEqual(status["errors"], [])
 
+    def test_end_to_end_health_reports_when_godot_client_is_not_active(self):
+        health = load_module(HEALTH_MONITOR, "validate_proxy_targets_end_to_end_health")
+        raw_status = {
+            "ok": True,
+            "packets": 10,
+            "parsed": 10,
+            "sequence_contiguous": True,
+            "position_changed": True,
+            "target_ids": ["vst_stereo-active-1"],
+            "depth_confidences": {"low": 10},
+            "depth_sources": {"bbox_top_center_fallback": 10},
+            "missing_depth_confidence_count": 0,
+            "missing_depth_source_count": 0,
+        }
+        pcmr_status = {
+            "last_command": "proxy_live",
+            "ws_connected": True,
+            "ws_subscribed": True,
+            "packets": 5,
+            "parsed": 5,
+            "live": 5,
+            "card_target_id": "vst_stereo-active-1",
+            "card_attach_target_id": "vst_stereo-active-1",
+            "proxy_target_ids": ["vst_stereo-active-1"],
+            "card_node_position": "0.20 0.10 -0.50",
+            "card_resolved_position": "0.20 0.10 -0.50",
+        }
+        sender_log = "\n".join(
+            [
+                "stereo proxy_targets live publisher listening on ws://127.0.0.1:8766/proxy_targets",
+                "sent stereo seq=20 target=vst_stereo-active-1 depth_source=bbox_top_center_fallback depth_confidence=low",
+            ]
+        )
+        depth_trace_summary = {
+            "clients": {
+                "active_client_count": 1,
+                "active_clients": ["client-2=monitor@127.0.0.1:13285"],
+                "last_disconnect": {"client_id": "client-1", "label": "godot", "reason": "client_closed"},
+            }
+        }
+
+        status = health.evaluate_health(
+            sender_log,
+            raw_status,
+            pcmr_status,
+            min_packets=10,
+            depth_trace_summary=depth_trace_summary,
+        )
+
+        self.assertFalse(status["ok"])
+        self.assertIn("GODOT_CLIENT_NOT_ACTIVE", status["verdicts"])
+        self.assertEqual(status["tracking"]["clients"]["last_disconnect"]["label"], "godot")
+        self.assertTrue(any("Godot client is not currently active" in error for error in status["errors"]))
+
     def test_end_to_end_health_does_not_flag_sample_when_card_is_live_but_sample_target_remains_registered(self):
         health = load_module(HEALTH_MONITOR, "validate_proxy_targets_end_to_end_health")
         raw_status = {

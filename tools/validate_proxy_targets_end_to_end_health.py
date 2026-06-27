@@ -39,6 +39,7 @@ def summarize_depth_trace(path: Path | None) -> dict[str, Any]:
             "last_active_age_frames": None,
             "sync": {},
             "realtime": {},
+            "clients": {},
         }
     accepted = 0
     rejected = 0
@@ -54,6 +55,7 @@ def summarize_depth_trace(path: Path | None) -> dict[str, Any]:
     max_candidate_count = 0
     sync_summary: dict[str, Any] = {}
     realtime_summary: dict[str, Any] = {}
+    client_summary: dict[str, Any] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
@@ -62,6 +64,9 @@ def summarize_depth_trace(path: Path | None) -> dict[str, Any]:
         except json.JSONDecodeError:
             rejected += 1
             continue
+        clients = event.get("clients")
+        if isinstance(clients, dict):
+            client_summary = dict(clients)
         if event.get("event") != "accepted":
             rejected += 1
             continue
@@ -132,6 +137,7 @@ def summarize_depth_trace(path: Path | None) -> dict[str, Any]:
         "max_candidate_count": max_candidate_count,
         "sync": sync_summary,
         "realtime": realtime_summary,
+        "clients": client_summary,
     }
 
 
@@ -330,6 +336,7 @@ def evaluate_health(
     verdicts: list[str] = []
     errors: list[str] = []
     sender = _sender_summary(sender_log_text)
+    trace_summary = depth_trace_summary if depth_trace_summary is not None else summarize_depth_trace(None)
 
     if sender["ready"]:
         verdicts.append("SENDER_READY")
@@ -370,6 +377,21 @@ def evaluate_health(
     if _low_confidence_only(raw_status):
         verdicts.append("LOW_CONFIDENCE_DEPTH_ONLY")
 
+    clients = trace_summary.get("clients", {}) if isinstance(trace_summary, dict) else {}
+    if not isinstance(clients, dict):
+        clients = {}
+    active_clients = _list_strings(clients.get("active_clients"))
+    last_disconnect_value = clients.get("last_disconnect")
+    last_disconnect = last_disconnect_value if isinstance(last_disconnect_value, dict) else {}
+    has_godot_active = any("=godot@" in client for client in active_clients)
+    godot_disconnected = str(last_disconnect.get("label", "")).strip().lower() == "godot"
+    if clients and active_clients:
+        if has_godot_active:
+            verdicts.append("GODOT_CLIENT_ACTIVE")
+        elif godot_disconnected:
+            verdicts.append("GODOT_CLIENT_NOT_ACTIVE")
+            errors.append("Godot client is not currently active in publisher clients; last_disconnect=godot")
+
     ok = (
         "SENDER_READY" in verdicts
         and "SENDER_STEREO_TARGETS" in verdicts
@@ -377,6 +399,7 @@ def evaluate_health(
         and "GODOT_CONNECTED" in verdicts
         and "CARD_BOUND_TO_LIVE_TARGET" in verdicts
         and "SAMPLE_FALLBACK_ACTIVE" not in verdicts
+        and "GODOT_CLIENT_NOT_ACTIVE" not in verdicts
     )
     return {
         "ok": ok,
@@ -415,7 +438,7 @@ def evaluate_health(
             "proxy_target_ids": _list_strings(pcmr_status.get("proxy_target_ids")),
             **_card_pose_summary(pcmr_status),
         },
-        "tracking": depth_trace_summary if depth_trace_summary is not None else summarize_depth_trace(None),
+        "tracking": trace_summary,
     }
 
 

@@ -667,17 +667,12 @@ def build_stereo_shm_names(base_name: str) -> tuple[str, str]:
 
 def _create_stereo_readers_and_trackers(args: argparse.Namespace) -> tuple[Any, Any, Any, Any]:
     _install_antman_paths(args.antman_root)
-    from human_face_visualizer.async_runtime import VstAiShmReader
     from human_trackor.api import HumanTrackor
 
-    left_name, right_name = build_stereo_shm_names(args.shm_name)
-    reader_kwargs = {
-        "namespace": args.shm_namespace,
-        "wait_timeout_ms": args.wait_timeout_ms,
-        "wait_for_producer_seconds": args.wait_for_producer_seconds,
-    }
-    left_reader = VstAiShmReader(name=left_name, **reader_kwargs)
-    right_reader = VstAiShmReader(name=right_name, **reader_kwargs)
+    if getattr(args, "vst_reader", "legacy") == "vst_ai_shm":
+        left_reader, right_reader = _create_vst_ai_shm_consumer_readers(args)
+    else:
+        left_reader, right_reader = _create_legacy_stereo_readers(args)
     left_tracker = HumanTrackor(
         model=args.model,
         backend=args.backend,
@@ -693,6 +688,47 @@ def _create_stereo_readers_and_trackers(args: argparse.Namespace) -> tuple[Any, 
         device=args.device,
     )
     return left_reader, right_reader, left_tracker, right_tracker
+
+
+def _create_vst_ai_shm_consumer_readers(args: argparse.Namespace) -> tuple[Any, Any]:
+    root = Path(getattr(args, "vst_ai_shm_root", "E:/xia/Antman/0422/0527/P1/vst_ai_shm"))
+    value = str(root.resolve())
+    if value not in sys.path:
+        sys.path.insert(0, value)
+    from record_antman_vst_stereo_package import VstAiShmConsumerReader
+    from vst_ai_shm_consumer import VstAiShmConsumer
+
+    left = VstAiShmConsumer(
+        base_name=args.shm_name,
+        namespace=args.shm_namespace,
+        eye="Left",
+    )
+    right = VstAiShmConsumer(
+        base_name=args.shm_name,
+        namespace=args.shm_namespace,
+        eye="Right",
+    )
+    left.open(wait_for_producer_seconds=args.wait_for_producer_seconds)
+    right.open(wait_for_producer_seconds=args.wait_for_producer_seconds)
+    return (
+        VstAiShmConsumerReader(consumer=left, wait_timeout_ms=args.wait_timeout_ms),
+        VstAiShmConsumerReader(consumer=right, wait_timeout_ms=args.wait_timeout_ms),
+    )
+
+
+def _create_legacy_stereo_readers(args: argparse.Namespace) -> tuple[Any, Any]:
+    from human_face_visualizer.async_runtime import VstAiShmReader
+
+    left_name, right_name = build_stereo_shm_names(args.shm_name)
+    reader_kwargs = {
+        "namespace": args.shm_namespace,
+        "wait_timeout_ms": args.wait_timeout_ms,
+        "wait_for_producer_seconds": args.wait_for_producer_seconds,
+    }
+    return (
+        VstAiShmReader(name=left_name, **reader_kwargs),
+        VstAiShmReader(name=right_name, **reader_kwargs),
+    )
 
 
 def _create_tracker(args: argparse.Namespace) -> Any:

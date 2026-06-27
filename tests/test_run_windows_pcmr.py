@@ -144,6 +144,15 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn('"--depth-trace", $DepthTraceFileLiteral', source)
         self.assertIn("Depth trace:", source)
 
+    def test_stereo_live_runner_uses_vst_ai_shm_consumer_reader_by_default(self):
+        self.assertTrue(STEREO_LIVE_RUNNER.exists())
+        source = STEREO_LIVE_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn('[string]$VstAiShmRoot = "E:\\xia\\Antman\\0422\\0527\\P1\\vst_ai_shm"', source)
+        self.assertIn("$VstAiShmRootLiteral", source)
+        self.assertIn('"--vst-reader", "vst_ai_shm"', source)
+        self.assertIn('"--vst-ai-shm-root", $VstAiShmRootLiteral', source)
+
     def test_stereo_live_runner_monitor_captures_all_streams_and_health_verdict(self):
         self.assertTrue(STEREO_LIVE_RUNNER.exists())
         source = STEREO_LIVE_RUNNER.read_text(encoding="utf-8")
