@@ -84,16 +84,16 @@ func update_status_label(snapshot: Dictionary, delta: float = 0.0, force: bool =
 		bbox_center.y,
 		bbox_size.x,
 		bbox_size.y,
-		float(snapshot.get("bbox_depth_m", 0.0)),
-		float(snapshot.get("anchor_yaw_deg", 0.0)),
-		float(snapshot.get("anchor_pitch_deg", 0.0)),
-		float(snapshot.get("anchor_depth_m", 0.0)),
+		_number_value(snapshot.get("bbox_depth_m", 0.0)),
+		_number_value(snapshot.get("anchor_yaw_deg", 0.0)),
+		_number_value(snapshot.get("anchor_pitch_deg", 0.0)),
+		_number_value(snapshot.get("anchor_depth_m", 0.0)),
 		angular_size.x,
 		angular_size.y,
 		card_rotation.x,
 		card_rotation.y,
 		card_rotation.z,
-		float(snapshot.get("speed_deg_per_second", 0.0)),
+		_number_value(snapshot.get("speed_deg_per_second", 0.0)),
 		str(_truthy(snapshot.get("paused", false))),
 		tl.x,
 		tl.y,
@@ -131,20 +131,20 @@ func _write_proxy_targets_status_file(snapshot: Dictionary, delta: float) -> voi
 		"ws_subscribed": _truthy(proxy.get("ws_subscribed", false)),
 		"ws_url": str(proxy.get("ws_url", "")),
 		"anchor_mode": str(snapshot.get("anchor_mode", "manual")),
-		"attachments": int(proxy.get("attachments", 0)),
+		"attachments": _integer_value(proxy.get("attachments", 0)),
 		"card_target_id": str(proxy.get("card_target_id", "")),
-		"proxy_target_count": int(proxy.get("proxy_target_count", 0)),
+		"proxy_target_count": _integer_value(proxy.get("proxy_target_count", 0)),
 		"proxy_target_ids": proxy.get("proxy_target_ids", []),
 		"last_proxy_position": _format_vec3(proxy.get("last_position", Vector3.ZERO)),
 		"card_attach_target_id": str(proxy.get("card_target_id", "")),
 		"card_resolved_position": _format_vec3_or_na(proxy.get("card_resolved_position")),
 		"card_node_position": _format_vec3_or_na(proxy.get("card_node_position")),
-		"card_apply_count": int(proxy.get("card_apply_count", 0)),
-		"packets": int(proxy.get("packets", 0)),
-		"parsed": int(proxy.get("parsed", 0)),
-		"live": int(proxy.get("live", 0)),
-		"sequence": int(proxy.get("sequence", -1)),
-		"packet_bytes": int(proxy.get("packet_bytes", 0)),
+		"card_apply_count": _integer_value(proxy.get("card_apply_count", 0)),
+		"packets": _integer_value(proxy.get("packets", 0)),
+		"parsed": _integer_value(proxy.get("parsed", 0)),
+		"live": _integer_value(proxy.get("live", 0)),
+		"sequence": _integer_value(proxy.get("sequence", -1)),
+		"packet_bytes": _integer_value(proxy.get("packet_bytes", 0)),
 		"packet_preview": str(proxy.get("packet_preview", "-")),
 		"message_type": str(proxy.get("message_type", "-")),
 		"source_coordinate": proxy.get("source_coordinate", {}),
@@ -207,12 +207,12 @@ func _format_proxy_targets_status_line(proxy: Dictionary) -> String:
 	return "ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s src=%s err=%s" % [
 		"connected" if _truthy(proxy.get("ws_connected", false)) else "waiting",
 		str(_truthy(proxy.get("ws_subscribed", false))),
-		int(proxy.get("packets", 0)),
-		int(proxy.get("parsed", 0)),
-		int(proxy.get("live", 0)),
-		int(proxy.get("card_apply_count", 0)),
-		int(proxy.get("sequence", -1)),
-		int(proxy.get("packet_bytes", 0)),
+		_integer_value(proxy.get("packets", 0)),
+		_integer_value(proxy.get("parsed", 0)),
+		_integer_value(proxy.get("live", 0)),
+		_integer_value(proxy.get("card_apply_count", 0)),
+		_integer_value(proxy.get("sequence", -1)),
+		_integer_value(proxy.get("packet_bytes", 0)),
 		str(proxy.get("message_type", "-")),
 		_format_vec3(proxy.get("last_position", Vector3.ZERO)),
 		_format_vec3_or_na(proxy.get("card_node_position")),
@@ -238,9 +238,9 @@ func _format_vst_status_line(vst: Dictionary) -> String:
 	return "VST: cls=%s init=%s frames=%d boxes=%d latency=%.1fms img=%.0fx%.0f box0=%s %s err=%s\nAnchor: %s\n%s\n%s" % [
 		class_state,
 		init_state,
-		int(vst.get("frames", 0)),
-		int(vst.get("box_count", 0)),
-		float(vst.get("latency_ms", -1.0)),
+		_integer_value(vst.get("frames", 0)),
+		_integer_value(vst.get("box_count", 0)),
+		_number_value(vst.get("latency_ms", -1.0)),
 		image_size.x,
 		image_size.y,
 		box_str,
@@ -261,8 +261,8 @@ func _source_coordinate_summary(source_coordinate: Dictionary) -> String:
 	var fov := "-"
 	if typeof(source_frame) == TYPE_DICTIONARY:
 		fov = "%.1fx%.1f" % [
-			float(source_frame.get("horizontal_fov_deg", 0.0)),
-			float(source_frame.get("vertical_fov_deg", 0.0)),
+			_number_value(source_frame.get("horizontal_fov_deg", 0.0)),
+			_number_value(source_frame.get("vertical_fov_deg", 0.0)),
 		]
 	return "%s %s fov=%s eye2head=%s" % [
 		space,
@@ -287,11 +287,39 @@ func _truthy(value) -> bool:
 		TYPE_BOOL:
 			return value
 		TYPE_INT:
-			return int(value) != 0
+			return value != 0
 		TYPE_FLOAT:
-			return float(value) != 0.0
+			return value != 0.0
 		TYPE_STRING:
 			var normalized := str(value).strip_edges().to_lower()
 			return not normalized.is_empty() and normalized != "false" and normalized != "0"
 		_:
 			return value != null
+
+
+func _integer_value(value, fallback: int = 0) -> int:
+	match typeof(value):
+		TYPE_INT:
+			return value
+		TYPE_FLOAT:
+			return roundi(value)
+		TYPE_BOOL:
+			return 1 if value else 0
+		TYPE_STRING:
+			return value.to_int()
+		_:
+			return fallback
+
+
+func _number_value(value, fallback: float = 0.0) -> float:
+	match typeof(value):
+		TYPE_FLOAT:
+			return value
+		TYPE_INT:
+			return value
+		TYPE_BOOL:
+			return 1.0 if value else 0.0
+		TYPE_STRING:
+			return value.to_float()
+		_:
+			return fallback

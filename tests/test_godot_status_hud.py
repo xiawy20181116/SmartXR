@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import unittest
 
 
@@ -83,10 +84,11 @@ class GodotStatusHudTests(unittest.TestCase):
         self.assertNotIn('"--path"', runner)
         self.assertIn("SMARTXR_STATUS_HUD_SCRIPT", runner)
 
-    def test_status_hud_avoids_bool_constructor_calls(self):
+    def test_status_hud_avoids_primitive_constructor_calls(self):
         source = STATUS_HUD.read_text(encoding="utf-8")
 
-        self.assertNotIn("bool(", source)
+        primitive_ctor = re.search(r"(?<![A-Za-z0-9_])(bool|int|float)\(", source)
+        self.assertIsNone(primitive_ctor)
 
 
 if __name__ == "__main__":
