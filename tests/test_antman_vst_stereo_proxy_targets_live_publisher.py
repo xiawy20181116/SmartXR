@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
+import types
 from pathlib import Path
 import json
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -248,6 +251,71 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(event["temporal"], temporal)
         self.assertEqual(event["pair_capture_delta_ms"], 12.5)
         self.assertEqual(event["frame_id_delta"], 0)
+
+    def test_live_stereo_converts_vst_ai_shm_nv12_mapping_before_tracking(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        class FakeReader:
+            def __init__(self, timestamp_us):
+                self.timestamp_us = timestamp_us
+                self.used = False
+
+            def read_latest(self):
+                if self.used:
+                    return True, -1, None
+                self.used = True
+                return True, 11, {
+                    "width": 2,
+                    "height": 2,
+                    "stride": 2,
+                    "payload": b"\x10\x10\x10\x10\x80\x80",
+                    "timestamp_us": self.timestamp_us,
+                }
+
+            def get_stats(self):
+                return {}
+
+        class FakeNv12Array:
+            def reshape(self, _shape):
+                return self
+
+        fake_numpy = types.SimpleNamespace(
+            uint8=object(),
+            frombuffer=lambda _payload, dtype=None: FakeNv12Array(),
+        )
+
+        class FakeBgrImage:
+            def __getitem__(self, _key):
+                return "BGR_FRAME"
+
+        fake_cv2 = types.SimpleNamespace(
+            COLOR_YUV2BGR_NV12=91,
+            cvtColor=lambda _yuv, _code: FakeBgrImage(),
+        )
+
+        class FakeTracker:
+            def __init__(self, bbox):
+                self.bbox = bbox
+
+            def process_frame(self, frame):
+                if frame != "BGR_FRAME":
+                    raise AssertionError(f"expected converted BGR frame, got {frame!r}")
+                return FakeTrackingResult([FakePerson(bbox=self.bbox)])
+
+        with mock.patch.dict(sys.modules, {"numpy": fake_numpy, "cv2": fake_cv2}):
+            message, diagnostics = publisher.next_live_stereo_proxy_targets_message_with_diagnostics(
+                left_reader=FakeReader(1_000_000),
+                right_reader=FakeReader(1_004_000),
+                left_tracker=FakeTracker((640, 240, 720, 520)),
+                right_tracker=FakeTracker((608, 240, 688, 520)),
+                sequence=0,
+                max_read_attempts=1,
+                sleep_seconds=0,
+            )
+
+        self.assertIsNotNone(message)
+        self.assertEqual(diagnostics["temporal"]["left_capture_timestamp_source"], "frame_timestamp_us")
+        self.assertEqual(diagnostics["temporal"]["right_capture_timestamp_source"], "frame_timestamp_us")
 
     def test_live_stereo_message_uses_runtime_timestamp_ms_for_record_timestamp(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")

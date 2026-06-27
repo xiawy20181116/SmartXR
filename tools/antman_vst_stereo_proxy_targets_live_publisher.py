@@ -237,6 +237,34 @@ def _frame_timestamp_info(frame: Any) -> tuple[int | None, str | None]:
     return None, None
 
 
+def _frame_for_tracker(frame: Any) -> Any:
+    if not isinstance(frame, dict):
+        return frame
+    payload = frame.get("payload", frame.get("nv12_payload"))
+    if isinstance(payload, bytearray):
+        payload = bytes(payload)
+    if not isinstance(payload, bytes):
+        return frame
+    if not all(key in frame for key in ("width", "height", "stride")):
+        return frame
+    try:
+        width = int(frame["width"])
+        height = int(frame["height"])
+        stride = int(frame["stride"])
+    except (TypeError, ValueError):
+        return frame
+
+    try:
+        import cv2
+        import numpy as np
+    except Exception as exc:
+        raise RuntimeError("VST AI SHM NV12 frames need numpy and opencv-python-headless before tracking") from exc
+
+    yuv = np.frombuffer(payload, dtype=np.uint8).reshape((height * 3 // 2, stride))
+    bgr = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV12)
+    return bgr[:, :width]
+
+
 def _pair_runtime_timestamp_ms(left_frame: Any, right_frame: Any) -> int:
     left_timestamp_us = _frame_timestamp_us(left_frame)
     right_timestamp_us = _frame_timestamp_us(right_frame)
@@ -666,8 +694,8 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
             right_frame = pending_right.pop(right_frame_id)
             left_received_at_ms = pending_left_received_at_ms.pop(left_frame_id, None)
             right_received_at_ms = pending_right_received_at_ms.pop(right_frame_id, None)
-            left_tracking_result = left_tracker.process_frame(left_frame)
-            right_tracking_result = right_tracker.process_frame(right_frame)
+            left_tracking_result = left_tracker.process_frame(_frame_for_tracker(left_frame))
+            right_tracking_result = right_tracker.process_frame(_frame_for_tracker(right_frame))
             diagnostics["temporal"] = _pair_temporal_diagnostics(
                 left_frame_id=left_frame_id,
                 right_frame_id=right_frame_id,
