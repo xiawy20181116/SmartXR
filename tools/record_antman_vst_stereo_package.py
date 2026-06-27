@@ -26,6 +26,14 @@ from smartxr.stereo_depth import SCENE_STEREO_28  # noqa: E402
 DEFAULT_VST_AI_SHM_ROOT = Path("E:/xia/Antman/0422/0527/P1/vst_ai_shm")
 
 
+def _header_timestamp_us(header: dict[str, Any]) -> int | None:
+    for key in ("exposure_timestamp", "timestamp_us", "capture_timestamp_us", "ts_us"):
+        value = header.get(key)
+        if value is not None:
+            return int(value)
+    return None
+
+
 class VstAiShmConsumerReader:
     def __init__(
         self,
@@ -56,8 +64,11 @@ class VstAiShmConsumerReader:
             "stride": int(header["stride"]),
             "payload": nv12.tobytes(),
         }
-        if "timestamp_us" in header and header["timestamp_us"] is not None:
-            frame["timestamp_us"] = int(header["timestamp_us"])
+        if "exposure_timestamp" in header and header["exposure_timestamp"] is not None:
+            frame["exposure_timestamp"] = int(header["exposure_timestamp"])
+        timestamp_us = _header_timestamp_us(header)
+        if timestamp_us is not None:
+            frame["timestamp_us"] = timestamp_us
         return (
             True,
             frame_id,

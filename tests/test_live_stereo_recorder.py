@@ -287,6 +287,69 @@ class LiveStereoRecorderTests(unittest.TestCase):
         finally:
             shutil.rmtree(out_dir, ignore_errors=True)
 
+    def test_vst_ai_shm_consumer_reader_uses_exposure_timestamp_header(self):
+        tool = load_module(ANTMAN_TOOL, "record_antman_vst_stereo_package")
+
+        class FakeConsumer:
+            def __init__(self, frame_id: int, exposure_timestamp: int):
+                self.frame_id = frame_id
+                self.exposure_timestamp = exposure_timestamp
+                self.frames_returned = 0
+                self.acknowledged = []
+                self.closed = False
+
+            def wait_for_frame(self, timeout_ms):
+                return self.frames_returned == 0
+
+            def read_latest_frame(self):
+                self.frames_returned += 1
+                return (
+                    {
+                        "frame_id": self.frame_id,
+                        "width": 4,
+                        "height": 2,
+                        "stride": 4,
+                        "exposure_timestamp": self.exposure_timestamp,
+                    },
+                    FakeNv12Array(),
+                )
+
+            def acknowledge(self, frame_id):
+                self.acknowledged.append(frame_id)
+
+            def close(self):
+                self.closed = True
+
+        left_reader = tool.VstAiShmConsumerReader(
+            consumer=FakeConsumer(frame_id=20, exposure_timestamp=234_567),
+            wait_timeout_ms=1,
+        )
+        right_reader = tool.VstAiShmConsumerReader(
+            consumer=FakeConsumer(frame_id=20, exposure_timestamp=234_890),
+            wait_timeout_ms=1,
+        )
+
+        out_dir = ROOT / ".tmp" / "test_live_stereo_recorder" / "vst_ai_shm_exposure_timestamp"
+        shutil.rmtree(out_dir, ignore_errors=True)
+        try:
+            status = record_live_stereo_package(
+                left_reader=left_reader,
+                right_reader=right_reader,
+                out_dir=out_dir,
+                calibration=SCENE_STEREO_28.scaled_to(1164, 872),
+                max_read_attempts=1,
+                max_skew_frames=0,
+                sleep_seconds=0.0,
+            )
+
+            self.assertEqual(status["pair_count"], 1)
+            left_metadata = json.loads((out_dir / LEFT_EYE_DIR / "metadata.json").read_text(encoding="utf-8"))
+            right_metadata = json.loads((out_dir / RIGHT_EYE_DIR / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(left_metadata["timestamps_us"], [234_567])
+            self.assertEqual(right_metadata["timestamps_us"], [234_890])
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

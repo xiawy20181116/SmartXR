@@ -222,6 +222,12 @@ def _frame_timestamp_us(frame: Any) -> int | None:
 
 
 def _frame_timestamp_info(frame: Any) -> tuple[int | None, str | None]:
+    exposure_timestamp = _numeric_attr_or_key(
+        frame,
+        ("exposure_timestamp", "exposureTimestamp", "exposure_timestamp_us", "exposureTimestampUs"),
+    )
+    if exposure_timestamp is not None:
+        return int(round(exposure_timestamp)), "frame_exposure_timestamp"
     timestamp_us = _numeric_attr_or_key(
         frame,
         ("timestamp_us", "capture_timestamp_us", "ts_us", "timestampUsec", "timestamp_usec"),
