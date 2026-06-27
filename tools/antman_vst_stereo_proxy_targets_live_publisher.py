@@ -137,6 +137,19 @@ class BroadcastHub:
 def _empty_diagnostics(reason: str) -> dict[str, Any]:
     return {
         "reason": reason,
+        "non_publish_reason": reason,
+        "non_published_frames": [],
+        "stage_timing_ms": {
+            "frame_read_ms": 0.0,
+            "pair_select_ms": 0.0,
+            "left_detect_ms": 0.0,
+            "right_detect_ms": 0.0,
+            "pair_build_ms": 0.0,
+            "stabilizer_ms": 0.0,
+            "message_build_ms": 0.0,
+            "publish_ms": None,
+            "total_ms": 0.0,
+        },
         "read_attempts": 0,
         "frames_seen_left": 0,
         "frames_seen_right": 0,
@@ -162,6 +175,37 @@ def _empty_diagnostics(reason: str) -> dict[str, Any]:
             "estimated_right_dropped_frames": 0,
         },
     }
+
+
+def _elapsed_ms(started: float) -> float:
+    return (time.perf_counter() - started) * 1000.0
+
+
+def _stage_timing_snapshot(stage_timing: dict[str, Any]) -> dict[str, Any]:
+    return {str(key): _copy_json_safe(value) for key, value in stage_timing.items()}
+
+
+def _append_non_published_frame(
+    diagnostics: dict[str, Any],
+    *,
+    reason: str,
+    left_frame_id: int | None = None,
+    right_frame_id: int | None = None,
+) -> None:
+    temporal = diagnostics.get("temporal") if isinstance(diagnostics.get("temporal"), dict) else {}
+    stage_timing = diagnostics.get("stage_timing_ms") if isinstance(diagnostics.get("stage_timing_ms"), dict) else {}
+    diagnostics.setdefault("non_published_frames", []).append(
+        {
+            "reason": reason,
+            "left_frame_id": left_frame_id if left_frame_id is not None else temporal.get("left_frame_id"),
+            "right_frame_id": right_frame_id if right_frame_id is not None else temporal.get("right_frame_id"),
+            "left_capture_timestamp_us": temporal.get("left_capture_timestamp_us"),
+            "right_capture_timestamp_us": temporal.get("right_capture_timestamp_us"),
+            "pair_capture_delta_ms": temporal.get("pair_capture_delta_ms"),
+            "pair_receive_delta_ms": temporal.get("pair_receive_delta_ms"),
+            "stage_timing_ms": _stage_timing_snapshot(stage_timing),
+        }
+    )
 
 
 def format_stereo_diagnostics(diagnostics: dict[str, Any]) -> str:
@@ -388,7 +432,14 @@ def _select_next_pair_by_sync(
             sync["dropped_right_frames"] = int(sync.get("dropped_right_frames", 0)) + 1
         sync["temporal_mismatch_count"] = int(sync.get("temporal_mismatch_count", 0)) + 1
         diagnostics["reason"] = "temporal_mismatch"
+        diagnostics["non_publish_reason"] = "temporal_mismatch"
         diagnostics["stereo_rejection_reason"] = "temporal_mismatch"
+        _append_non_published_frame(
+            diagnostics,
+            reason="temporal_mismatch",
+            left_frame_id=left_id,
+            right_frame_id=right_id,
+        )
         return None
 
     common_frame_ids = sorted(set(pending_left).intersection(pending_right))
@@ -574,6 +625,9 @@ def build_depth_trace_event(
     event: dict[str, Any] = {
         "timestamp_ms": int(time.time() * 1000),
         "reason": diagnostics.get("reason", "-"),
+        "non_publish_reason": diagnostics.get("non_publish_reason"),
+        "non_published_frames": diagnostics.get("non_published_frames", []),
+        "stage_timing_ms": diagnostics.get("stage_timing_ms", {}),
         "read_attempts": diagnostics.get("read_attempts", 0),
         "frames_seen_left": diagnostics.get("frames_seen_left", 0),
         "frames_seen_right": diagnostics.get("frames_seen_right", 0),
@@ -702,6 +756,8 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     attempts = max_read_attempts if max_read_attempts is not None else max_empty_reads
     diagnostics = _empty_diagnostics("no_pair")
+    total_started = time.perf_counter()
+    stage_timing = diagnostics["stage_timing_ms"]
     pending_left: dict[int, Any] = {}
     pending_right: dict[int, Any] = {}
     pending_left_received_at_ms: dict[int, float] = {}
@@ -711,8 +767,10 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
     diagnostics["sync"]["max_pair_capture_delta_ms"] = max_pair_capture_delta_ms
     for _ in range(max(1, int(attempts if attempts is not None else 120))):
         diagnostics["read_attempts"] += 1
+        frame_read_started = time.perf_counter()
         _read_one_eye(left_reader, pending_left, seen_left, pending_left_received_at_ms)
         _read_one_eye(right_reader, pending_right, seen_right, pending_right_received_at_ms)
+        stage_timing["frame_read_ms"] = float(stage_timing.get("frame_read_ms", 0.0)) + _elapsed_ms(frame_read_started)
         diagnostics["frames_seen_left"] = len(seen_left)
         diagnostics["frames_seen_right"] = len(seen_right)
         diagnostics["left_pending"] = len(pending_left)
@@ -726,6 +784,7 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
             target_source_hz=target_source_hz,
         )
 
+        pair_select_started = time.perf_counter()
         pair_ids = _select_next_pair_by_sync(
             pending_left=pending_left,
             pending_right=pending_right,
@@ -734,14 +793,19 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
             max_pair_capture_delta_ms=max_pair_capture_delta_ms,
             diagnostics=diagnostics,
         )
+        stage_timing["pair_select_ms"] = float(stage_timing.get("pair_select_ms", 0.0)) + _elapsed_ms(pair_select_started)
         if pair_ids is not None:
             left_frame_id, right_frame_id = pair_ids
             left_frame = pending_left.pop(left_frame_id)
             right_frame = pending_right.pop(right_frame_id)
             left_received_at_ms = pending_left_received_at_ms.pop(left_frame_id, None)
             right_received_at_ms = pending_right_received_at_ms.pop(right_frame_id, None)
+            left_detect_started = time.perf_counter()
             left_tracking_result = left_tracker.process_frame(_frame_for_tracker(left_frame))
+            stage_timing["left_detect_ms"] = float(stage_timing.get("left_detect_ms", 0.0)) + _elapsed_ms(left_detect_started)
+            right_detect_started = time.perf_counter()
             right_tracking_result = right_tracker.process_frame(_frame_for_tracker(right_frame))
+            stage_timing["right_detect_ms"] = float(stage_timing.get("right_detect_ms", 0.0)) + _elapsed_ms(right_detect_started)
             diagnostics["temporal"] = _pair_temporal_diagnostics(
                 left_frame_id=left_frame_id,
                 right_frame_id=right_frame_id,
@@ -752,6 +816,7 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
                 left_tracking_result=left_tracking_result,
                 right_tracking_result=right_tracking_result,
             )
+            pair_build_started = time.perf_counter()
             record = build_stereo_bbox_pair_record(
                 frame_id=left_frame_id,
                 left_frame=left_frame,
@@ -762,12 +827,22 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
                 left_source_stats=diagnostics["left_source_stats"],
                 right_source_stats=diagnostics["right_source_stats"],
                 target_stabilizer=target_stabilizer,
+                timing_ms=stage_timing,
             )
+            stage_timing["pair_build_ms"] = float(stage_timing.get("pair_build_ms", 0.0)) + _elapsed_ms(pair_build_started)
             diagnostics["last_pair_frame_id"] = left_frame_id
             if record is None:
                 diagnostics["reason"] = "no_target"
+                diagnostics["non_publish_reason"] = "no_target"
+                _append_non_published_frame(
+                    diagnostics,
+                    reason="no_target",
+                    left_frame_id=left_frame_id,
+                    right_frame_id=right_frame_id,
+                )
                 continue
             diagnostics.update(record.get("selection", {}))
+            message_build_started = time.perf_counter()
             message = build_proxy_targets_message_from_stereo_bbox_record(
                 record,
                 sequence=sequence,
@@ -777,14 +852,26 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
                 min_confidence=min_confidence,
                 max_vertical_error_px=max_vertical_error_px,
             )
+            stage_timing["message_build_ms"] = float(stage_timing.get("message_build_ms", 0.0)) + _elapsed_ms(message_build_started)
             if message is None:
                 diagnostics["reason"] = "stereo_rejected"
                 diagnostics["stereo_rejection_reason"] = "gated"
+                diagnostics["non_publish_reason"] = "gated"
+                _append_non_published_frame(
+                    diagnostics,
+                    reason="gated",
+                    left_frame_id=left_frame_id,
+                    right_frame_id=right_frame_id,
+                )
                 continue
             diagnostics["reason"] = "target_ready"
+            diagnostics["non_publish_reason"] = None
+            stage_timing["total_ms"] = _elapsed_ms(total_started)
             return message, diagnostics
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
+    diagnostics["non_publish_reason"] = diagnostics.get("reason") or "no_pair"
+    stage_timing["total_ms"] = _elapsed_ms(total_started)
     return None, diagnostics
 
 
@@ -845,7 +932,12 @@ def _broadcast_loop(
             continue
 
         empty_windows = 0
+        publish_started = time.perf_counter()
         delivered = hub.broadcast(message)
+        diagnostics.setdefault("stage_timing_ms", {})["publish_ms"] = _elapsed_ms(publish_started)
+        diagnostics["stage_timing_ms"]["total_ms"] = float(diagnostics["stage_timing_ms"].get("total_ms") or 0.0) + float(
+            diagnostics["stage_timing_ms"].get("publish_ms") or 0.0
+        )
         diagnostics["clients"] = hub.status_summary()
         write_depth_trace_event(
             depth_trace,

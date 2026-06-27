@@ -46,11 +46,12 @@ def accepted_row(
     switch_reason: str = "active_continuity",
     held_last_pose: bool = False,
     clients: dict | None = None,
+    stage_timing_ms: dict | None = None,
 ) -> dict:
     frame_id = sequence if left_frame_id is None else left_frame_id
     right_id = frame_id if right_frame_id is None else right_frame_id
     timestamp = 1_000_000 + sequence * 22_222 if capture_us is None else capture_us
-    return {
+    row = {
         "event": "accepted",
         "sequence": sequence,
         "target_id": "vst_stereo-active-1",
@@ -91,6 +92,18 @@ def accepted_row(
             "last_disconnect": {"client_id": "client-1", "label": "godot", "reason": "client_closed"},
         },
     }
+    row["stage_timing_ms"] = stage_timing_ms or {
+        "frame_read_ms": 1.0,
+        "left_detect_ms": 5.0,
+        "right_detect_ms": 6.0,
+        "pair_select_ms": 0.2,
+        "pair_build_ms": 0.5,
+        "stabilizer_ms": 0.1,
+        "message_build_ms": 0.4,
+        "publish_ms": 0.3,
+        "total_ms": 13.5,
+    }
+    return row
 
 
 class LiveRunDiagnosticsTests(unittest.TestCase):
@@ -116,6 +129,26 @@ class LiveRunDiagnosticsTests(unittest.TestCase):
                 "event": "rejected",
                 "sequence": 5,
                 "reason": "no_target",
+                "non_publish_reason": "no_target",
+                "non_published_frames": [
+                    {
+                        "reason": "no_target",
+                        "left_frame_id": 5,
+                        "right_frame_id": 5,
+                        "pair_capture_delta_ms": 0.2,
+                    }
+                ],
+                "stage_timing_ms": {
+                    "frame_read_ms": 1.2,
+                    "left_detect_ms": 4.0,
+                    "right_detect_ms": 4.5,
+                    "pair_select_ms": 0.2,
+                    "pair_build_ms": 0.3,
+                    "stabilizer_ms": 0.1,
+                    "message_build_ms": 0.0,
+                    "publish_ms": None,
+                    "total_ms": 10.3,
+                },
                 "temporal": {
                     "left_frame_id": 5,
                     "right_frame_id": 5,
@@ -129,6 +162,16 @@ class LiveRunDiagnosticsTests(unittest.TestCase):
                 "event": "rejected",
                 "sequence": 6,
                 "reason": "temporal_mismatch",
+                "non_publish_reason": "temporal_mismatch",
+                "non_published_frames": [
+                    {
+                        "reason": "temporal_mismatch",
+                        "left_frame_id": 6,
+                        "right_frame_id": 8,
+                        "pair_capture_delta_ms": 12.0,
+                    }
+                ],
+                "stage_timing_ms": {"frame_read_ms": 1.1, "pair_select_ms": 0.2, "total_ms": 1.3},
                 "sync": {"pairing_strategy": "capture_timestamp", "temporal_mismatch_count": 1},
                 "temporal": {"left_frame_id": 6, "right_frame_id": 8, "pair_capture_delta_ms": 12.0},
             },
@@ -194,6 +237,12 @@ class LiveRunDiagnosticsTests(unittest.TestCase):
         self.assertTrue(output_path.exists())
         self.assertEqual(report["trace"]["accepted_count"], 5)
         self.assertEqual(report["trace"]["rejected_count"], 2)
+        self.assertEqual(report["trace"]["non_publish_reasons"], {"no_target": 1, "temporal_mismatch": 1})
+        self.assertEqual(report["trace"]["non_published_frame_reasons"], {"no_target": 1, "temporal_mismatch": 1})
+        self.assertEqual(report["trace"]["stage_timing_ms"]["left_detect_ms"]["count"], 6)
+        self.assertEqual(report["trace"]["stage_timing_ms"]["right_detect_ms"]["count"], 6)
+        self.assertEqual(report["trace"]["stage_timing_ms"]["total_ms"]["count"], 7)
+        self.assertAlmostEqual(report["trace"]["stage_timing_ms"]["publish_ms"]["p50"], 0.3)
         self.assertIn("TIMESTAMP_SYNC_OK", report["verdicts"])
         self.assertIn("PUBLISH_RATE_LOW", report["verdicts"])
         self.assertIn("LOW_CONFIDENCE_DEPTH_ONLY", report["verdicts"])
@@ -213,8 +262,14 @@ class LiveRunDiagnosticsTests(unittest.TestCase):
         self.assertEqual(context_item["left_frame_id"], 2)
         self.assertEqual(context_item["left_capture_timestamp_us"], 1_200_000)
         self.assertEqual(context_item["raw_left_track_id"], 3)
+        self.assertEqual(context_item["non_publish_reason"], None)
+        self.assertEqual(context_item["stage_timing_ms"]["left_detect_ms"], 5.0)
         self.assertEqual(context_item["godot_sequence"], 617)
         self.assertIn("held_missing", [item["reason"] for item in report["segments"]["held_missing"]])
+        no_target_context = next(
+            item for item in report["segments"]["no_target"][0]["context"] if item["sequence"] == 5
+        )
+        self.assertEqual(no_target_context["non_published_frames"][0]["reason"], "no_target")
         self.assertEqual(report["segments"]["temporal_mismatch"][0]["temporal_mismatch_count"], 1)
         self.assertEqual(report["sender_clients"]["last_disconnect"]["label"], "godot")
 

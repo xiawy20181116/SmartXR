@@ -391,6 +391,7 @@ def build_stereo_bbox_pair_record(
     left_source_stats: dict[str, Any] | None = None,
     right_source_stats: dict[str, Any] | None = None,
     target_stabilizer: StereoActiveTargetStabilizer | None = None,
+    timing_ms: dict[str, float] | None = None,
 ) -> dict[str, Any] | None:
     left = _eye_record(
         frame=left_frame,
@@ -436,6 +437,7 @@ def build_stereo_bbox_pair_record(
             },
         }
     else:
+        stabilizer_started = time.perf_counter()
         selected = target_stabilizer.select(
             frame_id=frame_id,
             image_width=int(left["image_width"]),
@@ -443,6 +445,10 @@ def build_stereo_bbox_pair_record(
             left_people=left["people"],
             right_people=right["people"],
         )
+        if timing_ms is not None:
+            timing_ms["stabilizer_ms"] = timing_ms.get("stabilizer_ms", 0.0) + (
+                time.perf_counter() - stabilizer_started
+            ) * 1000.0
         if selected is None:
             return None
     return {

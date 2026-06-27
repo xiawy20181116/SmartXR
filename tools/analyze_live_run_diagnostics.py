@@ -105,6 +105,26 @@ def _series_summary(values: list[float]) -> dict[str, Any]:
     }
 
 
+def _stage_timing_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    keys: set[str] = set()
+    for event in events:
+        timing = event.get("stage_timing_ms")
+        if isinstance(timing, dict):
+            keys.update(str(key) for key in timing)
+    summary: dict[str, Any] = {}
+    for key in sorted(keys):
+        values: list[float] = []
+        for event in events:
+            timing = event.get("stage_timing_ms")
+            if not isinstance(timing, dict):
+                continue
+            value = _float_or_none(timing.get(key))
+            if value is not None:
+                values.append(value)
+        summary[key] = _series_summary(values)
+    return summary
+
+
 def _interval_summary(values: list[float]) -> dict[str, Any]:
     intervals = [current - previous for previous, current in zip(values, values[1:]) if current >= previous]
     hz = None
@@ -161,6 +181,9 @@ def _normalize_event(row: dict[str, Any], index: int) -> dict[str, Any]:
         "event": row.get("event", "accepted"),
         "sequence": row.get("sequence"),
         "reason": row.get("reason") or row.get("switch_reason"),
+        "non_publish_reason": row.get("non_publish_reason"),
+        "non_published_frames": row.get("non_published_frames") if isinstance(row.get("non_published_frames"), list) else [],
+        "stage_timing_ms": row.get("stage_timing_ms") if isinstance(row.get("stage_timing_ms"), dict) else {},
         "target_id": row.get("target_id"),
         "active_target_id": row.get("active_target_id"),
         "left_frame_id": left_frame_id,
@@ -205,6 +228,9 @@ def _context_item(event: dict[str, Any], pcmr_status: dict[str, Any]) -> dict[st
         "event": event.get("event"),
         "sequence": event.get("sequence"),
         "reason": event.get("reason"),
+        "non_publish_reason": event.get("non_publish_reason"),
+        "non_published_frames": event.get("non_published_frames", []),
+        "stage_timing_ms": event.get("stage_timing_ms"),
         "target_id": event.get("target_id"),
         "active_target_id": event.get("active_target_id"),
         "left_frame_id": event.get("left_frame_id"),
@@ -274,6 +300,11 @@ def _trace_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     raw_pairs = [event.get("raw_track_pair") for event in accepted if event.get("raw_track_pair") is not None]
     target_ids = [event.get("target_id") for event in accepted if event.get("target_id") is not None]
     held = sum(1 for event in accepted if event.get("held_last_pose"))
+    non_published_frame_reasons = []
+    for event in events:
+        for frame in event.get("non_published_frames", []):
+            if isinstance(frame, dict) and frame.get("reason") is not None:
+                non_published_frame_reasons.append(frame.get("reason"))
     return {
         "accepted_count": len(accepted),
         "rejected_count": len(rejected),
@@ -286,6 +317,13 @@ def _trace_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         "raw_track_switch_count": _adjacent_switch_count(raw_pairs),
         "target_switch_count": _adjacent_switch_count(target_ids),
         "rejected_reasons": _counter_dict(event.get("reason") for event in rejected if event.get("reason") is not None),
+        "non_publish_reasons": _counter_dict(
+            event.get("non_publish_reason") or event.get("reason")
+            for event in rejected
+            if (event.get("non_publish_reason") or event.get("reason")) is not None
+        ),
+        "non_published_frame_reasons": _counter_dict(non_published_frame_reasons),
+        "stage_timing_ms": _stage_timing_summary(events),
     }
 
 
