@@ -350,6 +350,49 @@ class LiveStereoRecorderTests(unittest.TestCase):
         finally:
             shutil.rmtree(out_dir, ignore_errors=True)
 
+    def test_vst_ai_shm_consumer_reader_uses_exposure_us_header(self):
+        tool = load_module(ANTMAN_TOOL, "record_antman_vst_stereo_package")
+
+        class FakeConsumer:
+            def __init__(self, frame_id: int, exposure_us: int):
+                self.frame_id = frame_id
+                self.exposure_us = exposure_us
+                self.frames_returned = 0
+
+            def wait_for_frame(self, timeout_ms):
+                return self.frames_returned == 0
+
+            def read_latest_frame(self):
+                self.frames_returned += 1
+                return (
+                    {
+                        "frame_id": self.frame_id,
+                        "width": 4,
+                        "height": 2,
+                        "stride": 4,
+                        "exposure_us": self.exposure_us,
+                    },
+                    FakeNv12Array(),
+                )
+
+            def acknowledge(self, frame_id):
+                pass
+
+            def close(self):
+                pass
+
+        reader = tool.VstAiShmConsumerReader(
+            consumer=FakeConsumer(frame_id=25, exposure_us=345_678),
+            wait_timeout_ms=1,
+        )
+
+        ok, frame_id, frame = reader.read_latest()
+
+        self.assertTrue(ok)
+        self.assertEqual(frame_id, 25)
+        self.assertEqual(frame["timestamp_us"], 345_678)
+        self.assertEqual(frame["exposure_us"], 345_678)
+
     def test_vst_ai_shm_consumer_reader_includes_header_timestamp_debug(self):
         tool = load_module(ANTMAN_TOOL, "record_antman_vst_stereo_package")
 
@@ -396,6 +439,52 @@ class LiveStereoRecorderTests(unittest.TestCase):
                 "pts": 12345,
             },
         )
+
+    def test_vst_ai_shm_consumer_reader_stats_keep_recent_header_timestamp_debug(self):
+        tool = load_module(ANTMAN_TOOL, "record_antman_vst_stereo_package")
+
+        class FakeConsumer:
+            def __init__(self):
+                self.next_frame_id = 40
+
+            def wait_for_frame(self, timeout_ms):
+                return True
+
+            def read_latest_frame(self):
+                frame_id = self.next_frame_id
+                self.next_frame_id += 1
+                return (
+                    {
+                        "frame_id": frame_id,
+                        "width": 4,
+                        "height": 2,
+                        "stride": 4,
+                        "exposure_us": 900_000 + frame_id,
+                    },
+                    FakeNv12Array(),
+                )
+
+            def acknowledge(self, frame_id):
+                pass
+
+            def close(self):
+                pass
+
+        reader = tool.VstAiShmConsumerReader(
+            consumer=FakeConsumer(),
+            wait_timeout_ms=1,
+            header_debug_frames=2,
+        )
+
+        reader.read_latest()
+        reader.read_latest()
+        reader.read_latest()
+        stats = reader.get_stats()
+
+        self.assertEqual(len(stats["recent_header_timestamp_debug"]), 2)
+        self.assertEqual(stats["recent_header_timestamp_debug"][0]["frame_id"], 41)
+        self.assertEqual(stats["recent_header_timestamp_debug"][1]["frame_id"], 42)
+        self.assertEqual(stats["last_header_timestamp_debug"]["values"]["exposure_us"], 900_042)
 
 
 if __name__ == "__main__":

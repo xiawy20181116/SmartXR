@@ -29,7 +29,7 @@ TIMESTAMP_DEBUG_KEY_TOKENS = ("time", "timestamp", "exposure", "frame", "pts")
 
 
 def _header_timestamp_us(header: dict[str, Any]) -> int | None:
-    for key in ("exposure_timestamp", "timestamp_us", "capture_timestamp_us", "ts_us"):
+    for key in ("exposure_timestamp", "exposure_us", "timestamp_us", "capture_timestamp_us", "ts_us"):
         value = header.get(key)
         if value is not None:
             return int(value)
@@ -63,6 +63,7 @@ class VstAiShmConsumerReader:
         self.header_debug_frames = max(0, int(header_debug_frames))
         self.frames_returned = 0
         self.empty_waits = 0
+        self.recent_header_timestamp_debug: list[dict[str, Any]] = []
 
     def read_latest(self):
         if not self.consumer.wait_for_frame(timeout_ms=self.wait_timeout_ms):
@@ -84,11 +85,23 @@ class VstAiShmConsumerReader:
         }
         if "exposure_timestamp" in header and header["exposure_timestamp"] is not None:
             frame["exposure_timestamp"] = int(header["exposure_timestamp"])
+        if "exposure_us" in header and header["exposure_us"] is not None:
+            frame["exposure_us"] = int(header["exposure_us"])
         timestamp_us = _header_timestamp_us(header)
         if timestamp_us is not None:
             frame["timestamp_us"] = timestamp_us
+        timestamp_debug = _header_timestamp_debug(header)
+        debug_record = {
+            "frame_id": frame_id,
+            "available_timestamp_keys": list(timestamp_debug.keys()),
+            "values": timestamp_debug,
+        }
+        self.recent_header_timestamp_debug.append(debug_record)
+        if self.header_debug_frames > 0:
+            self.recent_header_timestamp_debug = self.recent_header_timestamp_debug[-self.header_debug_frames :]
+        else:
+            self.recent_header_timestamp_debug = []
         if self.frames_returned <= self.header_debug_frames:
-            timestamp_debug = _header_timestamp_debug(header)
             frame["available_timestamp_keys"] = list(timestamp_debug.keys())
             frame["header_timestamp_debug"] = timestamp_debug
             print(
@@ -113,6 +126,10 @@ class VstAiShmConsumerReader:
             "empty_waits": self.empty_waits,
             "shm_name": getattr(self.consumer, "shm_name", ""),
             "event_name": getattr(self.consumer, "event_name", ""),
+            "recent_header_timestamp_debug": list(self.recent_header_timestamp_debug),
+            "last_header_timestamp_debug": dict(self.recent_header_timestamp_debug[-1])
+            if self.recent_header_timestamp_debug
+            else None,
         }
 
     def release(self) -> None:

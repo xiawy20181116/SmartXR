@@ -462,6 +462,48 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(temporal["right_capture_timestamp_source"], "frame_exposure_timestamp")
         self.assertEqual(temporal["pair_capture_delta_ms"], 4.0)
 
+    def test_live_stereo_uses_exposure_us_for_capture_pairing(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        class FakeReader:
+            def __init__(self, frames):
+                self.frames = list(frames)
+
+            def read_latest(self):
+                if not self.frames:
+                    return True, -1, None
+                return self.frames.pop(0)
+
+            def get_stats(self):
+                return {}
+
+        class FakeTracker:
+            def __init__(self, bbox):
+                self.bbox = bbox
+
+            def process_frame(self, frame):
+                return FakeTrackingResult([FakePerson(bbox=self.bbox)])
+
+        message, diagnostics = publisher.next_live_stereo_proxy_targets_message_with_diagnostics(
+            left_reader=FakeReader([(True, 52, {"exposure_us": 4_000_000})]),
+            right_reader=FakeReader([(True, 53, {"exposure_us": 4_000_286})]),
+            left_tracker=FakeTracker((640, 240, 720, 520)),
+            right_tracker=FakeTracker((608, 240, 688, 520)),
+            sequence=0,
+            max_read_attempts=1,
+            sleep_seconds=0,
+            max_pair_capture_delta_ms=10.0,
+        )
+
+        self.assertIsNotNone(message)
+        temporal = diagnostics["temporal"]
+        self.assertEqual(diagnostics["sync"]["pairing_strategy"], "capture_timestamp")
+        self.assertEqual(temporal["left_capture_timestamp_us"], 4_000_000)
+        self.assertEqual(temporal["right_capture_timestamp_us"], 4_000_286)
+        self.assertEqual(temporal["left_capture_timestamp_source"], "frame_exposure_us")
+        self.assertEqual(temporal["right_capture_timestamp_source"], "frame_exposure_us")
+        self.assertEqual(temporal["pair_capture_delta_ms"], 0.286)
+
     def test_live_stereo_pairs_closest_capture_timestamps_before_tracking(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
 
