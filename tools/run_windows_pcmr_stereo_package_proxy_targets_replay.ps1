@@ -164,6 +164,7 @@ $MonitorRunnerLiteral = ConvertTo-PowerShellLiteral $MonitorRunner
 $HealthValidatorLiteral = ConvertTo-PowerShellLiteral $HealthValidator
 $RunDiagnosticsAnalyzerLiteral = ConvertTo-PowerShellLiteral $RunDiagnosticsAnalyzer
 $PackageDirLiteral = ConvertTo-PowerShellLiteral $ResolvedPackageDir
+$ReplayTimingLiteral = ConvertTo-PowerShellLiteral $ReplayTiming
 $AntmanRootLiteral = ConvertTo-PowerShellLiteral $AntmanRoot
 $GodotExeLiteral = ConvertTo-PowerShellLiteral $GodotExe
 $WsUrlLiteral = ConvertTo-PowerShellLiteral $WsUrl
@@ -192,7 +193,7 @@ Write-Host "[sender] A healthy replay should print published stereo seq=..."
 `$PublisherArgs = @(
   $PublisherLiteral,
   "--package-dir", $PackageDirLiteral,
-  "--replay-timing", $ReplayTiming,
+  "--replay-timing", $ReplayTimingLiteral,
   "--source-hz", "$SourceHz",
   "--antman-root", $AntmanRootLiteral,
   "--host", "$HostName",
