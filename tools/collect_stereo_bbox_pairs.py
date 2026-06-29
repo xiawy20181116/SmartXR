@@ -99,12 +99,16 @@ class StereoActiveTargetStabilizer:
         switch_score_margin: float = 0.12,
         hold_frames: int = 6,
         continuity_iou_threshold: float = 0.30,
+        mono_missing_grace_frames: int = 12,
+        reacquire_confirm_frames: int = 6,
     ) -> None:
         self.active_target_id = active_target_id
         self.switch_confirm_frames = max(1, int(switch_confirm_frames))
         self.switch_score_margin = float(switch_score_margin)
         self.hold_frames = max(0, int(hold_frames))
         self.continuity_iou_threshold = float(continuity_iou_threshold)
+        self.mono_missing_grace_frames = max(0, int(mono_missing_grace_frames))
+        self.reacquire_confirm_frames = max(1, int(reacquire_confirm_frames))
         self._active: dict[str, Any] | None = None
         self._pending_key: tuple[int, int] | None = None
         self._pending_count = 0
@@ -119,6 +123,17 @@ class StereoActiveTargetStabilizer:
         left_people: list[dict[str, Any]],
         right_people: list[dict[str, Any]],
     ) -> dict[str, Any] | None:
+        if self._active is not None:
+            mono = self._mono_active_hold(
+                frame_id=frame_id,
+                image_width=image_width,
+                image_height=image_height,
+                left_people=left_people,
+                right_people=right_people,
+            )
+            if mono is not None:
+                return mono
+
         candidates = self._build_candidates(frame_id, image_width, image_height, left_people, right_people)
         if not candidates:
             return self._hold_missing(frame_id, candidate_count=0)
@@ -134,6 +149,9 @@ class StereoActiveTargetStabilizer:
                 return held
             return self._activate(best, switch_reason="active_missing_switch", candidate_count=len(candidates))
 
+        if self._is_reacquire_pending():
+            return self._reacquire_or_hold(active_candidate, candidate_count=len(candidates))
+
         active_score = float(active_candidate["base_score"])
         best_score = float(best["base_score"])
         if best["key"] != active_candidate["key"] and best_score > active_score + self.switch_score_margin:
@@ -148,6 +166,11 @@ class StereoActiveTargetStabilizer:
 
         self._pending_key = None if best["key"] == active_candidate["key"] else self._pending_key
         return self._activate(active_candidate, switch_reason="active_continuity", candidate_count=len(candidates))
+
+    def _is_reacquire_pending(self) -> bool:
+        if self._active is None:
+            return False
+        return int(self._active.get("missing_frames", 0)) > 0 or int(self._active.get("mono_missing_frames", 0)) > 0
 
     def _build_candidates(
         self,
@@ -247,6 +270,127 @@ class StereoActiveTargetStabilizer:
             return None
         return max(plausible, key=lambda item: item[0])[1]
 
+    def _active_eye_match(self, people: list[dict[str, Any]], eye: str) -> dict[str, Any] | None:
+        if self._active is None:
+            return None
+        key_index = 0 if eye == "left" else 1
+        bbox_key = "left_bbox" if eye == "left" else "right_bbox"
+        active_track_id = int(self._active["key"][key_index])
+        active_bbox = self._active[bbox_key]
+        for person in people:
+            if _track_id(person) == active_track_id:
+                return person
+        plausible: list[tuple[float, dict[str, Any]]] = []
+        for person in people:
+            iou = _bbox_iou(_bbox_xyxy(person), active_bbox)
+            if iou >= self.continuity_iou_threshold:
+                plausible.append((iou, person))
+        if not plausible:
+            return None
+        return max(plausible, key=lambda item: item[0])[1]
+
+    def _mono_active_hold(
+        self,
+        *,
+        frame_id: int,
+        image_width: int,
+        image_height: int,
+        left_people: list[dict[str, Any]],
+        right_people: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        if self._active is None or (left_people and right_people) or (not left_people and not right_people):
+            return None
+        left_match = self._active_eye_match(left_people, "left") if left_people else None
+        right_match = self._active_eye_match(right_people, "right") if right_people else None
+        if left_match is None and right_match is None:
+            return None
+        mono_missing_frames = int(self._active.get("mono_missing_frames", 0)) + 1
+        if mono_missing_frames > self.mono_missing_grace_frames:
+            return None
+        self._active["mono_missing_frames"] = mono_missing_frames
+        self._active["missing_frames"] = 0
+        self._active["both_missing_frames"] = 0
+        self._active["reacquire_key"] = None
+        self._active["reacquire_candidate_age"] = 0
+
+        left_bbox = _bbox_xyxy(left_match) if left_match is not None else list(self._active["left_bbox"])
+        right_bbox = _bbox_xyxy(right_match) if right_match is not None else list(self._active["right_bbox"])
+        if left_match is not None:
+            self._active["left_bbox"] = left_bbox
+        if right_match is not None:
+            self._active["right_bbox"] = right_bbox
+        self._active["image_width"] = int(image_width)
+        self._active["image_height"] = int(image_height)
+
+        held_candidate = self._candidate_from_active(
+            frame_id=frame_id,
+            left_person=left_match,
+            right_person=right_match,
+        )
+        active_state = "TRACKING_MONO_LEFT" if left_match is not None else "TRACKING_MONO_RIGHT"
+        held_reason = "right_eye_missing" if left_match is not None else "left_eye_missing"
+        return {
+            "person_id": self.active_target_id,
+            "left_person": held_candidate["left_person"],
+            "right_person": held_candidate["right_person"],
+            "left_bbox_xyxy": held_candidate["left_bbox"],
+            "right_bbox_xyxy": held_candidate["right_bbox"],
+            "confidence": held_candidate["confidence"],
+            "selection": self._selection_metadata(
+                held_candidate,
+                switch_reason="mono_missing_hold",
+                active_age_frames=int(self._active.get("active_age_frames", 1)),
+                candidate_count=len(left_people) * len(right_people),
+                held_last_pose=True,
+                active_state=active_state,
+                mono_missing_frames=mono_missing_frames,
+                both_missing_frames=0,
+                held_reason=held_reason,
+                depth_update_allowed=False,
+                reacquire_candidate_age=0,
+                switch_block_reason="mono_missing_protect_active",
+            ),
+        }
+
+    def _reacquire_or_hold(self, candidate: dict[str, Any], *, candidate_count: int) -> dict[str, Any]:
+        if self._active is None:
+            return self._activate(candidate, switch_reason="initial", candidate_count=candidate_count)
+        if self._active.get("reacquire_key") == candidate["key"]:
+            reacquire_candidate_age = int(self._active.get("reacquire_candidate_age", 0)) + 1
+        else:
+            self._active["reacquire_key"] = candidate["key"]
+            reacquire_candidate_age = 1
+        self._active["reacquire_candidate_age"] = reacquire_candidate_age
+        if reacquire_candidate_age >= self.reacquire_confirm_frames:
+            self._active["missing_frames"] = 0
+            self._active["mono_missing_frames"] = 0
+            self._active["both_missing_frames"] = 0
+            return self._activate(candidate, switch_reason="reacquire_confirmed", candidate_count=candidate_count)
+
+        held_candidate = self._candidate_from_active(frame_id=int(candidate["frame_id"]))
+        return {
+            "person_id": self.active_target_id,
+            "left_person": held_candidate["left_person"],
+            "right_person": held_candidate["right_person"],
+            "left_bbox_xyxy": held_candidate["left_bbox"],
+            "right_bbox_xyxy": held_candidate["right_bbox"],
+            "confidence": held_candidate["confidence"],
+            "selection": self._selection_metadata(
+                held_candidate,
+                switch_reason="reacquire_pending",
+                active_age_frames=int(self._active.get("active_age_frames", 1)),
+                candidate_count=candidate_count,
+                held_last_pose=True,
+                active_state="REACQUIRE_PENDING",
+                mono_missing_frames=int(self._active.get("mono_missing_frames", 0)),
+                both_missing_frames=int(self._active.get("both_missing_frames", 0)),
+                held_reason="reacquire_warmup",
+                depth_update_allowed=False,
+                reacquire_candidate_age=reacquire_candidate_age,
+                switch_block_reason="reacquire_pending",
+            ),
+        }
+
     def _activate(self, candidate: dict[str, Any], *, switch_reason: str, candidate_count: int) -> dict[str, Any]:
         active_age_frames = 1
         if self._active is not None and candidate["key"] == self._active["key"]:
@@ -263,6 +407,10 @@ class StereoActiveTargetStabilizer:
             "confidence": candidate["confidence"],
             "active_age_frames": active_age_frames,
             "missing_frames": 0,
+            "mono_missing_frames": 0,
+            "both_missing_frames": 0,
+            "reacquire_key": None,
+            "reacquire_candidate_age": 0,
             "image_width": candidate.get("image_width", 880),
             "image_height": candidate.get("image_height", 660),
         }
@@ -279,6 +427,13 @@ class StereoActiveTargetStabilizer:
                 active_age_frames=active_age_frames,
                 candidate_count=candidate_count,
                 held_last_pose=False,
+                active_state="TRACKING_STEREO",
+                mono_missing_frames=0,
+                both_missing_frames=0,
+                held_reason=None,
+                depth_update_allowed=True,
+                reacquire_candidate_age=0,
+                switch_block_reason=None,
             ),
         }
 
@@ -289,27 +444,8 @@ class StereoActiveTargetStabilizer:
         if missing_frames > self.hold_frames:
             return None
         self._active["missing_frames"] = missing_frames
-        held_candidate = {
-            "frame_id": int(frame_id),
-            "key": self._active["key"],
-            "left_person": {"track_id": self._active["key"][0], "bbox": self._active["left_bbox"]},
-            "right_person": {"track_id": self._active["key"][1], "bbox": self._active["right_bbox"]},
-            "left_bbox": list(self._active["left_bbox"]),
-            "right_bbox": list(self._active["right_bbox"]),
-            "confidence": float(self._active.get("confidence", 0.0)),
-            "base_score": float(self._active.get("confidence", 0.0)),
-            "left_center_px": _bbox_center(self._active["left_bbox"]),
-            "right_center_px": _bbox_center(self._active["right_bbox"]),
-            "left_size_px": _bbox_size(self._active["left_bbox"]),
-            "right_size_px": _bbox_size(self._active["right_bbox"]),
-            "disparity_px": _top_center(self._active["left_bbox"])[0] - _top_center(self._active["right_bbox"])[0],
-            "vertical_error_px": _top_center(self._active["left_bbox"])[1] - _top_center(self._active["right_bbox"])[1],
-            "estimated_depth_m": _estimated_depth_m(
-                self._active.get("image_width", 880),
-                self._active.get("image_height", 660),
-                _top_center(self._active["left_bbox"])[0] - _top_center(self._active["right_bbox"])[0],
-            ),
-        }
+        self._active["both_missing_frames"] = int(self._active.get("both_missing_frames", 0)) + 1
+        held_candidate = self._candidate_from_active(frame_id=frame_id)
         return {
             "person_id": self.active_target_id,
             "left_person": held_candidate["left_person"],
@@ -323,6 +459,60 @@ class StereoActiveTargetStabilizer:
                 active_age_frames=int(self._active.get("active_age_frames", 1)),
                 candidate_count=candidate_count,
                 held_last_pose=True,
+                active_state="TEMP_LOST_BOTH",
+                mono_missing_frames=int(self._active.get("mono_missing_frames", 0)),
+                both_missing_frames=int(self._active.get("both_missing_frames", 0)),
+                held_reason="both_eye_temp_lost",
+                depth_update_allowed=False,
+                reacquire_candidate_age=int(self._active.get("reacquire_candidate_age", 0)),
+                switch_block_reason="both_missing_protect_active",
+            ),
+        }
+
+    def _candidate_from_active(
+        self,
+        *,
+        frame_id: int,
+        left_person: dict[str, Any] | None = None,
+        right_person: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        assert self._active is not None
+        left_bbox = _bbox_xyxy(left_person) if left_person is not None else list(self._active["left_bbox"])
+        right_bbox = _bbox_xyxy(right_person) if right_person is not None else list(self._active["right_bbox"])
+        left_anchor = _top_center(left_bbox)
+        right_anchor = _top_center(right_bbox)
+        disparity_px = left_anchor[0] - right_anchor[0]
+        vertical_error_px = left_anchor[1] - right_anchor[1]
+        active_confidence = float(self._active.get("confidence", 0.0))
+        left_confidence = (
+            float(left_person.get("confidence", active_confidence)) if left_person else active_confidence
+        )
+        right_confidence = (
+            float(right_person.get("confidence", active_confidence)) if right_person else active_confidence
+        )
+        confidence = min(
+            left_confidence,
+            right_confidence,
+        )
+        return {
+            "frame_id": int(frame_id),
+            "key": self._active["key"],
+            "left_person": left_person or {"track_id": self._active["key"][0], "bbox": left_bbox},
+            "right_person": right_person or {"track_id": self._active["key"][1], "bbox": right_bbox},
+            "left_bbox": left_bbox,
+            "right_bbox": right_bbox,
+            "confidence": confidence,
+            "base_score": confidence,
+            "left_center_px": _bbox_center(left_bbox),
+            "right_center_px": _bbox_center(right_bbox),
+            "left_size_px": _bbox_size(left_bbox),
+            "right_size_px": _bbox_size(right_bbox),
+            "disparity_px": disparity_px,
+            "vertical_error_px": vertical_error_px,
+            "estimated_depth_m": _estimated_depth_m(
+                self._active.get("image_width", 880),
+                self._active.get("image_height", 660),
+                disparity_px,
             ),
         }
 
@@ -334,10 +524,18 @@ class StereoActiveTargetStabilizer:
         active_age_frames: int,
         candidate_count: int,
         held_last_pose: bool,
+        active_state: str = "TRACKING_STEREO",
+        mono_missing_frames: int = 0,
+        both_missing_frames: int = 0,
+        held_reason: str | None = None,
+        depth_update_allowed: bool = True,
+        reacquire_candidate_age: int = 0,
+        switch_block_reason: str | None = None,
     ) -> dict[str, Any]:
         raw_left_track_id, raw_right_track_id = candidate["key"]
         return {
             "active_target_id": self.active_target_id,
+            "active_state": active_state,
             "raw_left_track_id": int(raw_left_track_id),
             "raw_right_track_id": int(raw_right_track_id),
             "raw_person_id": f"person-{int(raw_left_track_id)}-{int(raw_right_track_id)}",
@@ -345,7 +543,13 @@ class StereoActiveTargetStabilizer:
             "selected_score": float(candidate["base_score"]),
             "switch_count": int(self._switch_count),
             "switch_reason": switch_reason,
+            "switch_block_reason": switch_block_reason,
             "active_age_frames": int(active_age_frames),
+            "mono_missing_frames": int(mono_missing_frames),
+            "both_missing_frames": int(both_missing_frames),
+            "held_reason": held_reason,
+            "depth_update_allowed": bool(depth_update_allowed),
+            "reacquire_candidate_age": int(reacquire_candidate_age),
             "held_last_pose": bool(held_last_pose),
             "disparity_px": float(candidate["disparity_px"]),
             "vertical_error_px": float(candidate["vertical_error_px"]),

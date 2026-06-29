@@ -865,6 +865,54 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(event["switch_reason"], "active_continuity")
         self.assertFalse(event["held_last_pose"])
 
+    def test_depth_trace_event_records_active_state_diagnostics(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        stereo_record = {
+            "source": "vst_stereo_bbox",
+            "frame_id": 70,
+            "pair_id": "pair-000070",
+            "person_id": "active-1",
+            "timestamp_ms": 1780911169157,
+            "left_bbox_xyxy": [650, 240, 730, 520],
+            "right_bbox_xyxy": [608, 240, 688, 520],
+            "confidence": 0.70,
+            "selection": {
+                "active_target_id": "active-1",
+                "active_state": "TRACKING_MONO_LEFT",
+                "raw_left_track_id": 1,
+                "raw_right_track_id": 2,
+                "switch_reason": "mono_missing_hold",
+                "switch_block_reason": "mono_missing_protect_active",
+                "held_reason": "right_eye_missing",
+                "mono_missing_frames": 1,
+                "both_missing_frames": 0,
+                "reacquire_candidate_age": 0,
+                "depth_update_allowed": False,
+                "held_last_pose": True,
+            },
+        }
+        message = publisher.build_proxy_targets_message_from_stereo_bbox_record(
+            stereo_record,
+            sequence=7,
+            card_id="StereoCard",
+            recorded_width=880,
+            recorded_height=660,
+        )
+
+        event = publisher.build_depth_trace_event(
+            message=message,
+            diagnostics={"reason": "target_ready", "last_pair_frame_id": 70},
+        )
+
+        self.assertEqual(event["active_state"], "TRACKING_MONO_LEFT")
+        self.assertEqual(event["held_reason"], "right_eye_missing")
+        self.assertEqual(event["mono_missing_frames"], 1)
+        self.assertEqual(event["both_missing_frames"], 0)
+        self.assertEqual(event["reacquire_candidate_age"], 0)
+        self.assertFalse(event["depth_update_allowed"])
+        self.assertEqual(event["switch_block_reason"], "mono_missing_protect_active")
+
     def test_depth_trace_event_records_accepted_target_depth_details(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
 

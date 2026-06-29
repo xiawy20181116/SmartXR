@@ -771,7 +771,14 @@ def build_depth_trace_event(
         "selected_score",
         "switch_count",
         "switch_reason",
+        "switch_block_reason",
         "active_age_frames",
+        "active_state",
+        "mono_missing_frames",
+        "both_missing_frames",
+        "held_reason",
+        "depth_update_allowed",
+        "reacquire_candidate_age",
         "held_last_pose",
     ):
         if key in selection:
