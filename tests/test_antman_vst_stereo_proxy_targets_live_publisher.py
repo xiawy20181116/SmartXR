@@ -207,6 +207,65 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertFalse(event["depth_update_allowed"])
         self.assertEqual(event["depth_gate_reason"], "depth_jump")
 
+    def test_one_euro_position_filter_smooths_target_transform_and_keeps_raw_diagnostics(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        filter_state = publisher.OneEuroVector3Filter(min_cutoff=0.1, beta=0.0, d_cutoff=1.0)
+        first = {
+            "type": "proxy_targets",
+            "schema_version": 1,
+            "sequence": 1,
+            "timestamp_ms": 1_000,
+            "targets": [
+                {
+                    "target_id": "vst_stereo-active-1",
+                    "source": "vst_stereo",
+                    "coordinate_space": "head",
+                    "transform_space": "head",
+                    "state": "tracked",
+                    "confidence": 0.9,
+                    "depth_source": "pov_stereo_triangulation",
+                    "depth_confidence": "high",
+                    "timestamp_ms": 1_000.0,
+                    "transform": {
+                        "position": [0.0, 0.0, -1.0],
+                        "rotation_xyzw": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0],
+                    },
+                    "source_coordinate": {"head_position_m": [0.0, 0.0, -1.0]},
+                }
+            ],
+            "cards": [{"card_id": "CardAnchor", "target_id": "vst_stereo-active-1"}],
+        }
+        second = json.loads(json.dumps(first))
+        second["sequence"] = 2
+        second["timestamp_ms"] = 1_033
+        second["targets"][0]["timestamp_ms"] = 1_033.0
+        second["targets"][0]["transform"]["position"] = [0.2, 0.0, -1.0]
+        second["targets"][0]["source_coordinate"]["head_position_m"] = [0.2, 0.0, -1.0]
+
+        publisher.apply_position_one_euro_filter(first, filter_state)
+        filtered = publisher.apply_position_one_euro_filter(second, filter_state)
+
+        target = filtered["targets"][0]
+        filtered_position = target["transform"]["position"]
+        self.assertGreater(filtered_position[0], 0.0)
+        self.assertLess(filtered_position[0], 0.2)
+        self.assertEqual(target["position_filter"]["algorithm"], "one_euro")
+        self.assertTrue(target["position_filter"]["enabled"])
+        self.assertEqual(target["position_filter"]["raw_position_m"], [0.2, 0.0, -1.0])
+        self.assertEqual(target["position_filter"]["filtered_position_m"], filtered_position)
+        self.assertEqual(target["source_coordinate"]["head_position_m"], [0.2, 0.0, -1.0])
+        self.assertEqual(target["source_coordinate"]["filtered_head_position_m"], filtered_position)
+
+        event = publisher.build_depth_trace_event(
+            message=filtered,
+            diagnostics={"reason": "target_ready", "last_pair_frame_id": 33},
+        )
+        self.assertEqual(event["position_filter"]["algorithm"], "one_euro")
+        self.assertEqual(event["raw_head_position_m"], [0.2, 0.0, -1.0])
+        self.assertEqual(event["filtered_head_position_m"], filtered_position)
+
     def test_live_stereo_message_waits_for_matched_left_right_frame_ids(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
 
