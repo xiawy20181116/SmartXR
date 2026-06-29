@@ -318,6 +318,38 @@ class CollectStereoBboxPairsTests(unittest.TestCase):
         )
         self.assertIsNone(released)
 
+    def test_active_target_stabilizer_gates_large_fresh_depth_jump_for_stable_target(self):
+        collector = load_module(TOOL, "collect_stereo_bbox_pairs")
+        stabilizer = collector.StereoActiveTargetStabilizer(max_depth_jump_m=0.10)
+
+        first = collector.build_stereo_bbox_pair_record(
+            frame_id=28,
+            left_frame=FakeFrame(),
+            right_frame=FakeFrame(),
+            left_tracking_result=FakeTrackingResult([FakePerson(1, (640, 240, 720, 520), 0.80)]),
+            right_tracking_result=FakeTrackingResult([FakePerson(2, (608, 240, 688, 520), 0.80)]),
+            timestamp_ms=1780899000000,
+            target_stabilizer=stabilizer,
+        )
+        jumped = collector.build_stereo_bbox_pair_record(
+            frame_id=29,
+            left_frame=FakeFrame(),
+            right_frame=FakeFrame(),
+            left_tracking_result=FakeTrackingResult([FakePerson(1, (640, 240, 720, 520), 0.80)]),
+            right_tracking_result=FakeTrackingResult([FakePerson(2, (625, 240, 705, 520), 0.80)]),
+            timestamp_ms=1780899000033,
+            target_stabilizer=stabilizer,
+        )
+
+        self.assertFalse(jumped["selection"]["held_last_pose"])
+        self.assertFalse(jumped["selection"]["depth_update_allowed"])
+        self.assertEqual(jumped["selection"]["depth_gate_reason"], "depth_jump")
+        self.assertEqual(jumped["selection"]["last_good_depth"], first["selection"]["last_good_depth"])
+        self.assertGreater(
+            abs(jumped["selection"]["estimated_depth_m"] - first["selection"]["last_good_depth"]),
+            0.10,
+        )
+
     def test_active_target_stabilizer_switches_after_sustained_better_candidate(self):
         collector = load_module(TOOL, "collect_stereo_bbox_pairs")
         stabilizer = collector.StereoActiveTargetStabilizer(

@@ -871,6 +871,7 @@ def build_depth_trace_event(
         "both_missing_frames",
         "held_reason",
         "depth_update_allowed",
+        "depth_gate_reason",
         "last_good_depth",
         "reacquire_candidate_age",
         "switch_block_reason",

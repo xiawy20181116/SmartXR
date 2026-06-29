@@ -174,6 +174,7 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
                 "held_last_pose": True,
                 "held_reason": "mono_eye_missing",
                 "depth_update_allowed": False,
+                "depth_gate_reason": "depth_jump",
                 "last_good_depth": 1.23,
             },
         }
@@ -204,6 +205,7 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(event["depth_confidence"], "low")
         self.assertAlmostEqual(event["depth_m"], 1.23)
         self.assertFalse(event["depth_update_allowed"])
+        self.assertEqual(event["depth_gate_reason"], "depth_jump")
 
     def test_live_stereo_message_waits_for_matched_left_right_frame_ids(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")

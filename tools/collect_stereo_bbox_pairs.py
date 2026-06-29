@@ -99,6 +99,7 @@ class StereoActiveTargetStabilizer:
         switch_score_margin: float = 0.12,
         hold_frames: int = 6,
         mono_hold_frames: int | None = None,
+        max_depth_jump_m: float | None = 0.10,
         continuity_iou_threshold: float = 0.30,
     ) -> None:
         self.active_target_id = active_target_id
@@ -108,6 +109,7 @@ class StereoActiveTargetStabilizer:
         mono_hold_default = max(hold_frames, 15)
         mono_hold_value = mono_hold_frames if mono_hold_frames is not None else mono_hold_default
         self.mono_hold_frames = max(0, int(mono_hold_value))
+        self.max_depth_jump_m = None if max_depth_jump_m is None else max(0.0, float(max_depth_jump_m))
         self.continuity_iou_threshold = float(continuity_iou_threshold)
         self._active: dict[str, Any] | None = None
         self._pending_key: tuple[int, int] | None = None
@@ -325,6 +327,16 @@ class StereoActiveTargetStabilizer:
         if switch_reason == "switch_confirmed":
             self._pending_key = None
             self._pending_count = 0
+        previous_last_good_depth = self._active.get("last_good_depth") if self._active else None
+        depth_gate_reason = self._depth_gate_reason(
+            candidate.get("estimated_depth_m"),
+            previous_last_good_depth,
+        )
+        depth_update_allowed = depth_gate_reason is None
+        if depth_update_allowed:
+            last_good_depth = candidate.get("estimated_depth_m")
+        else:
+            last_good_depth = previous_last_good_depth
         self._active = {
             "key": candidate["key"],
             "left_bbox": candidate["left_bbox"],
@@ -334,7 +346,7 @@ class StereoActiveTargetStabilizer:
             "missing_frames": 0,
             "mono_missing_frames": 0,
             "both_missing_frames": 0,
-            "last_good_depth": candidate.get("estimated_depth_m"),
+            "last_good_depth": last_good_depth,
             "image_width": candidate.get("image_width", 880),
             "image_height": candidate.get("image_height", 660),
         }
@@ -352,8 +364,27 @@ class StereoActiveTargetStabilizer:
                 candidate_count=candidate_count,
                 held_last_pose=False,
                 switch_block_reason=switch_block_reason,
+                depth_update_allowed=depth_update_allowed,
+                depth_gate_reason=depth_gate_reason,
             ),
         }
+
+    def _depth_gate_reason(self, estimated_depth_m: Any, last_good_depth: Any) -> str | None:
+        if last_good_depth is None:
+            return None
+        try:
+            previous_depth = float(last_good_depth)
+        except (TypeError, ValueError):
+            return None
+        try:
+            candidate_depth = float(estimated_depth_m)
+        except (TypeError, ValueError):
+            return "depth_unavailable"
+        if candidate_depth <= 0.0:
+            return "depth_unavailable"
+        if self.max_depth_jump_m is not None and abs(candidate_depth - previous_depth) > self.max_depth_jump_m:
+            return "depth_jump"
+        return None
 
     def _hold_missing(self, frame_id: int, *, candidate_count: int) -> dict[str, Any] | None:
         if self._active is None:
@@ -422,6 +453,8 @@ class StereoActiveTargetStabilizer:
         held_last_pose: bool,
         held_reason: str | None = None,
         switch_block_reason: str | None = None,
+        depth_update_allowed: bool | None = None,
+        depth_gate_reason: str | None = None,
     ) -> dict[str, Any]:
         raw_left_track_id, raw_right_track_id = candidate["key"]
         active_state = str(self._last_eye_status.get("active_state", "TRACKING_STEREO"))
@@ -431,6 +464,8 @@ class StereoActiveTargetStabilizer:
             active_state = "TRACKING_STEREO"
             left_active_seen = True
             right_active_seen = True
+        if depth_update_allowed is None:
+            depth_update_allowed = not held_last_pose
         return {
             "active_target_id": self.active_target_id,
             "raw_left_track_id": int(raw_left_track_id),
@@ -448,7 +483,8 @@ class StereoActiveTargetStabilizer:
             "mono_missing_frames": int(self._active.get("mono_missing_frames", 0)) if self._active else 0,
             "both_missing_frames": int(self._active.get("both_missing_frames", 0)) if self._active else 0,
             "held_reason": held_reason,
-            "depth_update_allowed": not held_last_pose,
+            "depth_update_allowed": bool(depth_update_allowed),
+            "depth_gate_reason": depth_gate_reason,
             "last_good_depth": self._active.get("last_good_depth") if self._active else candidate.get("estimated_depth_m"),
             "reacquire_candidate_age": 0,
             "switch_block_reason": switch_block_reason,
