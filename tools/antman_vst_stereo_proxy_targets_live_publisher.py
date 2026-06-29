@@ -773,6 +773,16 @@ def build_depth_trace_event(
         "switch_reason",
         "active_age_frames",
         "held_last_pose",
+        "active_state",
+        "left_active_seen",
+        "right_active_seen",
+        "mono_missing_frames",
+        "both_missing_frames",
+        "held_reason",
+        "depth_update_allowed",
+        "last_good_depth",
+        "reacquire_candidate_age",
+        "switch_block_reason",
     ):
         if key in selection:
             event[key] = selection[key]

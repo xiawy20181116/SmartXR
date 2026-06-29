@@ -6,6 +6,7 @@ import types
 from pathlib import Path
 import json
 import unittest
+import uuid
 from unittest import mock
 
 
@@ -863,6 +864,12 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(event["raw_right_track_id"], 2)
         self.assertEqual(event["candidate_count"], 4)
         self.assertEqual(event["switch_reason"], "active_continuity")
+        self.assertEqual(event["active_state"], "TRACKING_STEREO")
+        self.assertTrue(event["left_active_seen"])
+        self.assertTrue(event["right_active_seen"])
+        self.assertEqual(event["mono_missing_frames"], 0)
+        self.assertEqual(event["both_missing_frames"], 0)
+        self.assertTrue(event["depth_update_allowed"])
         self.assertFalse(event["held_last_pose"])
 
     def test_depth_trace_event_records_accepted_target_depth_details(self):
@@ -947,7 +954,7 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
     def test_depth_trace_writer_appends_rejected_events_as_jsonl(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
 
-        trace_path = ROOT / ".tmp" / "tests" / "depth_estimation_trace.jsonl"
+        trace_path = ROOT / ".tmp" / "tests" / f"depth_estimation_trace_{uuid.uuid4().hex}.jsonl"
         trace_path.parent.mkdir(parents=True, exist_ok=True)
         trace_path.unlink(missing_ok=True)
         publisher.write_depth_trace_event(
@@ -968,7 +975,10 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         )
 
         rows = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
-        trace_path.unlink(missing_ok=True)
+        try:
+            trace_path.unlink(missing_ok=True)
+        except PermissionError:
+            pass
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["event"], "rejected")

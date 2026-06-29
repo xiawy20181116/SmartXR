@@ -109,6 +109,11 @@ class StereoActiveTargetStabilizer:
         self._pending_key: tuple[int, int] | None = None
         self._pending_count = 0
         self._switch_count = 0
+        self._last_eye_status: dict[str, Any] = {
+            "left_active_seen": False,
+            "right_active_seen": False,
+            "active_state": "UNINITIALIZED",
+        }
 
     def select(
         self,
@@ -119,6 +124,7 @@ class StereoActiveTargetStabilizer:
         left_people: list[dict[str, Any]],
         right_people: list[dict[str, Any]],
     ) -> dict[str, Any] | None:
+        self._last_eye_status = self._active_eye_status(left_people, right_people)
         candidates = self._build_candidates(frame_id, image_width, image_height, left_people, right_people)
         if not candidates:
             return self._hold_missing(frame_id, candidate_count=0)
@@ -147,7 +153,59 @@ class StereoActiveTargetStabilizer:
                 return self._activate(best, switch_reason="switch_confirmed", candidate_count=len(candidates))
 
         self._pending_key = None if best["key"] == active_candidate["key"] else self._pending_key
-        return self._activate(active_candidate, switch_reason="active_continuity", candidate_count=len(candidates))
+        switch_block_reason = None
+        if best["key"] != active_candidate["key"] and best_score > active_score + self.switch_score_margin:
+            switch_block_reason = "pending_switch_confirmation"
+        return self._activate(
+            active_candidate,
+            switch_reason="active_continuity",
+            candidate_count=len(candidates),
+            switch_block_reason=switch_block_reason,
+        )
+
+    def _active_eye_status(
+        self,
+        left_people: list[dict[str, Any]],
+        right_people: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if self._active is None:
+            return {
+                "left_active_seen": False,
+                "right_active_seen": False,
+                "active_state": "UNINITIALIZED",
+            }
+        left_seen = self._eye_active_seen(left_people, eye="left")
+        right_seen = self._eye_active_seen(right_people, eye="right")
+        if left_seen and right_seen:
+            active_state = "TRACKING_STEREO"
+        elif left_seen:
+            active_state = "TRACKING_MONO_LEFT"
+        elif right_seen:
+            active_state = "TRACKING_MONO_RIGHT"
+        else:
+            active_state = "TEMP_LOST_BOTH"
+        return {
+            "left_active_seen": left_seen,
+            "right_active_seen": right_seen,
+            "active_state": active_state,
+        }
+
+    def _eye_active_seen(self, people: list[dict[str, Any]], *, eye: str) -> bool:
+        if self._active is None:
+            return False
+        key_index = 0 if eye == "left" else 1
+        bbox_key = "left_bbox" if eye == "left" else "right_bbox"
+        active_track_id = int(self._active["key"][key_index])
+        active_bbox = self._active[bbox_key]
+        for person in people:
+            try:
+                if _track_id(person) == active_track_id:
+                    return True
+                if _bbox_iou(_bbox_xyxy(person), active_bbox) >= self.continuity_iou_threshold:
+                    return True
+            except (KeyError, TypeError, ValueError):
+                continue
+        return False
 
     def _build_candidates(
         self,
@@ -247,7 +305,14 @@ class StereoActiveTargetStabilizer:
             return None
         return max(plausible, key=lambda item: item[0])[1]
 
-    def _activate(self, candidate: dict[str, Any], *, switch_reason: str, candidate_count: int) -> dict[str, Any]:
+    def _activate(
+        self,
+        candidate: dict[str, Any],
+        *,
+        switch_reason: str,
+        candidate_count: int,
+        switch_block_reason: str | None = None,
+    ) -> dict[str, Any]:
         active_age_frames = 1
         if self._active is not None and candidate["key"] == self._active["key"]:
             active_age_frames = int(self._active.get("active_age_frames", 0)) + 1
@@ -263,6 +328,9 @@ class StereoActiveTargetStabilizer:
             "confidence": candidate["confidence"],
             "active_age_frames": active_age_frames,
             "missing_frames": 0,
+            "mono_missing_frames": 0,
+            "both_missing_frames": 0,
+            "last_good_depth": candidate.get("estimated_depth_m"),
             "image_width": candidate.get("image_width", 880),
             "image_height": candidate.get("image_height", 660),
         }
@@ -279,6 +347,7 @@ class StereoActiveTargetStabilizer:
                 active_age_frames=active_age_frames,
                 candidate_count=candidate_count,
                 held_last_pose=False,
+                switch_block_reason=switch_block_reason,
             ),
         }
 
@@ -289,6 +358,17 @@ class StereoActiveTargetStabilizer:
         if missing_frames > self.hold_frames:
             return None
         self._active["missing_frames"] = missing_frames
+        active_state = str(self._last_eye_status.get("active_state", "TEMP_LOST_BOTH"))
+        if active_state in ("TRACKING_MONO_LEFT", "TRACKING_MONO_RIGHT"):
+            mono_missing_frames = int(self._active.get("mono_missing_frames", 0)) + 1
+            both_missing_frames = 0
+            held_reason = "mono_eye_missing"
+        else:
+            mono_missing_frames = 0
+            both_missing_frames = int(self._active.get("both_missing_frames", 0)) + 1
+            held_reason = "both_eye_temp_lost"
+        self._active["mono_missing_frames"] = mono_missing_frames
+        self._active["both_missing_frames"] = both_missing_frames
         held_candidate = {
             "frame_id": int(frame_id),
             "key": self._active["key"],
@@ -304,11 +384,7 @@ class StereoActiveTargetStabilizer:
             "right_size_px": _bbox_size(self._active["right_bbox"]),
             "disparity_px": _top_center(self._active["left_bbox"])[0] - _top_center(self._active["right_bbox"])[0],
             "vertical_error_px": _top_center(self._active["left_bbox"])[1] - _top_center(self._active["right_bbox"])[1],
-            "estimated_depth_m": _estimated_depth_m(
-                self._active.get("image_width", 880),
-                self._active.get("image_height", 660),
-                _top_center(self._active["left_bbox"])[0] - _top_center(self._active["right_bbox"])[0],
-            ),
+            "estimated_depth_m": self._active.get("last_good_depth"),
         }
         return {
             "person_id": self.active_target_id,
@@ -323,6 +399,7 @@ class StereoActiveTargetStabilizer:
                 active_age_frames=int(self._active.get("active_age_frames", 1)),
                 candidate_count=candidate_count,
                 held_last_pose=True,
+                held_reason=held_reason,
             ),
         }
 
@@ -334,8 +411,17 @@ class StereoActiveTargetStabilizer:
         active_age_frames: int,
         candidate_count: int,
         held_last_pose: bool,
+        held_reason: str | None = None,
+        switch_block_reason: str | None = None,
     ) -> dict[str, Any]:
         raw_left_track_id, raw_right_track_id = candidate["key"]
+        active_state = str(self._last_eye_status.get("active_state", "TRACKING_STEREO"))
+        left_active_seen = bool(self._last_eye_status.get("left_active_seen", False))
+        right_active_seen = bool(self._last_eye_status.get("right_active_seen", False))
+        if not held_last_pose:
+            active_state = "TRACKING_STEREO"
+            left_active_seen = True
+            right_active_seen = True
         return {
             "active_target_id": self.active_target_id,
             "raw_left_track_id": int(raw_left_track_id),
@@ -347,6 +433,16 @@ class StereoActiveTargetStabilizer:
             "switch_reason": switch_reason,
             "active_age_frames": int(active_age_frames),
             "held_last_pose": bool(held_last_pose),
+            "active_state": active_state,
+            "left_active_seen": left_active_seen,
+            "right_active_seen": right_active_seen,
+            "mono_missing_frames": int(self._active.get("mono_missing_frames", 0)) if self._active else 0,
+            "both_missing_frames": int(self._active.get("both_missing_frames", 0)) if self._active else 0,
+            "held_reason": held_reason,
+            "depth_update_allowed": not held_last_pose,
+            "last_good_depth": self._active.get("last_good_depth") if self._active else candidate.get("estimated_depth_m"),
+            "reacquire_candidate_age": 0,
+            "switch_block_reason": switch_block_reason,
             "disparity_px": float(candidate["disparity_px"]),
             "vertical_error_px": float(candidate["vertical_error_px"]),
             "left_center_px": [candidate["left_center_px"][0], candidate["left_center_px"][1]],
