@@ -158,6 +158,53 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(message["cards"][0]["card_id"], "StereoCard")
         self.assertEqual(validator.validate_message(message), [])
 
+    def test_depth_gate_marks_held_stereo_record_as_low_confidence(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        stereo_record = {
+            "source": "vst_stereo_bbox",
+            "frame_id": 11,
+            "pair_id": "pair-000011",
+            "person_id": "active-1",
+            "timestamp_ms": 1780911169190,
+            "left_bbox_xyxy": [640, 240, 720, 520],
+            "right_bbox_xyxy": [608, 240, 688, 520],
+            "confidence": 0.76,
+            "selection": {
+                "held_last_pose": True,
+                "held_reason": "mono_eye_missing",
+                "depth_update_allowed": False,
+                "last_good_depth": 1.23,
+            },
+        }
+
+        message = publisher.build_proxy_targets_message_from_stereo_bbox_record(
+            stereo_record,
+            sequence=4,
+            card_id="StereoCard",
+            recorded_width=880,
+            recorded_height=660,
+        )
+
+        self.assertIsNotNone(message)
+        target = message["targets"][0]
+        self.assertEqual(target["depth_source"], "held_last_good_depth")
+        self.assertEqual(target["depth_confidence"], "low")
+        self.assertEqual(target["source_coordinate"]["depth_source"], "held_last_good_depth")
+        self.assertEqual(target["source_coordinate"]["depth_confidence"], "low")
+        self.assertAlmostEqual(target["source_coordinate"]["source_frame"]["anchor_depth"], 1.23)
+        self.assertEqual(target["stereo"]["depth_source"], "held_last_good_depth")
+        self.assertFalse(target["stereo"]["depth_update_allowed"])
+
+        event = publisher.build_depth_trace_event(
+            message=message,
+            diagnostics={"reason": "target_ready", "last_pair_frame_id": 11},
+        )
+        self.assertEqual(event["depth_source"], "held_last_good_depth")
+        self.assertEqual(event["depth_confidence"], "low")
+        self.assertAlmostEqual(event["depth_m"], 1.23)
+        self.assertFalse(event["depth_update_allowed"])
+
     def test_live_stereo_message_waits_for_matched_left_right_frame_ids(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
 

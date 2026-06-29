@@ -42,6 +42,7 @@ from smartxr.transport import (  # noqa: E402
 _DEPTH_TRACE_CONTEXT: dict[int, dict[str, Any]] = {}
 DEFAULT_MAX_PAIR_CAPTURE_DELTA_MS = 10.0
 DEFAULT_SOURCE_HZ = 45.0
+HELD_DEPTH_SOURCE = "held_last_good_depth"
 
 
 def is_proxy_targets_request(first_line: str) -> bool:
@@ -537,6 +538,21 @@ def _bbox_dict_from_xyxy(bbox_xyxy: list[float] | tuple[float, float, float, flo
     }
 
 
+def _bbox_top_center_from_xyxy(bbox_xyxy: list[float] | tuple[float, float, float, float]) -> list[float]:
+    x1, y1, x2, _y2 = (float(value) for value in bbox_xyxy)
+    return [(x1 + x2) * 0.5, y1]
+
+
+def _positive_float_or_none(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0.0:
+        return None
+    return parsed
+
+
 def _record_to_pair(record: dict[str, Any]) -> StereoDetectionPair:
     return StereoDetectionPair(
         pair_id=str(record["pair_id"]),
@@ -546,6 +562,55 @@ def _record_to_pair(record: dict[str, Any]) -> StereoDetectionPair:
         right_bbox_xyxy=tuple(float(value) for value in record["right_bbox_xyxy"]),
         confidence=float(record.get("confidence", 1.0)),
     )
+
+
+def _held_stereo_record(
+    record: dict[str, Any],
+    calibration: Any,
+    *,
+    depth_m: float,
+    gate_config: StereoGateConfig,
+) -> dict[str, Any]:
+    left_bbox = list(record["left_bbox_xyxy"])
+    right_bbox = list(record["right_bbox_xyxy"])
+    left_anchor = _bbox_top_center_from_xyxy(left_bbox)
+    right_anchor = _bbox_top_center_from_xyxy(right_bbox)
+    left_size = _bbox_dict_from_xyxy(left_bbox)
+    right_size = _bbox_dict_from_xyxy(right_bbox)
+    disparity_px = float(left_anchor[0] - right_anchor[0])
+    vertical_error_px = float(left_anchor[1] - right_anchor[1])
+    box_width_ratio = left_size["w"] / max(right_size["w"], 1.0)
+    box_height_ratio = left_size["h"] / max(right_size["h"], 1.0)
+    return {
+        "schema_version": 1,
+        "pair_id": str(record["pair_id"]),
+        "frame_id": int(record["frame_id"]),
+        "frame_provenance": calibration.frame_provenance,
+        "person_id": str(record["person_id"]),
+        "bbox": {
+            "left_xyxy": left_bbox,
+            "right_xyxy": right_bbox,
+        },
+        "confidence": float(record.get("confidence", 1.0)),
+        "anchor_kind": ANCHOR_KIND_BBOX_TOP_CENTER,
+        "left_anchor_px": left_anchor,
+        "right_anchor_px": right_anchor,
+        "disparity_px": disparity_px,
+        "vertical_error_px": vertical_error_px,
+        "box_width_ratio": box_width_ratio,
+        "box_height_ratio": box_height_ratio,
+        "depth_m": float(depth_m),
+        "position": calibration.left.unproject(left_anchor[0], left_anchor[1], depth_m),
+        "depth_source": HELD_DEPTH_SOURCE,
+        "is_ground_truth": False,
+        "pose_quality": "stereo",
+        "calibration_ref": calibration.calibration_id,
+        "stereo_ok": False,
+        "rejection_reason": "depth_update_gated",
+        "gates": gate_config.to_dict(),
+        "depth_update_allowed": False,
+        "held_reason": record.get("selection", {}).get("held_reason"),
+    }
 
 
 def build_proxy_targets_message_from_stereo_bbox_record(
@@ -571,14 +636,36 @@ def build_proxy_targets_message_from_stereo_bbox_record(
         max_box_ratio=max_box_ratio,
         max_vertical_error_px=max_vertical_error_px,
     )
-    stereo_record = triangulate_detection_pair(
-        _record_to_pair(record),
-        calibration,
-        anchor_kind=ANCHOR_KIND_BBOX_TOP_CENTER,
-        gate_config=gate_config,
-    )
-    if stereo_record.get("stereo_ok") is not True:
-        return None
+    selection = record.get("selection", {})
+    if not isinstance(selection, dict):
+        selection = {}
+    depth_update_allowed = selection.get("depth_update_allowed", True) is not False
+    if depth_update_allowed:
+        stereo_record = triangulate_detection_pair(
+            _record_to_pair(record),
+            calibration,
+            anchor_kind=ANCHOR_KIND_BBOX_TOP_CENTER,
+            gate_config=gate_config,
+        )
+        if stereo_record.get("stereo_ok") is not True:
+            return None
+        depth_m = float(stereo_record["depth_m"])
+        depth_source = stereo_record["depth_source"]
+        depth_confidence = "high"
+    else:
+        depth_m = _positive_float_or_none(selection.get("last_good_depth"))
+        if depth_m is None:
+            depth_m = _positive_float_or_none(selection.get("estimated_depth_m"))
+        if depth_m is None:
+            return None
+        stereo_record = _held_stereo_record(
+            record,
+            calibration,
+            depth_m=depth_m,
+            gate_config=gate_config,
+        )
+        depth_source = HELD_DEPTH_SOURCE
+        depth_confidence = "low"
 
     left_bbox = list(record["left_bbox_xyxy"])
     source_payload = {
@@ -603,19 +690,23 @@ def build_proxy_targets_message_from_stereo_bbox_record(
                 "track_id": str(record["person_id"]),
                 "confidence": float(record.get("confidence", 1.0)),
                 "bbox": _bbox_dict_from_xyxy(left_bbox),
-                "depth_m": float(stereo_record["depth_m"]),
-                "depth_source": stereo_record["depth_source"],
-                "depth_confidence": "high",
+                "depth_m": float(depth_m),
+                "depth_source": depth_source,
+                "depth_confidence": depth_confidence,
                 "stereo": {
                     "pair_id": stereo_record["pair_id"],
                     "frame_id": stereo_record["frame_id"],
-                    "depth_source": stereo_record["depth_source"],
+                    "depth_source": depth_source,
+                    "depth_confidence": depth_confidence,
                     "anchor_kind": stereo_record["anchor_kind"],
                     "left_anchor_px": stereo_record["left_anchor_px"],
                     "right_anchor_px": stereo_record["right_anchor_px"],
                     "disparity_px": stereo_record["disparity_px"],
                     "vertical_error_px": stereo_record["vertical_error_px"],
                     "calibration_ref": stereo_record["calibration_ref"],
+                    "depth_update_allowed": bool(depth_update_allowed),
+                    "stereo_ok": stereo_record.get("stereo_ok"),
+                    "rejection_reason": stereo_record.get("rejection_reason"),
                 },
             }
         ],

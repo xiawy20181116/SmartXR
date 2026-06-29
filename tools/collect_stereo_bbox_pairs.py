@@ -98,12 +98,16 @@ class StereoActiveTargetStabilizer:
         switch_confirm_frames: int = 2,
         switch_score_margin: float = 0.12,
         hold_frames: int = 6,
+        mono_hold_frames: int | None = None,
         continuity_iou_threshold: float = 0.30,
     ) -> None:
         self.active_target_id = active_target_id
         self.switch_confirm_frames = max(1, int(switch_confirm_frames))
         self.switch_score_margin = float(switch_score_margin)
         self.hold_frames = max(0, int(hold_frames))
+        mono_hold_default = max(hold_frames, 15)
+        mono_hold_value = mono_hold_frames if mono_hold_frames is not None else mono_hold_default
+        self.mono_hold_frames = max(0, int(mono_hold_value))
         self.continuity_iou_threshold = float(continuity_iou_threshold)
         self._active: dict[str, Any] | None = None
         self._pending_key: tuple[int, int] | None = None
@@ -355,10 +359,15 @@ class StereoActiveTargetStabilizer:
         if self._active is None:
             return None
         missing_frames = int(self._active.get("missing_frames", 0)) + 1
-        if missing_frames > self.hold_frames:
+        active_state = str(self._last_eye_status.get("active_state", "TEMP_LOST_BOTH"))
+        missing_limit = (
+            self.mono_hold_frames
+            if active_state in ("TRACKING_MONO_LEFT", "TRACKING_MONO_RIGHT")
+            else self.hold_frames
+        )
+        if missing_frames > missing_limit:
             return None
         self._active["missing_frames"] = missing_frames
-        active_state = str(self._last_eye_status.get("active_state", "TEMP_LOST_BOTH"))
         if active_state in ("TRACKING_MONO_LEFT", "TRACKING_MONO_RIGHT"):
             mono_missing_frames = int(self._active.get("mono_missing_frames", 0)) + 1
             both_missing_frames = 0
