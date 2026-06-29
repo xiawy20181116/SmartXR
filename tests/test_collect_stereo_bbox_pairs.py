@@ -156,6 +156,9 @@ class CollectStereoBboxPairsTests(unittest.TestCase):
         )
 
         self.assertEqual(first["person_id"], "active-1")
+        self.assertEqual(first["selection"]["active_state"], "TRACKING_STEREO")
+        self.assertTrue(first["selection"]["left_active_seen"])
+        self.assertTrue(first["selection"]["right_active_seen"])
         self.assertEqual(second["person_id"], "active-1")
         self.assertEqual(second["left_bbox_xyxy"], [641, 240, 721, 520])
         self.assertEqual(second["right_bbox_xyxy"], [609, 240, 689, 520])
@@ -165,6 +168,12 @@ class CollectStereoBboxPairsTests(unittest.TestCase):
         self.assertEqual(second["selection"]["switch_count"], 0)
         self.assertEqual(second["selection"]["switch_reason"], "active_continuity")
         self.assertEqual(second["selection"]["active_age_frames"], 2)
+        self.assertEqual(second["selection"]["active_state"], "TRACKING_STEREO")
+        self.assertTrue(second["selection"]["left_active_seen"])
+        self.assertTrue(second["selection"]["right_active_seen"])
+        self.assertEqual(second["selection"]["mono_missing_frames"], 0)
+        self.assertEqual(second["selection"]["both_missing_frames"], 0)
+        self.assertTrue(second["selection"]["depth_update_allowed"])
         self.assertGreater(second["selection"]["estimated_depth_m"], 0.0)
         self.assertFalse(second["selection"]["held_last_pose"])
 
@@ -197,6 +206,149 @@ class CollectStereoBboxPairsTests(unittest.TestCase):
         self.assertEqual(held["selection"]["switch_reason"], "held_missing")
         self.assertTrue(held["selection"]["held_last_pose"])
         self.assertEqual(held["selection"]["active_age_frames"], 1)
+        self.assertEqual(held["selection"]["active_state"], "TEMP_LOST_BOTH")
+        self.assertFalse(held["selection"]["left_active_seen"])
+        self.assertFalse(held["selection"]["right_active_seen"])
+        self.assertEqual(held["selection"]["mono_missing_frames"], 0)
+        self.assertEqual(held["selection"]["both_missing_frames"], 1)
+        self.assertEqual(held["selection"]["held_reason"], "both_eye_temp_lost")
+        self.assertFalse(held["selection"]["depth_update_allowed"])
+
+    def test_active_target_stabilizer_classifies_mono_missing_and_gates_depth_update(self):
+        collector = load_module(TOOL, "collect_stereo_bbox_pairs")
+        stabilizer = collector.StereoActiveTargetStabilizer(hold_frames=6)
+
+        first = collector.build_stereo_bbox_pair_record(
+            frame_id=22,
+            left_frame=FakeFrame(),
+            right_frame=FakeFrame(),
+            left_tracking_result=FakeTrackingResult([FakePerson(1, (640, 240, 720, 520), 0.80)]),
+            right_tracking_result=FakeTrackingResult([FakePerson(2, (608, 240, 688, 520), 0.80)]),
+            timestamp_ms=1780899000000,
+            target_stabilizer=stabilizer,
+        )
+        mono = collector.build_stereo_bbox_pair_record(
+            frame_id=23,
+            left_frame=FakeFrame(),
+            right_frame=FakeFrame(),
+            left_tracking_result=FakeTrackingResult([FakePerson(1, (642, 240, 722, 520), 0.76)]),
+            right_tracking_result=FakeTrackingResult([]),
+            timestamp_ms=1780899000033,
+            target_stabilizer=stabilizer,
+        )
+
+        self.assertEqual(mono["person_id"], "active-1")
+        self.assertEqual(mono["left_bbox_xyxy"], first["left_bbox_xyxy"])
+        self.assertEqual(mono["right_bbox_xyxy"], first["right_bbox_xyxy"])
+        self.assertEqual(mono["selection"]["switch_reason"], "held_missing")
+        self.assertTrue(mono["selection"]["held_last_pose"])
+        self.assertEqual(mono["selection"]["active_state"], "TRACKING_MONO_LEFT")
+        self.assertTrue(mono["selection"]["left_active_seen"])
+        self.assertFalse(mono["selection"]["right_active_seen"])
+        self.assertEqual(mono["selection"]["mono_missing_frames"], 1)
+        self.assertEqual(mono["selection"]["both_missing_frames"], 0)
+        self.assertEqual(mono["selection"]["held_reason"], "mono_eye_missing")
+        self.assertFalse(mono["selection"]["depth_update_allowed"])
+
+    def test_active_target_stabilizer_uses_longer_grace_for_mono_missing_than_both_missing(self):
+        collector = load_module(TOOL, "collect_stereo_bbox_pairs")
+        stabilizer = collector.StereoActiveTargetStabilizer(hold_frames=2, mono_hold_frames=4)
+
+        first = collector.build_stereo_bbox_pair_record(
+            frame_id=24,
+            left_frame=FakeFrame(),
+            right_frame=FakeFrame(),
+            left_tracking_result=FakeTrackingResult([FakePerson(1, (640, 240, 720, 520), 0.80)]),
+            right_tracking_result=FakeTrackingResult([FakePerson(2, (608, 240, 688, 520), 0.80)]),
+            timestamp_ms=1780899000000,
+            target_stabilizer=stabilizer,
+        )
+        self.assertIsNotNone(first)
+
+        third_mono_hold = None
+        for frame_id in (25, 26, 27):
+            third_mono_hold = collector.build_stereo_bbox_pair_record(
+                frame_id=frame_id,
+                left_frame=FakeFrame(),
+                right_frame=FakeFrame(),
+                left_tracking_result=FakeTrackingResult([FakePerson(1, (642, 240, 722, 520), 0.76)]),
+                right_tracking_result=FakeTrackingResult([]),
+                timestamp_ms=1780899000000 + (frame_id - 24) * 33,
+                target_stabilizer=stabilizer,
+            )
+
+        self.assertIsNotNone(third_mono_hold)
+        self.assertEqual(third_mono_hold["selection"]["switch_reason"], "held_missing")
+        self.assertEqual(third_mono_hold["selection"]["active_state"], "TRACKING_MONO_LEFT")
+        self.assertEqual(third_mono_hold["selection"]["mono_missing_frames"], 3)
+        self.assertEqual(third_mono_hold["selection"]["held_reason"], "mono_eye_missing")
+        self.assertFalse(third_mono_hold["selection"]["depth_update_allowed"])
+
+        both_stabilizer = collector.StereoActiveTargetStabilizer(hold_frames=2, mono_hold_frames=4)
+        collector.build_stereo_bbox_pair_record(
+            frame_id=30,
+            left_frame=FakeFrame(),
+            right_frame=FakeFrame(),
+            left_tracking_result=FakeTrackingResult([FakePerson(1, (640, 240, 720, 520), 0.80)]),
+            right_tracking_result=FakeTrackingResult([FakePerson(2, (608, 240, 688, 520), 0.80)]),
+            timestamp_ms=1780899000000,
+            target_stabilizer=both_stabilizer,
+        )
+        for frame_id in (31, 32):
+            held = collector.build_stereo_bbox_pair_record(
+                frame_id=frame_id,
+                left_frame=FakeFrame(),
+                right_frame=FakeFrame(),
+                left_tracking_result=FakeTrackingResult([]),
+                right_tracking_result=FakeTrackingResult([]),
+                timestamp_ms=1780899000000 + (frame_id - 30) * 33,
+                target_stabilizer=both_stabilizer,
+            )
+            self.assertIsNotNone(held)
+            self.assertEqual(held["selection"]["held_reason"], "both_eye_temp_lost")
+
+        released = collector.build_stereo_bbox_pair_record(
+            frame_id=33,
+            left_frame=FakeFrame(),
+            right_frame=FakeFrame(),
+            left_tracking_result=FakeTrackingResult([]),
+            right_tracking_result=FakeTrackingResult([]),
+            timestamp_ms=1780899000099,
+            target_stabilizer=both_stabilizer,
+        )
+        self.assertIsNone(released)
+
+    def test_active_target_stabilizer_gates_large_fresh_depth_jump_for_stable_target(self):
+        collector = load_module(TOOL, "collect_stereo_bbox_pairs")
+        stabilizer = collector.StereoActiveTargetStabilizer(max_depth_jump_m=0.10)
+
+        first = collector.build_stereo_bbox_pair_record(
+            frame_id=28,
+            left_frame=FakeFrame(),
+            right_frame=FakeFrame(),
+            left_tracking_result=FakeTrackingResult([FakePerson(1, (640, 240, 720, 520), 0.80)]),
+            right_tracking_result=FakeTrackingResult([FakePerson(2, (608, 240, 688, 520), 0.80)]),
+            timestamp_ms=1780899000000,
+            target_stabilizer=stabilizer,
+        )
+        jumped = collector.build_stereo_bbox_pair_record(
+            frame_id=29,
+            left_frame=FakeFrame(),
+            right_frame=FakeFrame(),
+            left_tracking_result=FakeTrackingResult([FakePerson(1, (640, 240, 720, 520), 0.80)]),
+            right_tracking_result=FakeTrackingResult([FakePerson(2, (625, 240, 705, 520), 0.80)]),
+            timestamp_ms=1780899000033,
+            target_stabilizer=stabilizer,
+        )
+
+        self.assertFalse(jumped["selection"]["held_last_pose"])
+        self.assertFalse(jumped["selection"]["depth_update_allowed"])
+        self.assertEqual(jumped["selection"]["depth_gate_reason"], "depth_jump")
+        self.assertEqual(jumped["selection"]["last_good_depth"], first["selection"]["last_good_depth"])
+        self.assertGreater(
+            abs(jumped["selection"]["estimated_depth_m"] - first["selection"]["last_good_depth"]),
+            0.10,
+        )
 
     def test_active_target_stabilizer_switches_after_sustained_better_candidate(self):
         collector = load_module(TOOL, "collect_stereo_bbox_pairs")
@@ -249,6 +401,8 @@ class CollectStereoBboxPairsTests(unittest.TestCase):
         self.assertEqual(switched["selection"]["switch_reason"], "switch_confirmed")
         self.assertEqual(switched["selection"]["switch_count"], 1)
         self.assertEqual(switched["selection"]["active_age_frames"], 1)
+        self.assertEqual(kept["selection"]["switch_block_reason"], "pending_switch_confirmation")
+        self.assertEqual(switched["selection"]["switch_block_reason"], None)
 
     def test_collects_only_matching_frame_ids_into_evaluator_jsonl(self):
         collector = load_module(TOOL, "collect_stereo_bbox_pairs")

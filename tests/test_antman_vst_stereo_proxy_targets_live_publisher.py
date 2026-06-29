@@ -6,6 +6,7 @@ import types
 from pathlib import Path
 import json
 import unittest
+import uuid
 from unittest import mock
 
 
@@ -156,6 +157,114 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(message["targets"][0]["stereo"]["pair_id"], "pair-000010")
         self.assertEqual(message["cards"][0]["card_id"], "StereoCard")
         self.assertEqual(validator.validate_message(message), [])
+
+    def test_depth_gate_marks_held_stereo_record_as_low_confidence(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        stereo_record = {
+            "source": "vst_stereo_bbox",
+            "frame_id": 11,
+            "pair_id": "pair-000011",
+            "person_id": "active-1",
+            "timestamp_ms": 1780911169190,
+            "left_bbox_xyxy": [640, 240, 720, 520],
+            "right_bbox_xyxy": [608, 240, 688, 520],
+            "confidence": 0.76,
+            "selection": {
+                "held_last_pose": True,
+                "held_reason": "mono_eye_missing",
+                "depth_update_allowed": False,
+                "depth_gate_reason": "depth_jump",
+                "last_good_depth": 1.23,
+            },
+        }
+
+        message = publisher.build_proxy_targets_message_from_stereo_bbox_record(
+            stereo_record,
+            sequence=4,
+            card_id="StereoCard",
+            recorded_width=880,
+            recorded_height=660,
+        )
+
+        self.assertIsNotNone(message)
+        target = message["targets"][0]
+        self.assertEqual(target["depth_source"], "held_last_good_depth")
+        self.assertEqual(target["depth_confidence"], "low")
+        self.assertEqual(target["source_coordinate"]["depth_source"], "held_last_good_depth")
+        self.assertEqual(target["source_coordinate"]["depth_confidence"], "low")
+        self.assertAlmostEqual(target["source_coordinate"]["source_frame"]["anchor_depth"], 1.23)
+        self.assertEqual(target["stereo"]["depth_source"], "held_last_good_depth")
+        self.assertFalse(target["stereo"]["depth_update_allowed"])
+
+        event = publisher.build_depth_trace_event(
+            message=message,
+            diagnostics={"reason": "target_ready", "last_pair_frame_id": 11},
+        )
+        self.assertEqual(event["depth_source"], "held_last_good_depth")
+        self.assertEqual(event["depth_confidence"], "low")
+        self.assertAlmostEqual(event["depth_m"], 1.23)
+        self.assertFalse(event["depth_update_allowed"])
+        self.assertEqual(event["depth_gate_reason"], "depth_jump")
+
+    def test_one_euro_position_filter_smooths_target_transform_and_keeps_raw_diagnostics(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        filter_state = publisher.OneEuroVector3Filter(min_cutoff=0.1, beta=0.0, d_cutoff=1.0)
+        first = {
+            "type": "proxy_targets",
+            "schema_version": 1,
+            "sequence": 1,
+            "timestamp_ms": 1_000,
+            "targets": [
+                {
+                    "target_id": "vst_stereo-active-1",
+                    "source": "vst_stereo",
+                    "coordinate_space": "head",
+                    "transform_space": "head",
+                    "state": "tracked",
+                    "confidence": 0.9,
+                    "depth_source": "pov_stereo_triangulation",
+                    "depth_confidence": "high",
+                    "timestamp_ms": 1_000.0,
+                    "transform": {
+                        "position": [0.0, 0.0, -1.0],
+                        "rotation_xyzw": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0],
+                    },
+                    "source_coordinate": {"head_position_m": [0.0, 0.0, -1.0]},
+                }
+            ],
+            "cards": [{"card_id": "CardAnchor", "target_id": "vst_stereo-active-1"}],
+        }
+        second = json.loads(json.dumps(first))
+        second["sequence"] = 2
+        second["timestamp_ms"] = 1_033
+        second["targets"][0]["timestamp_ms"] = 1_033.0
+        second["targets"][0]["transform"]["position"] = [0.2, 0.0, -1.0]
+        second["targets"][0]["source_coordinate"]["head_position_m"] = [0.2, 0.0, -1.0]
+
+        publisher.apply_position_one_euro_filter(first, filter_state)
+        filtered = publisher.apply_position_one_euro_filter(second, filter_state)
+
+        target = filtered["targets"][0]
+        filtered_position = target["transform"]["position"]
+        self.assertGreater(filtered_position[0], 0.0)
+        self.assertLess(filtered_position[0], 0.2)
+        self.assertEqual(target["position_filter"]["algorithm"], "one_euro")
+        self.assertTrue(target["position_filter"]["enabled"])
+        self.assertEqual(target["position_filter"]["raw_position_m"], [0.2, 0.0, -1.0])
+        self.assertEqual(target["position_filter"]["filtered_position_m"], filtered_position)
+        self.assertEqual(target["source_coordinate"]["head_position_m"], [0.2, 0.0, -1.0])
+        self.assertEqual(target["source_coordinate"]["filtered_head_position_m"], filtered_position)
+
+        event = publisher.build_depth_trace_event(
+            message=filtered,
+            diagnostics={"reason": "target_ready", "last_pair_frame_id": 33},
+        )
+        self.assertEqual(event["position_filter"]["algorithm"], "one_euro")
+        self.assertEqual(event["raw_head_position_m"], [0.2, 0.0, -1.0])
+        self.assertEqual(event["filtered_head_position_m"], filtered_position)
 
     def test_live_stereo_message_waits_for_matched_left_right_frame_ids(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
@@ -863,6 +972,12 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(event["raw_right_track_id"], 2)
         self.assertEqual(event["candidate_count"], 4)
         self.assertEqual(event["switch_reason"], "active_continuity")
+        self.assertEqual(event["active_state"], "TRACKING_STEREO")
+        self.assertTrue(event["left_active_seen"])
+        self.assertTrue(event["right_active_seen"])
+        self.assertEqual(event["mono_missing_frames"], 0)
+        self.assertEqual(event["both_missing_frames"], 0)
+        self.assertTrue(event["depth_update_allowed"])
         self.assertFalse(event["held_last_pose"])
 
     def test_depth_trace_event_records_accepted_target_depth_details(self):
@@ -947,7 +1062,7 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
     def test_depth_trace_writer_appends_rejected_events_as_jsonl(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
 
-        trace_path = ROOT / ".tmp" / "tests" / "depth_estimation_trace.jsonl"
+        trace_path = ROOT / ".tmp" / "tests" / f"depth_estimation_trace_{uuid.uuid4().hex}.jsonl"
         trace_path.parent.mkdir(parents=True, exist_ok=True)
         trace_path.unlink(missing_ok=True)
         publisher.write_depth_trace_event(
@@ -968,7 +1083,10 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         )
 
         rows = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
-        trace_path.unlink(missing_ok=True)
+        try:
+            trace_path.unlink(missing_ok=True)
+        except PermissionError:
+            pass
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["event"], "rejected")

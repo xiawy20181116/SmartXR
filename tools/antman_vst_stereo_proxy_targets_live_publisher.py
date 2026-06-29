@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import math
 import socket
 import sys
 import threading
@@ -42,6 +43,10 @@ from smartxr.transport import (  # noqa: E402
 _DEPTH_TRACE_CONTEXT: dict[int, dict[str, Any]] = {}
 DEFAULT_MAX_PAIR_CAPTURE_DELTA_MS = 10.0
 DEFAULT_SOURCE_HZ = 45.0
+HELD_DEPTH_SOURCE = "held_last_good_depth"
+DEFAULT_POSITION_FILTER_MIN_CUTOFF = 1.0
+DEFAULT_POSITION_FILTER_BETA = 0.08
+DEFAULT_POSITION_FILTER_D_CUTOFF = 1.0
 
 
 def is_proxy_targets_request(first_line: str) -> bool:
@@ -135,6 +140,119 @@ class BroadcastHub:
         return delivered
 
 
+def _one_euro_alpha(cutoff_hz: float, dt_s: float) -> float:
+    cutoff = max(float(cutoff_hz), 1e-6)
+    dt = max(float(dt_s), 1e-6)
+    tau = 1.0 / (2.0 * math.pi * cutoff)
+    return 1.0 / (1.0 + tau / dt)
+
+
+def _low_pass(current: float, previous: float, alpha: float) -> float:
+    return alpha * current + (1.0 - alpha) * previous
+
+
+class OneEuroScalarFilter:
+    def __init__(self, *, min_cutoff: float, beta: float, d_cutoff: float) -> None:
+        self.min_cutoff = max(float(min_cutoff), 1e-6)
+        self.beta = max(float(beta), 0.0)
+        self.d_cutoff = max(float(d_cutoff), 1e-6)
+        self._raw_prev: float | None = None
+        self._filtered_prev: float | None = None
+        self._derivative_prev: float | None = None
+
+    def reset(self) -> None:
+        self._raw_prev = None
+        self._filtered_prev = None
+        self._derivative_prev = None
+
+    def filter(self, value: float, dt_s: float | None) -> float:
+        current = float(value)
+        if self._raw_prev is None or self._filtered_prev is None or dt_s is None:
+            self._raw_prev = current
+            self._filtered_prev = current
+            self._derivative_prev = 0.0
+            return current
+
+        dt = max(float(dt_s), 1e-6)
+        derivative = (current - self._raw_prev) / dt
+        derivative_alpha = _one_euro_alpha(self.d_cutoff, dt)
+        derivative_prev = self._derivative_prev if self._derivative_prev is not None else derivative
+        filtered_derivative = _low_pass(derivative, derivative_prev, derivative_alpha)
+        cutoff = self.min_cutoff + self.beta * abs(filtered_derivative)
+        value_alpha = _one_euro_alpha(cutoff, dt)
+        filtered = _low_pass(current, self._filtered_prev, value_alpha)
+
+        self._raw_prev = current
+        self._filtered_prev = filtered
+        self._derivative_prev = filtered_derivative
+        return filtered
+
+
+class OneEuroVector3Filter:
+    def __init__(
+        self,
+        *,
+        min_cutoff: float = DEFAULT_POSITION_FILTER_MIN_CUTOFF,
+        beta: float = DEFAULT_POSITION_FILTER_BETA,
+        d_cutoff: float = DEFAULT_POSITION_FILTER_D_CUTOFF,
+        fallback_hz: float = DEFAULT_SOURCE_HZ,
+    ) -> None:
+        self.min_cutoff = max(float(min_cutoff), 1e-6)
+        self.beta = max(float(beta), 0.0)
+        self.d_cutoff = max(float(d_cutoff), 1e-6)
+        self.fallback_hz = max(float(fallback_hz), 0.1)
+        self._axes = [
+            OneEuroScalarFilter(min_cutoff=self.min_cutoff, beta=self.beta, d_cutoff=self.d_cutoff),
+            OneEuroScalarFilter(min_cutoff=self.min_cutoff, beta=self.beta, d_cutoff=self.d_cutoff),
+            OneEuroScalarFilter(min_cutoff=self.min_cutoff, beta=self.beta, d_cutoff=self.d_cutoff),
+        ]
+        self._timestamp_ms: float | None = None
+
+    def reset(self) -> None:
+        for axis in self._axes:
+            axis.reset()
+        self._timestamp_ms = None
+
+    def settings(self) -> dict[str, float]:
+        return {
+            "min_cutoff": self.min_cutoff,
+            "beta": self.beta,
+            "d_cutoff": self.d_cutoff,
+            "fallback_hz": self.fallback_hz,
+        }
+
+    def filter(
+        self,
+        position: list[float] | tuple[float, float, float],
+        *,
+        timestamp_ms: float | None = None,
+        reset: bool = False,
+    ) -> tuple[list[float], dict[str, Any]]:
+        if reset:
+            self.reset()
+        raw = [float(position[0]), float(position[1]), float(position[2])]
+        if timestamp_ms is None:
+            dt_s = None if self._timestamp_ms is None else 1.0 / self.fallback_hz
+        elif self._timestamp_ms is None:
+            dt_s = None
+        else:
+            dt_s = max((float(timestamp_ms) - self._timestamp_ms) / 1000.0, 1e-6)
+        filtered = [axis.filter(value, dt_s) for axis, value in zip(self._axes, raw)]
+        if timestamp_ms is None:
+            previous = self._timestamp_ms or 0.0
+            self._timestamp_ms = previous + (1000.0 / self.fallback_hz)
+        else:
+            self._timestamp_ms = float(timestamp_ms)
+        diagnostics = {
+            "algorithm": "one_euro",
+            "enabled": True,
+            "dt_ms": None if dt_s is None else dt_s * 1000.0,
+            "reset": bool(reset),
+            **self.settings(),
+        }
+        return filtered, diagnostics
+
+
 class LatestStereoPublishState:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -179,6 +297,7 @@ def _empty_diagnostics(reason: str) -> dict[str, Any]:
             "pair_build_ms": 0.0,
             "stabilizer_ms": 0.0,
             "message_build_ms": 0.0,
+            "position_filter_ms": 0.0,
             "publish_ms": None,
             "total_ms": 0.0,
         },
@@ -537,6 +656,21 @@ def _bbox_dict_from_xyxy(bbox_xyxy: list[float] | tuple[float, float, float, flo
     }
 
 
+def _bbox_top_center_from_xyxy(bbox_xyxy: list[float] | tuple[float, float, float, float]) -> list[float]:
+    x1, y1, x2, _y2 = (float(value) for value in bbox_xyxy)
+    return [(x1 + x2) * 0.5, y1]
+
+
+def _positive_float_or_none(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0.0:
+        return None
+    return parsed
+
+
 def _record_to_pair(record: dict[str, Any]) -> StereoDetectionPair:
     return StereoDetectionPair(
         pair_id=str(record["pair_id"]),
@@ -546,6 +680,55 @@ def _record_to_pair(record: dict[str, Any]) -> StereoDetectionPair:
         right_bbox_xyxy=tuple(float(value) for value in record["right_bbox_xyxy"]),
         confidence=float(record.get("confidence", 1.0)),
     )
+
+
+def _held_stereo_record(
+    record: dict[str, Any],
+    calibration: Any,
+    *,
+    depth_m: float,
+    gate_config: StereoGateConfig,
+) -> dict[str, Any]:
+    left_bbox = list(record["left_bbox_xyxy"])
+    right_bbox = list(record["right_bbox_xyxy"])
+    left_anchor = _bbox_top_center_from_xyxy(left_bbox)
+    right_anchor = _bbox_top_center_from_xyxy(right_bbox)
+    left_size = _bbox_dict_from_xyxy(left_bbox)
+    right_size = _bbox_dict_from_xyxy(right_bbox)
+    disparity_px = float(left_anchor[0] - right_anchor[0])
+    vertical_error_px = float(left_anchor[1] - right_anchor[1])
+    box_width_ratio = left_size["w"] / max(right_size["w"], 1.0)
+    box_height_ratio = left_size["h"] / max(right_size["h"], 1.0)
+    return {
+        "schema_version": 1,
+        "pair_id": str(record["pair_id"]),
+        "frame_id": int(record["frame_id"]),
+        "frame_provenance": calibration.frame_provenance,
+        "person_id": str(record["person_id"]),
+        "bbox": {
+            "left_xyxy": left_bbox,
+            "right_xyxy": right_bbox,
+        },
+        "confidence": float(record.get("confidence", 1.0)),
+        "anchor_kind": ANCHOR_KIND_BBOX_TOP_CENTER,
+        "left_anchor_px": left_anchor,
+        "right_anchor_px": right_anchor,
+        "disparity_px": disparity_px,
+        "vertical_error_px": vertical_error_px,
+        "box_width_ratio": box_width_ratio,
+        "box_height_ratio": box_height_ratio,
+        "depth_m": float(depth_m),
+        "position": calibration.left.unproject(left_anchor[0], left_anchor[1], depth_m),
+        "depth_source": HELD_DEPTH_SOURCE,
+        "is_ground_truth": False,
+        "pose_quality": "stereo",
+        "calibration_ref": calibration.calibration_id,
+        "stereo_ok": False,
+        "rejection_reason": "depth_update_gated",
+        "gates": gate_config.to_dict(),
+        "depth_update_allowed": False,
+        "held_reason": record.get("selection", {}).get("held_reason"),
+    }
 
 
 def build_proxy_targets_message_from_stereo_bbox_record(
@@ -571,14 +754,36 @@ def build_proxy_targets_message_from_stereo_bbox_record(
         max_box_ratio=max_box_ratio,
         max_vertical_error_px=max_vertical_error_px,
     )
-    stereo_record = triangulate_detection_pair(
-        _record_to_pair(record),
-        calibration,
-        anchor_kind=ANCHOR_KIND_BBOX_TOP_CENTER,
-        gate_config=gate_config,
-    )
-    if stereo_record.get("stereo_ok") is not True:
-        return None
+    selection = record.get("selection", {})
+    if not isinstance(selection, dict):
+        selection = {}
+    depth_update_allowed = selection.get("depth_update_allowed", True) is not False
+    if depth_update_allowed:
+        stereo_record = triangulate_detection_pair(
+            _record_to_pair(record),
+            calibration,
+            anchor_kind=ANCHOR_KIND_BBOX_TOP_CENTER,
+            gate_config=gate_config,
+        )
+        if stereo_record.get("stereo_ok") is not True:
+            return None
+        depth_m = float(stereo_record["depth_m"])
+        depth_source = stereo_record["depth_source"]
+        depth_confidence = "high"
+    else:
+        depth_m = _positive_float_or_none(selection.get("last_good_depth"))
+        if depth_m is None:
+            depth_m = _positive_float_or_none(selection.get("estimated_depth_m"))
+        if depth_m is None:
+            return None
+        stereo_record = _held_stereo_record(
+            record,
+            calibration,
+            depth_m=depth_m,
+            gate_config=gate_config,
+        )
+        depth_source = HELD_DEPTH_SOURCE
+        depth_confidence = "low"
 
     left_bbox = list(record["left_bbox_xyxy"])
     source_payload = {
@@ -603,19 +808,23 @@ def build_proxy_targets_message_from_stereo_bbox_record(
                 "track_id": str(record["person_id"]),
                 "confidence": float(record.get("confidence", 1.0)),
                 "bbox": _bbox_dict_from_xyxy(left_bbox),
-                "depth_m": float(stereo_record["depth_m"]),
-                "depth_source": stereo_record["depth_source"],
-                "depth_confidence": "high",
+                "depth_m": float(depth_m),
+                "depth_source": depth_source,
+                "depth_confidence": depth_confidence,
                 "stereo": {
                     "pair_id": stereo_record["pair_id"],
                     "frame_id": stereo_record["frame_id"],
-                    "depth_source": stereo_record["depth_source"],
+                    "depth_source": depth_source,
+                    "depth_confidence": depth_confidence,
                     "anchor_kind": stereo_record["anchor_kind"],
                     "left_anchor_px": stereo_record["left_anchor_px"],
                     "right_anchor_px": stereo_record["right_anchor_px"],
                     "disparity_px": stereo_record["disparity_px"],
                     "vertical_error_px": stereo_record["vertical_error_px"],
                     "calibration_ref": stereo_record["calibration_ref"],
+                    "depth_update_allowed": bool(depth_update_allowed),
+                    "stereo_ok": stereo_record.get("stereo_ok"),
+                    "rejection_reason": stereo_record.get("rejection_reason"),
                 },
             }
         ],
@@ -646,6 +855,59 @@ def _vector3_from_mapping(value: Any) -> list[float] | None:
         return [float(value["x"]), float(value["y"]), float(value["z"])]
     except (KeyError, TypeError, ValueError):
         return None
+
+
+def _message_target_timestamp_ms(message: dict[str, Any], target: dict[str, Any]) -> float | None:
+    for value in (target.get("timestamp_ms"), message.get("timestamp_ms")):
+        try:
+            if value is not None:
+                return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _position_filter_reset_requested(selection: dict[str, Any] | None) -> bool:
+    if not isinstance(selection, dict):
+        return False
+    return str(selection.get("switch_reason", "")) in {"initial", "active_missing_switch", "switch_confirmed"}
+
+
+def apply_position_one_euro_filter(
+    message: dict[str, Any],
+    filter_state: OneEuroVector3Filter,
+    *,
+    selection: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    targets = message.get("targets")
+    if not isinstance(targets, list) or not targets:
+        return message
+    target = targets[0]
+    if not isinstance(target, dict):
+        return message
+    transform = target.get("transform")
+    if not isinstance(transform, dict):
+        return message
+    raw_position = _vector3_from_mapping(transform.get("position"))
+    if raw_position is None:
+        return message
+
+    timestamp_ms = _message_target_timestamp_ms(message, target)
+    reset = _position_filter_reset_requested(selection)
+    filtered_position, diagnostics = filter_state.filter(raw_position, timestamp_ms=timestamp_ms, reset=reset)
+    filter_context = {
+        **diagnostics,
+        "raw_position_m": raw_position,
+        "filtered_position_m": filtered_position,
+    }
+    transform["position"] = filtered_position
+    target["position_filter"] = copy.deepcopy(filter_context)
+    source_coordinate = target.get("source_coordinate")
+    if isinstance(source_coordinate, dict):
+        source_coordinate["raw_head_position_m"] = raw_position
+        source_coordinate["filtered_head_position_m"] = filtered_position
+        source_coordinate["position_filter"] = copy.deepcopy(filter_context)
+    return message
 
 
 def build_depth_trace_event(
@@ -757,10 +1019,16 @@ def build_depth_trace_event(
             "source_frame": source_frame,
             "camera_point_m": _vector3_from_mapping(source_coordinate.get("camera_point_m")),
             "head_position_m": _vector3_from_mapping(source_coordinate.get("head_position_m")),
+            "published_position_m": _vector3_from_mapping(target.get("transform", {}).get("position")),
             "bbox": trace_context.get("bbox", target.get("bbox", {})),
             "stereo": stereo,
         }
     )
+    position_filter = target.get("position_filter") or source_coordinate.get("position_filter")
+    if isinstance(position_filter, dict):
+        event["position_filter"] = copy.deepcopy(position_filter)
+        event["raw_head_position_m"] = _vector3_from_mapping(position_filter.get("raw_position_m"))
+        event["filtered_head_position_m"] = _vector3_from_mapping(position_filter.get("filtered_position_m"))
     selection = trace_context.get("selection") or diagnostics
     for key in (
         "active_target_id",
@@ -773,6 +1041,17 @@ def build_depth_trace_event(
         "switch_reason",
         "active_age_frames",
         "held_last_pose",
+        "active_state",
+        "left_active_seen",
+        "right_active_seen",
+        "mono_missing_frames",
+        "both_missing_frames",
+        "held_reason",
+        "depth_update_allowed",
+        "depth_gate_reason",
+        "last_good_depth",
+        "reacquire_candidate_age",
+        "switch_block_reason",
     ):
         if key in selection:
             event[key] = selection[key]
@@ -897,6 +1176,7 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
     sleep_seconds: float = 0.005,
     max_vertical_error_px: float | None = None,
     target_stabilizer: StereoActiveTargetStabilizer | None = None,
+    position_filter: OneEuroVector3Filter | None = None,
     max_pair_capture_delta_ms: float | None = DEFAULT_MAX_PAIR_CAPTURE_DELTA_MS,
     target_source_hz: float = DEFAULT_SOURCE_HZ,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
@@ -1010,6 +1290,19 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
                     right_frame_id=right_frame_id,
                 )
                 continue
+            if position_filter is not None:
+                position_filter_started = time.perf_counter()
+                message = apply_position_one_euro_filter(
+                    message,
+                    position_filter,
+                    selection=record.get("selection") if isinstance(record.get("selection"), dict) else None,
+                )
+                target_filter = message["targets"][0].get("position_filter", {}) if message.get("targets") else {}
+                if isinstance(target_filter, dict):
+                    diagnostics["position_filter"] = copy.deepcopy(target_filter)
+                stage_timing["position_filter_ms"] = (
+                    float(stage_timing.get("position_filter_ms", 0.0)) + _elapsed_ms(position_filter_started)
+                )
             diagnostics["reason"] = "target_ready"
             diagnostics["non_publish_reason"] = None
             stage_timing["total_ms"] = _elapsed_ms(total_started)
@@ -1038,10 +1331,24 @@ def _detector_loop(
     max_vertical_error_px: float | None,
     max_pair_capture_delta_ms: float | None,
     target_source_hz: float,
+    position_filter_enabled: bool = True,
+    position_filter_min_cutoff: float = DEFAULT_POSITION_FILTER_MIN_CUTOFF,
+    position_filter_beta: float = DEFAULT_POSITION_FILTER_BETA,
+    position_filter_d_cutoff: float = DEFAULT_POSITION_FILTER_D_CUTOFF,
 ) -> None:
     detector_sequence = 0
     empty_windows = 0
     target_stabilizer = StereoActiveTargetStabilizer()
+    position_filter = (
+        OneEuroVector3Filter(
+            min_cutoff=position_filter_min_cutoff,
+            beta=position_filter_beta,
+            d_cutoff=position_filter_d_cutoff,
+            fallback_hz=target_source_hz,
+        )
+        if position_filter_enabled
+        else None
+    )
     while True:
         if hub.client_count() == 0:
             time.sleep(0.05)
@@ -1059,6 +1366,7 @@ def _detector_loop(
             max_empty_reads=max_empty_reads,
             max_vertical_error_px=max_vertical_error_px,
             target_stabilizer=target_stabilizer,
+            position_filter=position_filter,
             max_pair_capture_delta_ms=max_pair_capture_delta_ms,
             target_source_hz=target_source_hz,
         )
@@ -1110,6 +1418,10 @@ def _broadcast_loop(
     depth_trace: Path | None,
     max_pair_capture_delta_ms: float | None,
     target_source_hz: float,
+    position_filter_enabled: bool = True,
+    position_filter_min_cutoff: float = DEFAULT_POSITION_FILTER_MIN_CUTOFF,
+    position_filter_beta: float = DEFAULT_POSITION_FILTER_BETA,
+    position_filter_d_cutoff: float = DEFAULT_POSITION_FILTER_D_CUTOFF,
 ) -> None:
     interval_s = 1.0 / max(hz, 0.1)
     sequence = 0
@@ -1133,6 +1445,10 @@ def _broadcast_loop(
             "max_vertical_error_px": max_vertical_error_px,
             "max_pair_capture_delta_ms": max_pair_capture_delta_ms,
             "target_source_hz": target_source_hz,
+            "position_filter_enabled": position_filter_enabled,
+            "position_filter_min_cutoff": position_filter_min_cutoff,
+            "position_filter_beta": position_filter_beta,
+            "position_filter_d_cutoff": position_filter_d_cutoff,
         },
         daemon=True,
     ).start()
@@ -1240,6 +1556,10 @@ def serve(args: argparse.Namespace) -> int:
                     "depth_trace": args.depth_trace,
                     "max_pair_capture_delta_ms": args.max_pair_capture_delta_ms,
                     "target_source_hz": args.target_source_hz,
+                    "position_filter_enabled": not args.disable_position_one_euro_filter,
+                    "position_filter_min_cutoff": args.position_filter_min_cutoff,
+                    "position_filter_beta": args.position_filter_beta,
+                    "position_filter_d_cutoff": args.position_filter_d_cutoff,
                 },
                 daemon=True,
             ).start()
@@ -1275,6 +1595,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-pair-capture-delta-ms", type=float, default=DEFAULT_MAX_PAIR_CAPTURE_DELTA_MS)
     parser.add_argument("--target-source-hz", type=float, default=DEFAULT_SOURCE_HZ)
     parser.add_argument("--depth-trace", type=Path, default=None)
+    parser.add_argument("--disable-position-one-euro-filter", action="store_true")
+    parser.add_argument("--position-filter-min-cutoff", type=float, default=DEFAULT_POSITION_FILTER_MIN_CUTOFF)
+    parser.add_argument("--position-filter-beta", type=float, default=DEFAULT_POSITION_FILTER_BETA)
+    parser.add_argument("--position-filter-d-cutoff", type=float, default=DEFAULT_POSITION_FILTER_D_CUTOFF)
     parser.add_argument("--recorded-width", type=int, default=880)
     parser.add_argument("--recorded-height", type=int, default=660)
     parser.add_argument("--vst-reader", choices=("vst_ai_shm", "legacy"), default="vst_ai_shm")

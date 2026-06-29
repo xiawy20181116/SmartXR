@@ -10,6 +10,8 @@ param(
     [double]$Hz = 20.0,
     [double]$SourceHz = 45.0,
     [double]$MinConfidence = 0.5,
+    [double]$PositionFilterMinCutoff = 1.0,
+    [double]$PositionFilterBeta = 0.08,
     [int]$RecordedWidth = 880,
     [int]$RecordedHeight = 660,
     [int]$LogEvery = 20,
@@ -200,6 +202,7 @@ Write-Host "[sender] SmartXR stereo package replay sender"
 Write-Host "[sender] WebSocket: $WsUrl"
 Write-Host "[sender] Package: $ResolvedPackageDir"
 Write-Host "[sender] Replay timing: $ReplayTiming source_hz=$SourceHz publish_hz=$Hz"
+Write-Host "[sender] Position filter: min_cutoff=$PositionFilterMinCutoff beta=$PositionFilterBeta"
 Write-Host "[sender] Depth trace: $DepthTraceFile"
 Write-Host "[sender] A healthy replay should print published stereo seq=..."
 `$PublisherArgs = @(
@@ -212,6 +215,8 @@ Write-Host "[sender] A healthy replay should print published stereo seq=..."
   "--port", "$Port",
   "--hz", "$Hz",
   "--min-confidence", "$MinConfidence",
+  "--position-filter-min-cutoff", "$PositionFilterMinCutoff",
+  "--position-filter-beta", "$PositionFilterBeta",
   "--recorded-width", "$RecordedWidth",
   "--recorded-height", "$RecordedHeight",
   "--log-every", "$LogEvery",
@@ -360,6 +365,7 @@ Write-Host "It falls back to three visible PowerShell windows otherwise."
 Write-Host "WebSocket: $WsUrl"
 Write-Host "Package:   $ResolvedPackageDir"
 Write-Host "Timing:    $ReplayTiming source_hz=$SourceHz publish_hz=$Hz"
+Write-Host "Filter:    min_cutoff=$PositionFilterMinCutoff beta=$PositionFilterBeta"
 Write-Host "Demo only: $DemoOnly"
 Write-Host "Work dir:  $WorkDir"
 Write-Host "Depth trace: $DepthTraceFile"

@@ -210,6 +210,16 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn('Open-RunnerTab -WindowName $WindowName -Title "SmartXR proxy_targets monitor"', source)
         self.assertIn("package proxy_targets live replay publisher listening", source)
 
+    def test_stereo_package_replay_runner_exposes_position_filter_tuning(self):
+        self.assertTrue(STEREO_PACKAGE_REPLAY_RUNNER.exists())
+        source = STEREO_PACKAGE_REPLAY_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("[double]$PositionFilterMinCutoff = 1.0", source)
+        self.assertIn("[double]$PositionFilterBeta = 0.08", source)
+        self.assertIn('"--position-filter-min-cutoff", "$PositionFilterMinCutoff"', source)
+        self.assertIn('"--position-filter-beta", "$PositionFilterBeta"', source)
+        self.assertIn("Position filter: min_cutoff=$PositionFilterMinCutoff beta=$PositionFilterBeta", source)
+
     def test_stereo_package_replay_runner_supports_demo_only_receiver(self):
         self.assertTrue(STEREO_PACKAGE_REPLAY_RUNNER.exists())
         source = STEREO_PACKAGE_REPLAY_RUNNER.read_text(encoding="utf-8")

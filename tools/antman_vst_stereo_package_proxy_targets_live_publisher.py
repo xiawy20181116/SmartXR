@@ -19,6 +19,9 @@ if str(_ROOT) not in sys.path:
 
 from antman_vst_stereo_proxy_targets_live_publisher import (  # noqa: E402
     DEFAULT_MAX_PAIR_CAPTURE_DELTA_MS,
+    DEFAULT_POSITION_FILTER_BETA,
+    DEFAULT_POSITION_FILTER_D_CUTOFF,
+    DEFAULT_POSITION_FILTER_MIN_CUTOFF,
     DEFAULT_SOURCE_HZ,
     BroadcastHub,
     _broadcast_loop,
@@ -300,6 +303,10 @@ def serve(args: argparse.Namespace) -> int:
                     "depth_trace": args.depth_trace,
                     "max_pair_capture_delta_ms": args.max_pair_capture_delta_ms,
                     "target_source_hz": args.source_hz,
+                    "position_filter_enabled": not args.disable_position_one_euro_filter,
+                    "position_filter_min_cutoff": args.position_filter_min_cutoff,
+                    "position_filter_beta": args.position_filter_beta,
+                    "position_filter_d_cutoff": args.position_filter_d_cutoff,
                 },
                 daemon=True,
             ).start()
@@ -338,6 +345,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-vertical-error-px", type=float, default=None)
     parser.add_argument("--max-pair-capture-delta-ms", type=float, default=DEFAULT_MAX_PAIR_CAPTURE_DELTA_MS)
     parser.add_argument("--depth-trace", type=Path, default=None)
+    parser.add_argument("--disable-position-one-euro-filter", action="store_true")
+    parser.add_argument("--position-filter-min-cutoff", type=float, default=DEFAULT_POSITION_FILTER_MIN_CUTOFF)
+    parser.add_argument("--position-filter-beta", type=float, default=DEFAULT_POSITION_FILTER_BETA)
+    parser.add_argument("--position-filter-d-cutoff", type=float, default=DEFAULT_POSITION_FILTER_D_CUTOFF)
     parser.add_argument("--recorded-width", type=int, default=880)
     parser.add_argument("--recorded-height", type=int, default=660)
     parser.add_argument("--model", default="yolov8n.pt")
