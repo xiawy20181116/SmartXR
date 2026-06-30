@@ -18,7 +18,12 @@ var _last_error := "-"
 var _last_source_coordinate := {}
 var _last_world_from_head_applied := false
 var _last_local_position := Vector3.ZERO
+var _last_runtime_local_position := Vector3.ZERO
 var _last_world_position := Vector3.ZERO
+var _last_head_z_mode := "negative_z_forward"
+var _last_anchor_mode := "dynamic"
+var _last_world_latched := false
+var _last_world_latch_state := "-"
 
 
 func set_packet_preview(preview: String) -> void:
@@ -81,7 +86,12 @@ func status_values(runtime_values: Dictionary) -> Dictionary:
 		"source_coordinate": _last_source_coordinate,
 		"world_from_head_applied": _last_world_from_head_applied,
 		"local_position": _last_local_position,
+		"runtime_local_position": _last_runtime_local_position,
 		"world_position": _last_world_position,
+		"head_z_mode": _last_head_z_mode,
+		"anchor_mode": _last_anchor_mode,
+		"world_latched": _last_world_latched,
+		"world_latch_state": _last_world_latch_state,
 		"error": _last_error,
 	}
 
@@ -114,4 +124,9 @@ func _record_head_to_world_info(info: Dictionary) -> void:
 		return
 	_last_world_from_head_applied = bool(info.get("world_from_head_applied", false))
 	_last_local_position = vector3_from_status_array(info.get("local_position", []), _last_local_position)
+	_last_runtime_local_position = vector3_from_status_array(info.get("runtime_local_position", []), _last_runtime_local_position)
 	_last_world_position = vector3_from_status_array(info.get("world_position", []), _last_world_position)
+	_last_head_z_mode = str(info.get("head_z_mode", _last_head_z_mode))
+	_last_anchor_mode = str(info.get("anchor_mode", _last_anchor_mode))
+	_last_world_latched = bool(info.get("world_latched", false))
+	_last_world_latch_state = str(info.get("world_latch_state", _last_world_latch_state))

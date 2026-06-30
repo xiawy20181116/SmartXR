@@ -95,6 +95,8 @@ func _run_checks() -> String:
 		_checks["proxy_status_summary"] = str(proxy_status.get("source_coordinate_summary", "")) == "head right_eye fov=70.0x43.0 eye2head=true"
 		_checks["proxy_status_last_command"] = str(proxy_status.get("last_command", "")) == "probe_cmd"
 		_checks["proxy_status_sequence"] = int(proxy_status.get("sequence", -999)) == 7
+		_checks["proxy_status_runtime_local_position"] = str(proxy_status.get("proxy_runtime_local_position", "")) == "0.40 0.50 -0.60"
+		_checks["proxy_status_head_z_mode"] = str(proxy_status.get("proxy_head_z_mode", "")) == "positive_z_forward"
 
 	var overlay_status = _read_json(hud.passthrough_overlay_status_path)
 	_checks["overlay_status_is_dict"] = typeof(overlay_status) == TYPE_DICTIONARY
@@ -203,7 +205,9 @@ func _make_snapshot() -> Dictionary:
 			},
 			"world_from_head_applied": true,
 			"local_position": Vector3(0.4, 0.5, 0.6),
+			"runtime_local_position": Vector3(0.4, 0.5, -0.6),
 			"world_position": Vector3(0.7, 0.8, 0.9),
+			"head_z_mode": "positive_z_forward",
 			"error": "-",
 		},
 		"passthrough_overlay": {

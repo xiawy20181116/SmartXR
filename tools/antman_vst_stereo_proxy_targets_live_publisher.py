@@ -30,6 +30,7 @@ from collect_stereo_keypoint_pairs import (  # noqa: E402
 )
 from dump_antman_vst_humantrackor_jsonl import DEFAULT_ANTMAN_ROOT, startup_error_status  # noqa: E402
 from smartxr.publisher import normalize_source_payload  # noqa: E402
+from smartxr.schema import load_card_offset_rule  # noqa: E402
 from smartxr.stereo_depth import (  # noqa: E402
     ANCHOR_KIND_BBOX_TOP_CENTER,
     SCENE_STEREO_28,
@@ -824,6 +825,7 @@ def build_proxy_targets_message_from_stereo_bbox_record(
     *,
     sequence: int,
     card_id: str = "CardAnchor",
+    offset_rule: dict[str, Any] | None = None,
     recorded_width: int = 880,
     recorded_height: int = 660,
     min_confidence: float = 0.5,
@@ -932,7 +934,7 @@ def build_proxy_targets_message_from_stereo_bbox_record(
         source_payload["detections"][0]["stereo"]["keypoint_anchor"] = copy.deepcopy(keypoint_anchor)
     if isinstance(pose_association, dict):
         source_payload["detections"][0]["stereo"]["pose_association"] = copy.deepcopy(pose_association)
-    message = normalize_source_payload(source_payload, sequence=sequence, card_id=card_id)
+    message = normalize_source_payload(source_payload, sequence=sequence, card_id=card_id, offset_rule=offset_rule)
     message["timestamp_ms"] = source_payload["timestamp_ms"]
     if not message["targets"]:
         return None
@@ -1391,6 +1393,7 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
     right_pose_estimator: Any | None = None,
     sequence: int,
     card_id: str = "CardAnchor",
+    offset_rule: dict[str, Any] | None = None,
     recorded_width: int = 880,
     recorded_height: int = 660,
     min_confidence: float = 0.5,
@@ -1530,6 +1533,7 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
                 record,
                 sequence=sequence,
                 card_id=card_id,
+                offset_rule=offset_rule,
                 recorded_width=recorded_width,
                 recorded_height=recorded_height,
                 min_confidence=min_confidence,
@@ -1597,6 +1601,7 @@ def _detector_loop(
     position_filter_min_cutoff: float = DEFAULT_POSITION_FILTER_MIN_CUTOFF,
     position_filter_beta: float = DEFAULT_POSITION_FILTER_BETA,
     position_filter_d_cutoff: float = DEFAULT_POSITION_FILTER_D_CUTOFF,
+    offset_rule: dict[str, Any] | None = None,
 ) -> None:
     detector_sequence = 0
     empty_windows = 0
@@ -1624,6 +1629,7 @@ def _detector_loop(
             right_pose_estimator=right_pose_estimator,
             sequence=detector_sequence,
             card_id=card_id,
+            offset_rule=offset_rule,
             recorded_width=recorded_width,
             recorded_height=recorded_height,
             min_confidence=min_confidence,
@@ -1694,6 +1700,7 @@ def _broadcast_loop(
     position_filter_min_cutoff: float = DEFAULT_POSITION_FILTER_MIN_CUTOFF,
     position_filter_beta: float = DEFAULT_POSITION_FILTER_BETA,
     position_filter_d_cutoff: float = DEFAULT_POSITION_FILTER_D_CUTOFF,
+    offset_rule: dict[str, Any] | None = None,
 ) -> None:
     interval_s = 1.0 / max(hz, 0.1)
     sequence = 0
@@ -1711,6 +1718,7 @@ def _broadcast_loop(
             "left_pose_estimator": left_pose_estimator,
             "right_pose_estimator": right_pose_estimator,
             "card_id": card_id,
+            "offset_rule": offset_rule,
             "min_confidence": min_confidence,
             "min_keypoint_score": min_keypoint_score,
             "pose_association_margin_px": pose_association_margin_px,
@@ -1817,6 +1825,12 @@ def serve(args: argparse.Namespace) -> int:
                 source_label += " + YOLO pose keypoint anchor"
             print(f"source: {source_label}", flush=True)
             print("waiting for WebSocket client; sent seq appears after a stereo pair passes confidence/depth gates", flush=True)
+            offset_rule = load_card_offset_rule(args.smartxr_options)
+            print(
+                "card_offset_rule=%s"
+                % json.dumps(offset_rule, ensure_ascii=False, separators=(",", ":")),
+                flush=True,
+            )
             hub = BroadcastHub()
             threading.Thread(
                 target=_broadcast_loop,
@@ -1830,6 +1844,7 @@ def serve(args: argparse.Namespace) -> int:
                     "right_pose_estimator": right_pose_estimator,
                     "hz": args.hz,
                     "card_id": args.card_id,
+                    "offset_rule": offset_rule,
                     "min_confidence": args.min_confidence,
                     "min_keypoint_score": args.min_keypoint_score,
                     "pose_association_margin_px": args.pose_association_margin_px,
@@ -1874,6 +1889,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--hz", type=float, default=20.0)
     parser.add_argument("--card-id", default="CardAnchor")
+    parser.add_argument("--smartxr-options", type=Path, default=None)
     parser.add_argument("--log-every", type=int, default=20)
     parser.add_argument("--min-confidence", type=float, default=0.5)
     parser.add_argument("--max-empty-reads", type=int, default=120)

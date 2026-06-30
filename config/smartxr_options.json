@@ -1,0 +1,14 @@
+{
+  "proxy_targets_anchor_mode": "world_latched",
+  "proxy_targets_head_z_mode": "negative_z_forward",
+  "proxy_targets_card_offset_rule": {
+    "mode": "depth_scaled_right_angle",
+    "offset_space": "world",
+    "depth_scale": 1.3,
+    "depth_offset_m": 2.0,
+    "right_angle_deg": 15.0,
+    "right_width_fraction": 1.5,
+    "up_m": 0.0,
+    "fallback": "hold_last_pose"
+  }
+}

@@ -158,6 +158,39 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(message["cards"][0]["card_id"], "StereoCard")
         self.assertEqual(validator.validate_message(message), [])
 
+    def test_builds_message_with_configured_card_offset_rule(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+        offset_rule = {
+            "mode": "depth_scaled_right_half_width",
+            "offset_space": "world",
+            "depth_scale": 1.15,
+            "depth_offset_m": 0.2,
+            "right_width_fraction": -0.5,
+            "up_m": 0.1,
+            "fallback": "hold_last_pose",
+        }
+
+        message = publisher.build_proxy_targets_message_from_stereo_bbox_record(
+            {
+                "source": "vst_stereo_bbox",
+                "frame_id": 10,
+                "pair_id": "pair-000010",
+                "person_id": "person-2-4",
+                "timestamp_ms": 1780911169157,
+                "left_bbox_xyxy": [640, 240, 720, 520],
+                "right_bbox_xyxy": [608, 240, 688, 520],
+                "confidence": 0.91,
+            },
+            sequence=3,
+            card_id="StereoCard",
+            recorded_width=880,
+            recorded_height=660,
+            offset_rule=offset_rule,
+        )
+
+        self.assertIsNotNone(message)
+        self.assertEqual(message["cards"][0]["offset_rule"], offset_rule)
+
     def test_builds_message_from_keypoint_anchor_record(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
 

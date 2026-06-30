@@ -80,7 +80,12 @@ func _run_checks() -> String:
 		"source_coordinate": {"space": "head"},
 		"world_from_head_applied": true,
 		"local_position": Vector3(0.1, 0.2, 0.3),
+		"runtime_local_position": Vector3(0.1, 0.2, -0.3),
 		"world_position": Vector3(0.4, 0.5, 0.6),
+		"head_z_mode": "positive_z_forward",
+		"anchor_mode": "world_latched",
+		"world_latched": true,
+		"world_latch_state": "latched_fresh",
 		"error": "-",
 	})
 	_checks["proxy_fragment_preserves_ordered_contract"] = proxy_snapshot.keys() == [
@@ -105,7 +110,12 @@ func _run_checks() -> String:
 		"source_coordinate",
 		"world_from_head_applied",
 		"local_position",
+		"runtime_local_position",
 		"world_position",
+		"head_z_mode",
+		"anchor_mode",
+		"world_latched",
+		"world_latch_state",
 		"error",
 	]
 	_checks["proxy_fragment_uses_values"] = proxy_snapshot.get("ws_url") == "ws://probe" and proxy_snapshot.get("sequence") == 23

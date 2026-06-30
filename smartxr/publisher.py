@@ -30,6 +30,11 @@ DEFAULT_TARGET_DEPTH_M = 5.0
 VALID_DEPTH_CONFIDENCES = {"high", "low", "none"}
 
 
+def _clone_offset_rule(offset_rule: dict[str, Any] | None) -> dict[str, Any]:
+    rule = offset_rule if isinstance(offset_rule, dict) else default_offset_rule()
+    return json.loads(json.dumps(rule))
+
+
 def build_fake_proxy_targets_message(
     elapsed_s: float,
     target_id: str = "person-7",
@@ -38,6 +43,7 @@ def build_fake_proxy_targets_message(
     depth_m: float = 1.2,
     sequence: int = 0,
     mode: str = "moving",
+    offset_rule: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Synthetic world-space target used for Windows PCMR validation."""
     if mode == "static":
@@ -72,7 +78,7 @@ def build_fake_proxy_targets_message(
             {
                 "card_id": card_id,
                 "target_id": target_id,
-                "offset_rule": default_offset_rule(),
+                "offset_rule": _clone_offset_rule(offset_rule),
             }
         ],
     }
@@ -268,6 +274,26 @@ def _source_coordinate_diagnostics(
     }
 
 
+def _target_size_m_from_bbox(
+    detection: dict[str, Any],
+    root_image: dict[str, Any],
+    default_depth_m: float,
+) -> dict[str, float]:
+    bbox = detection.get("bbox", {})
+    if not isinstance(bbox, dict):
+        return {}
+    _point_vst, camera = _camera_point_from_bbox(detection, root_image, default_depth_m)
+    width_px = max(as_float(bbox.get("w"), 0.0), 0.0)
+    height_px = max(as_float(bbox.get("h"), 0.0), 0.0)
+    fx = max(as_float(camera.get("focal_length_x"), 1.0), 1e-6)
+    fy = max(as_float(camera.get("focal_length_y"), 1.0), 1e-6)
+    depth_m = max(as_float(camera.get("depth_m"), default_depth_m), 0.0)
+    return {
+        "width": width_px * depth_m / fx,
+        "height": height_px * depth_m / fy,
+    }
+
+
 def _transform_from_detection(
     detection: dict[str, Any],
     root_image: dict[str, Any],
@@ -297,6 +323,7 @@ def normalize_source_payload(
     sequence: int | None = None,
     card_id: str = "CardAnchor",
     default_depth_m: float = DEFAULT_TARGET_DEPTH_M,
+    offset_rule: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Convert a VST/external source payload into a canonical proxy_targets
     message. Already-canonical payloads pass through (sequence re-stamped)."""
@@ -304,6 +331,10 @@ def normalize_source_payload(
         message = json.loads(json.dumps(source_payload))
         if sequence is not None:
             message["sequence"] = sequence
+        if offset_rule is not None:
+            for card in message.get("cards", []):
+                if isinstance(card, dict):
+                    card["offset_rule"] = _clone_offset_rule(offset_rule)
         return message
 
     source = str(source_payload.get("source", "vst"))
@@ -342,12 +373,17 @@ def normalize_source_payload(
             "transform": _transform_from_detection(detection, root_image, default_depth_m),
         }
         if isinstance(detection.get("bbox"), dict):
+            target_size_m = _target_size_m_from_bbox(detection, root_image, default_depth_m)
+            if target_size_m:
+                target["target_size_m"] = target_size_m
             target["source_coordinate"] = _source_coordinate_diagnostics(
                 detection,
                 root_image,
                 default_depth_m,
                 target["transform"]["position"],
             )
+            if target_size_m:
+                target["source_coordinate"]["target_size_m"] = target_size_m
         targets.append(target)
 
     cards = []
@@ -356,7 +392,7 @@ def normalize_source_payload(
             {
                 "card_id": card_id,
                 "target_id": targets[0]["target_id"],
-                "offset_rule": default_offset_rule(),
+                "offset_rule": _clone_offset_rule(offset_rule),
             }
         )
 

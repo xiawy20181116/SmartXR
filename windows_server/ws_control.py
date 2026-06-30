@@ -59,6 +59,7 @@ KEY_COMMANDS = {
     "k": "bbox_down",
     "u": "bbox_depth_out",
     "o": "bbox_depth_in",
+    "m": "reset_world_anchor",
 }
 
 EXTENDED_KEYS = {
@@ -251,7 +252,7 @@ async def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     hub = ControlHub()
     stop = asyncio.Event()
     print(f"SmartXR ws_control listening on ws://{host}:{port}/control")
-    print("Keys: W/A/S/D or arrows adjust yaw/pitch, [/ ] depth, +/- angular speed, Space pause, R reset, Q quit.")
+    print("Keys: W/A/S/D or arrows adjust yaw/pitch, [/ ] depth, +/- angular speed, Space pause, R reset, M reset world latch, Q quit.")
     print("Mock bbox: B toggle mode, J/L move cx, I/K move cy, U/O depth.")
     if websockets is None:
         await _serve_stdlib(host, port, hub, stop)

@@ -68,6 +68,7 @@ func _run_checks() -> String:
 	direct_node.name = "DirectTarget"
 	stage.add_child(direct_node)
 	direct_node.position = Vector3(1.0, 2.0, 3.0)
+	direct_node.set_meta("proxy_target_size_m", Vector3(0.8, 1.6, 0.0))
 	var direct_adapter = adapter_class.new(stage, direct_node)
 
 	_checks["register_returns_true"] = registry.register("direct", direct_adapter) == true
@@ -91,6 +92,9 @@ func _run_checks() -> String:
 	_checks["direct_adapter_node_resolves"] = direct_adapter.get_node3d() == direct_node
 	var direct_origin: Vector3 = direct_adapter.get_global_transform().origin
 	_checks["direct_adapter_transform"] = direct_origin.is_equal_approx(Vector3(1.0, 2.0, 3.0))
+	var direct_size = direct_adapter.get_meta_value("proxy_target_size_m", Vector3.ZERO)
+	_checks["direct_adapter_meta_value"] = direct_size is Vector3 and Vector3(direct_size).is_equal_approx(Vector3(0.8, 1.6, 0.0))
+	_checks["direct_adapter_meta_fallback"] = direct_adapter.get_meta_value("missing", "fallback") == "fallback"
 
 	# 3. NodePath and String adapter modes (resolved against the root node at
 	# lookup time, like the card passing `self`).

@@ -8,6 +8,7 @@ Godot consumes only canonical ``proxy_targets`` messages, raw source fields
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -24,12 +25,79 @@ DEFAULT_CARD_ID = "CardAnchor"
 def default_offset_rule() -> dict[str, Any]:
     """Default card offset rule shared by every publisher."""
     return {
-        "mode": "right_top",
+        "mode": "depth_scaled_right_half_width",
         "offset_space": "world",
-        "right_m": 0.35,
-        "up_m": 0.25,
+        "depth_scale": 1.3,
+        "depth_offset_m": 0.0,
+        "right_width_fraction": 0.5,
+        "right_angle_deg": 15.0,
         "fallback": "hold_last_pose",
     }
+
+
+def _coerce_float(value: Any, default_value: float) -> float:
+    try:
+        if value is None or isinstance(value, bool):
+            return default_value
+        return float(value)
+    except (TypeError, ValueError):
+        return default_value
+
+
+def _coerce_string(value: Any, default_value: str) -> str:
+    if value is None:
+        return default_value
+    text = str(value).strip()
+    return text if text else default_value
+
+
+def _apply_offset_rule_options(rule: dict[str, Any], options: dict[str, Any], prefix: str = "") -> None:
+    string_keys = {
+        "mode": "mode",
+        "offset_space": "offset_space",
+        "fallback": "fallback",
+    }
+    float_keys = {
+        "depth_scale": "depth_scale",
+        "depth_offset_m": "depth_offset_m",
+        "right_width_fraction": "right_width_fraction",
+        "right_angle_deg": "right_angle_deg",
+        "up_m": "up_m",
+    }
+    for option_key, rule_key in string_keys.items():
+        key = f"{prefix}{option_key}" if prefix else option_key
+        if key in options:
+            rule[rule_key] = _coerce_string(options.get(key), str(rule.get(rule_key, "")))
+    for option_key, rule_key in float_keys.items():
+        key = f"{prefix}{option_key}" if prefix else option_key
+        if key in options:
+            rule[rule_key] = _coerce_float(options.get(key), float(rule.get(rule_key, 0.0)))
+
+
+def load_card_offset_rule(options_path: Path | str | None = None, default_rule: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Load the card offset rule from a SmartXR JSON options file.
+
+    The Python publishers and Godot fallback both use this shape. Missing or
+    invalid config files fall back to the shared default so manual runners can
+    pass a path before the user has edited the file.
+    """
+    rule = dict(default_rule or default_offset_rule())
+    raw_path = str(options_path or os.environ.get("SMARTXR_OPTIONS_PATH", "")).strip()
+    if not raw_path:
+        return rule
+
+    try:
+        parsed = json.loads(Path(raw_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return rule
+    if not isinstance(parsed, dict):
+        return rule
+
+    nested = parsed.get("proxy_targets_card_offset_rule")
+    if isinstance(nested, dict):
+        _apply_offset_rule_options(rule, nested)
+    _apply_offset_rule_options(rule, parsed, prefix="proxy_targets_card_")
+    return rule
 
 
 def canonical_state(raw_state: Any) -> str:

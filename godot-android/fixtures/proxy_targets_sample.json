@@ -11,6 +11,10 @@
       "state": "tracked",
       "confidence": 0.91,
       "timestamp_ms": 1000,
+      "target_size_m": {
+        "width": 0.72,
+        "height": 1.80
+      },
       "transform": {
         "position": [0.15, 0.0, -1.2],
         "rotation_xyzw": [0.0, 0.0, 0.0, 1.0],
@@ -23,10 +27,11 @@
       "card_id": "CardAnchor",
       "target_id": "person-7",
       "offset_rule": {
-        "mode": "right_top",
+        "mode": "depth_scaled_right_half_width",
         "offset_space": "world",
-        "right_m": 0.35,
-        "up_m": 0.25,
+        "depth_scale": 1.3,
+        "depth_offset_m": 0.0,
+        "right_width_fraction": 0.5,
         "fallback": "hold_last_pose"
       }
     }

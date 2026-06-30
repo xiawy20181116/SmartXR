@@ -8,8 +8,9 @@ class_name CardAttachment
 ## fallback name, last applied transform), the per-frame attachment pass that
 ## drives the card anchor from a resolved target, the fallback state machine
 ## (hold_last_pose / detach / fade_out), and the offset-rule math (modes
-## right_top / right / top / front / custom-xyz, offset_space world / target,
-## defaults from DEFAULT_OFFSET_RULE).
+## right_top / right / top / front / depth_scaled_right_half_width /
+## depth_scaled_right_angle / custom-xyz, offset_space world / target, defaults from
+## DEFAULT_OFFSET_RULE).
 ##
 ## State resolution stays in the card per ADR-4 (DECISIONS.md): the card keeps
 ## its public API (attach_to_target / detach_card), resolves targets through
@@ -37,6 +38,7 @@ const DEFAULT_OFFSET_RULE := {
 
 var _attachments := {}
 var _resolver := Callable()
+var _reference_transform_provider := Callable()
 var _on_applied := Callable()
 var _on_detach_card := Callable()
 
@@ -47,6 +49,13 @@ var _on_detach_card := Callable()
 ## _target_registry.resolve here, so target lookup stays in target_registry.gd.
 func set_resolver(resolver: Callable) -> void:
 	_resolver = resolver
+
+
+## Optional provider for the viewer/camera transform used by placement modes
+## that scale card depth relative to the current viewer. Kept as a Callable so
+## this dependency-free subsystem does not need a Camera3D reference.
+func set_reference_transform_provider(reference_transform_provider: Callable) -> void:
+	_reference_transform_provider = reference_transform_provider
 
 
 ## Optional callback fired once per attachment pass that applied a resolved
@@ -77,7 +86,7 @@ func attach(card_id: String, target_id: String, offset_rule = {}) -> bool:
 		"target_id": target_id,
 		"offset_rule": normalized,
 		"fallback": str(normalized.get("fallback", TARGET_FALLBACK_HOLD_LAST_POSE)),
-		"last_transform": offset_transform(adapter.get_global_transform(), normalized),
+		"last_transform": _offset_transform_for_adapter(adapter, normalized),
 	}
 	return true
 
@@ -104,7 +113,7 @@ func update_attachments(card_anchor: Node3D, primary_card_id: String) -> bool:
 	var offset_rule = attachment.get("offset_rule", DEFAULT_OFFSET_RULE)
 	var adapter = _resolve(target_id)
 	if adapter != null and adapter.is_available():
-		var next_transform := offset_transform(adapter.get_global_transform(), offset_rule)
+		var next_transform := _offset_transform_for_adapter(adapter, offset_rule)
 		card_anchor.global_transform = next_transform
 		attachment["last_transform"] = next_transform
 		card_anchor.visible = true
@@ -189,10 +198,70 @@ static func normalize_offset_rule(offset_rule) -> Dictionary:
 
 
 static func offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:
+	return offset_transform_with_context(target_transform, offset_rule, Transform3D.IDENTITY, Vector3.ZERO)
+
+
+static func offset_transform_with_context(target_transform: Transform3D, offset_rule, reference_transform: Transform3D, target_size_m: Vector3) -> Transform3D:
 	var rule := normalize_offset_rule(offset_rule)
+	if str(rule.get("mode", "front")) == "depth_scaled_right_half_width":
+		return depth_scaled_right_half_width_transform(target_transform, rule, reference_transform, target_size_m)
+	if str(rule.get("mode", "front")) == "depth_scaled_right_angle":
+		return depth_scaled_right_angle_transform(target_transform, rule, reference_transform)
 	if str(rule.get("offset_space", "world")) == "target":
 		return local_offset_transform(target_transform, rule)
 	return world_offset_transform(target_transform, rule)
+
+
+static func depth_scaled_right_half_width_transform(target_transform: Transform3D, offset_rule, reference_transform: Transform3D, target_size_m: Vector3) -> Transform3D:
+	var rule := normalize_offset_rule(offset_rule)
+	var reference_origin := reference_transform.origin
+	var target_origin := target_transform.origin
+	var horizontal_delta := Vector3(
+		target_origin.x - reference_origin.x,
+		0.0,
+		target_origin.z - reference_origin.z
+	)
+	var depth_scale := maxf(float(rule.get("depth_scale", 1.0)), 0.0)
+	var depth_offset_m := float(rule.get("depth_offset_m", 0.0))
+	var scaled_origin := target_origin
+	scaled_origin.x = reference_origin.x + horizontal_delta.x * depth_scale
+	scaled_origin.z = reference_origin.z + horizontal_delta.z * depth_scale
+	scaled_origin += _horizontal_reference_forward_axis(reference_transform, horizontal_delta) * depth_offset_m
+	var right_axis := _horizontal_reference_right_axis(reference_transform, horizontal_delta)
+	var right_offset := right_axis * maxf(target_size_m.x, 0.0) * float(rule.get("right_width_fraction", 0.5))
+	var up_offset := Vector3(0.0, float(rule.get("up_m", 0.0)), 0.0)
+	var result := Transform3D.IDENTITY
+	result.origin = scaled_origin + right_offset + up_offset
+	return result
+
+
+static func depth_scaled_right_angle_transform(target_transform: Transform3D, offset_rule, reference_transform: Transform3D) -> Transform3D:
+	var rule := normalize_offset_rule(offset_rule)
+	var reference_origin := reference_transform.origin
+	var target_origin := target_transform.origin
+	var horizontal_delta := Vector3(
+		target_origin.x - reference_origin.x,
+		0.0,
+		target_origin.z - reference_origin.z
+	)
+	var depth_scale := maxf(float(rule.get("depth_scale", 1.0)), 0.0)
+	var depth_offset_m := float(rule.get("depth_offset_m", 0.0))
+	var scaled_origin := target_origin
+	scaled_origin.x = reference_origin.x + horizontal_delta.x * depth_scale
+	scaled_origin.z = reference_origin.z + horizontal_delta.z * depth_scale
+	scaled_origin += _horizontal_reference_forward_axis(reference_transform, horizontal_delta) * depth_offset_m
+	var final_horizontal_delta := Vector3(
+		scaled_origin.x - reference_origin.x,
+		0.0,
+		scaled_origin.z - reference_origin.z
+	)
+	var final_depth_m := final_horizontal_delta.length()
+	var right_axis := _horizontal_reference_right_axis(reference_transform, horizontal_delta)
+	var right_offset := right_axis * tan(deg_to_rad(float(rule.get("right_angle_deg", 15.0)))) * final_depth_m
+	var up_offset := Vector3(0.0, float(rule.get("up_m", 0.0)), 0.0)
+	var result := Transform3D.IDENTITY
+	result.origin = scaled_origin + right_offset + up_offset
+	return result
 
 
 static func world_offset_transform(target_transform: Transform3D, offset_rule) -> Transform3D:
@@ -223,6 +292,8 @@ static func offset_vector(offset_rule) -> Vector3:
 			local_offset = Vector3(0.0, distance, 0.0)
 		"front":
 			local_offset = Vector3(0.0, 0.0, -distance)
+		"depth_scaled_right_half_width", "depth_scaled_right_angle":
+			local_offset = Vector3.ZERO
 		_:
 			local_offset = Vector3(
 				float(rule.get("x_m", 0.0)),
@@ -230,6 +301,72 @@ static func offset_vector(offset_rule) -> Vector3:
 				float(rule.get("z_m", -distance))
 			)
 	return local_offset
+
+
+static func _horizontal_right_axis(horizontal_delta: Vector3) -> Vector3:
+	var forward := horizontal_delta
+	if forward.length_squared() < 0.000001:
+		forward = Vector3(0.0, 0.0, -1.0)
+	else:
+		forward = forward.normalized()
+	var right := forward.cross(Vector3.UP)
+	if right.length_squared() < 0.000001:
+		return Vector3.RIGHT
+	return right.normalized()
+
+
+static func _horizontal_reference_right_axis(reference_transform: Transform3D, fallback_delta: Vector3) -> Vector3:
+	var right := reference_transform.basis.x
+	right.y = 0.0
+	if right.length_squared() < 0.000001:
+		return _horizontal_right_axis(fallback_delta)
+	return right.normalized()
+
+
+static func _horizontal_reference_forward_axis(reference_transform: Transform3D, fallback_delta: Vector3) -> Vector3:
+	var forward := fallback_delta
+	if forward.length_squared() < 0.000001:
+		forward = -reference_transform.basis.z
+		forward.y = 0.0
+	if forward.length_squared() < 0.000001:
+		return Vector3(0.0, 0.0, -1.0)
+	return forward.normalized()
+
+
+static func _coerce_target_size_m(value) -> Vector3:
+	if value is Vector3:
+		return value
+	if typeof(value) == TYPE_DICTIONARY:
+		return Vector3(
+			maxf(float(value.get("width", 0.0)), 0.0),
+			maxf(float(value.get("height", 0.0)), 0.0),
+			maxf(float(value.get("depth", 0.0)), 0.0)
+		)
+	return Vector3.ZERO
+
+
+func _offset_transform_for_adapter(adapter, offset_rule) -> Transform3D:
+	var target_size_m := Vector3.ZERO
+	var reference_transform := _reference_transform()
+	if adapter != null and adapter.has_method("get_meta_value"):
+		target_size_m = _coerce_target_size_m(adapter.get_meta_value("proxy_target_size_m", Vector3.ZERO))
+		var latched_reference = adapter.get_meta_value("proxy_world_latch_reference_transform", null)
+		if bool(adapter.get_meta_value("proxy_world_latched", false)) and latched_reference is Transform3D:
+			reference_transform = latched_reference
+	return offset_transform_with_context(
+		adapter.get_global_transform(),
+		offset_rule,
+		reference_transform,
+		target_size_m
+	)
+
+
+func _reference_transform() -> Transform3D:
+	if _reference_transform_provider.is_valid():
+		var value = _reference_transform_provider.call()
+		if value is Transform3D:
+			return value
+	return Transform3D.IDENTITY
 
 
 func _resolve(target_id: String):

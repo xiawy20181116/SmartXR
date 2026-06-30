@@ -71,7 +71,12 @@ func _run_checks() -> String:
 	fragment.record_parsed_message(message, {
 		"world_from_head_applied": true,
 		"local_position": [0.1, 0.2, 0.3],
+		"runtime_local_position": [0.1, 0.2, -0.3],
 		"world_position": [4.0, 5.0, 6.0],
+		"head_z_mode": "positive_z_forward",
+		"anchor_mode": "world_latched",
+		"world_latched": true,
+		"world_latch_state": "latched_fresh",
 	})
 	source_coordinate["space"] = "mutated"
 	var recorded: Dictionary = fragment.status_values({})
@@ -82,7 +87,12 @@ func _run_checks() -> String:
 		and str(recorded.get("source_coordinate", {}).get("space")) == "head"
 	_checks["records_head_to_world_info"] = bool(recorded.get("world_from_head_applied")) \
 		and Vector3(recorded.get("local_position")).is_equal_approx(Vector3(0.1, 0.2, 0.3)) \
+		and Vector3(recorded.get("runtime_local_position")).is_equal_approx(Vector3(0.1, 0.2, -0.3)) \
 		and Vector3(recorded.get("world_position")).is_equal_approx(Vector3(4.0, 5.0, 6.0))
+	_checks["records_head_z_mode"] = str(recorded.get("head_z_mode")) == "positive_z_forward"
+	_checks["records_world_latch_info"] = str(recorded.get("anchor_mode")) == "world_latched" \
+		and bool(recorded.get("world_latched")) \
+		and str(recorded.get("world_latch_state")) == "latched_fresh"
 
 	fragment.record_parsed_message({"type": "empty", "sequence": 43, "targets": []})
 	var empty_record: Dictionary = fragment.status_values({})
@@ -108,6 +118,7 @@ func _run_checks() -> String:
 		and Vector3(no_head_info_record.get("last_position")).is_equal_approx(Vector3(2.0, 3.0, 4.0)) \
 		and bool(no_head_info_record.get("world_from_head_applied")) == false \
 		and Vector3(no_head_info_record.get("local_position")).is_equal_approx(Vector3(0.1, 0.2, 0.3)) \
+		and Vector3(no_head_info_record.get("runtime_local_position")).is_equal_approx(Vector3(0.1, 0.2, -0.3)) \
 		and Vector3(no_head_info_record.get("world_position")).is_equal_approx(Vector3(4.0, 5.0, 6.0))
 
 	var targets := {"b": {}, "a": {}, "c": {}}
@@ -156,7 +167,12 @@ func _run_checks() -> String:
 		"source_coordinate",
 		"world_from_head_applied",
 		"local_position",
+		"runtime_local_position",
 		"world_position",
+		"head_z_mode",
+		"anchor_mode",
+		"world_latched",
+		"world_latch_state",
 		"error",
 	] and bool(status.get("ws_connected")) and int(status.get("packets")) == 8 \
 		and int(status.get("parsed")) == 3 and int(status.get("live")) == 13

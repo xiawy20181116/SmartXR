@@ -33,6 +33,7 @@ class WsControlTests(unittest.TestCase):
             "k": "bbox_down",
             "u": "bbox_depth_out",
             "o": "bbox_depth_in",
+            "m": "reset_world_anchor",
         }
 
         for key, command in cases.items():

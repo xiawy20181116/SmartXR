@@ -3,6 +3,7 @@ param(
     [string]$PackageDir,
     [string]$AntmanRoot = "E:\xia\Antman_smart",
     [string]$GodotExe = "E:\xia\Godot_v4.6.2-stable_win64.exe\Godot_v4.6.2-stable_win64.exe",
+    [string]$SmartXROptionsPath = "config\smartxr_options.json",
     [ValidateSet("capture", "fixed", "fast")]
     [string]$ReplayTiming = "capture",
     [string]$HostName = "127.0.0.1",
@@ -17,6 +18,10 @@ param(
     [int]$LogEvery = 20,
     [double]$SenderReadyTimeoutSeconds = 45.0,
     [double]$ProxyTargetsTimeoutSeconds = 60.0,
+    [ValidateSet("", "dynamic", "world_latched")]
+    [string]$ProxyTargetsAnchorMode = "",
+    [ValidateSet("", "negative_z_forward", "positive_z_forward")]
+    [string]$ProxyTargetsHeadZMode = "",
     [int]$MonitorMinPackets = 10,
     [double]$MonitorTimeoutSeconds = 20.0,
     [switch]$UseAntmanPassthroughOverlay,
@@ -34,6 +39,11 @@ param(
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = [string](Resolve-Path (Join-Path -Path $PSScriptRoot -ChildPath ".."))
+$ResolvedSmartXROptionsPath = if ([System.IO.Path]::IsPathRooted($SmartXROptionsPath)) {
+    [System.IO.Path]::GetFullPath($SmartXROptionsPath)
+} else {
+    [System.IO.Path]::GetFullPath((Join-Path -Path $RepoRoot -ChildPath $SmartXROptionsPath))
+}
 $ProjectDir = Join-Path -Path $RepoRoot -ChildPath "godot-android"
 $Publisher = Join-Path -Path $RepoRoot -ChildPath "tools\antman_vst_stereo_package_proxy_targets_live_publisher.py"
 $PcmrRunner = Join-Path -Path $RepoRoot -ChildPath "tools\run_windows_pcmr.ps1"
@@ -154,7 +164,7 @@ if ($PythonExe -eq "") {
 }
 
 $ResolvedPackageDir = [string](Resolve-Path -LiteralPath $PackageDir)
-$RequiredPaths = @($Publisher, $MonitorRunner, $HealthValidator, $RunDiagnosticsAnalyzer, $ResolvedPackageDir)
+$RequiredPaths = @($Publisher, $MonitorRunner, $HealthValidator, $RunDiagnosticsAnalyzer, $ResolvedPackageDir, $ResolvedSmartXROptionsPath)
 if ($DemoOnly) {
     $RequiredPaths += @($GodotExe, $ProjectDir, $GxrExtensionSwitch)
 } else {
@@ -186,6 +196,9 @@ $PackageDirLiteral = ConvertTo-PowerShellLiteral $ResolvedPackageDir
 $ReplayTimingLiteral = ConvertTo-PowerShellLiteral $ReplayTiming
 $AntmanRootLiteral = ConvertTo-PowerShellLiteral $AntmanRoot
 $GodotExeLiteral = ConvertTo-PowerShellLiteral $GodotExe
+$ProxyTargetsAnchorModeLiteral = ConvertTo-PowerShellLiteral $ProxyTargetsAnchorMode
+$ProxyTargetsHeadZModeLiteral = ConvertTo-PowerShellLiteral $ProxyTargetsHeadZMode
+$SmartXROptionsPathLiteral = ConvertTo-PowerShellLiteral $ResolvedSmartXROptionsPath
 $PoseModelLiteral = ConvertTo-PowerShellLiteral $PoseModel
 $PoseDeviceLiteral = ConvertTo-PowerShellLiteral $PoseDevice
 $WsUrlLiteral = ConvertTo-PowerShellLiteral $WsUrl
@@ -212,6 +225,7 @@ Write-Host "[sender] WebSocket: $WsUrl"
 Write-Host "[sender] Package: $ResolvedPackageDir"
 Write-Host "[sender] Replay timing: $ReplayTiming source_hz=$SourceHz publish_hz=$Hz"
 Write-Host "[sender] Position filter: min_cutoff=$PositionFilterMinCutoff beta=$PositionFilterBeta"
+Write-Host "[sender] SmartXR options: $ResolvedSmartXROptionsPath"
 Write-Host "[sender] Keypoint anchor: $EnableKeypointAnchor pose_model=$PoseModel pose_imgsz=$PoseImgsz min_keypoint_score=$MinKeypointScore"
 Write-Host "[sender] Depth trace: $DepthTraceFile"
 Write-Host "[sender] A healthy replay should print published stereo seq=..."
@@ -230,6 +244,7 @@ Write-Host "[sender] A healthy replay should print published stereo seq=..."
   "--recorded-width", "$RecordedWidth",
   "--recorded-height", "$RecordedHeight",
   "--log-every", "$LogEvery",
+  "--smartxr-options", $SmartXROptionsPathLiteral,
   "--depth-trace", $DepthTraceFileLiteral
 )
 if ($EnableKeypointAnchorLiteral) {
@@ -263,10 +278,24 @@ while (-not (Test-Path -LiteralPath $SenderReadyFileLiteral)) {
 if ($DemoOnlyLiteral) {
   Write-Host "[receiver] Sender ready; starting demo_run without PCMR validation."
   `$OldProxyTargetsWsUrl = `$env:PROXY_TARGETS_WS_URL
+  `$OldSmartXROptionsPath = `$env:SMARTXR_OPTIONS_PATH
+  `$OldProxyTargetsAnchorMode = `$env:SMARTXR_PROXY_TARGETS_ANCHOR_MODE
+  `$OldProxyTargetsHeadZMode = `$env:SMARTXR_PROXY_TARGETS_HEAD_Z_MODE
   `$OldStatusHudVisible = `$env:SMARTXR_STATUS_HUD_VISIBLE
   try {
     & $GxrExtensionSwitchLiteral -Mode disable -ProjectDir $ProjectDirLiteral
     `$env:PROXY_TARGETS_WS_URL = $WsUrlLiteral
+    `$env:SMARTXR_OPTIONS_PATH = $SmartXROptionsPathLiteral
+    if ($ProxyTargetsAnchorModeLiteral -ne '') {
+      `$env:SMARTXR_PROXY_TARGETS_ANCHOR_MODE = $ProxyTargetsAnchorModeLiteral
+    } else {
+      Remove-Item Env:\SMARTXR_PROXY_TARGETS_ANCHOR_MODE -ErrorAction SilentlyContinue
+    }
+    if ($ProxyTargetsHeadZModeLiteral -ne '') {
+      `$env:SMARTXR_PROXY_TARGETS_HEAD_Z_MODE = $ProxyTargetsHeadZModeLiteral
+    } else {
+      Remove-Item Env:\SMARTXR_PROXY_TARGETS_HEAD_Z_MODE -ErrorAction SilentlyContinue
+    }
     `$env:SMARTXR_STATUS_HUD_VISIBLE = "1"
     `$OldGodotErrorActionPreference = `$ErrorActionPreference
     `$ErrorActionPreference = "Continue"
@@ -282,6 +311,21 @@ if ($DemoOnlyLiteral) {
     } else {
       `$env:PROXY_TARGETS_WS_URL = `$OldProxyTargetsWsUrl
     }
+    if (`$null -eq `$OldSmartXROptionsPath) {
+      Remove-Item Env:\SMARTXR_OPTIONS_PATH -ErrorAction SilentlyContinue
+    } else {
+      `$env:SMARTXR_OPTIONS_PATH = `$OldSmartXROptionsPath
+    }
+    if (`$null -eq `$OldProxyTargetsAnchorMode) {
+      Remove-Item Env:\SMARTXR_PROXY_TARGETS_ANCHOR_MODE -ErrorAction SilentlyContinue
+    } else {
+      `$env:SMARTXR_PROXY_TARGETS_ANCHOR_MODE = `$OldProxyTargetsAnchorMode
+    }
+    if (`$null -eq `$OldProxyTargetsHeadZMode) {
+      Remove-Item Env:\SMARTXR_PROXY_TARGETS_HEAD_Z_MODE -ErrorAction SilentlyContinue
+    } else {
+      `$env:SMARTXR_PROXY_TARGETS_HEAD_Z_MODE = `$OldProxyTargetsHeadZMode
+    }
     if (`$null -eq `$OldStatusHudVisible) {
       Remove-Item Env:\SMARTXR_STATUS_HUD_VISIBLE -ErrorAction SilentlyContinue
     } else {
@@ -295,7 +339,14 @@ if ($DemoOnlyLiteral) {
     GodotExe = $GodotExeLiteral
     ValidateProxyTargets = `$true
     ProxyTargetsWsUrl = $WsUrlLiteral
+    SmartXROptionsPath = $SmartXROptionsPathLiteral
     ProxyTargetsTimeoutSeconds = $ProxyTargetsTimeoutSeconds
+  }
+  if ($ProxyTargetsAnchorModeLiteral -ne '') {
+    `$ArgsList["ProxyTargetsAnchorMode"] = $ProxyTargetsAnchorModeLiteral
+  }
+  if ($ProxyTargetsHeadZModeLiteral -ne '') {
+    `$ArgsList["ProxyTargetsHeadZMode"] = $ProxyTargetsHeadZModeLiteral
   }
   if ($UseOverlayLiteral) {
     `$ArgsList["UseAntmanPassthroughOverlay"] = `$true
@@ -388,6 +439,9 @@ Write-Host "WebSocket: $WsUrl"
 Write-Host "Package:   $ResolvedPackageDir"
 Write-Host "Timing:    $ReplayTiming source_hz=$SourceHz publish_hz=$Hz"
 Write-Host "Filter:    min_cutoff=$PositionFilterMinCutoff beta=$PositionFilterBeta"
+Write-Host "Anchor mode: $ProxyTargetsAnchorMode"
+Write-Host "Head Z mode: $ProxyTargetsHeadZMode"
+Write-Host "SmartXR options: $ResolvedSmartXROptionsPath"
 Write-Host "Keypoint anchor: $EnableKeypointAnchor"
 Write-Host "Demo only: $DemoOnly"
 Write-Host "Work dir:  $WorkDir"

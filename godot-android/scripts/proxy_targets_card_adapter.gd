@@ -6,11 +6,25 @@ var proxy_targets_consumer: Node = null
 var card_wrapper: Node = null
 var target_register_method_names := ["register_node3d_target", "register_target", "register_proxy_target"]
 var attach_method_name := "attach_to_target"
+var default_offset_rule := {
+	"mode": "depth_scaled_right_half_width",
+	"offset_space": "world",
+	"depth_scale": 1.3,
+	"depth_offset_m": 0.0,
+	"right_width_fraction": 0.5,
+	"right_angle_deg": 15.0,
+	"up_m": 0.0,
+	"fallback": "hold_last_pose"
+}
 
 
 func bind(consumer: Node, wrapper: Node) -> void:
 	proxy_targets_consumer = consumer
 	card_wrapper = wrapper
+
+
+func set_default_offset_rule(offset_rule: Dictionary) -> void:
+	default_offset_rule = offset_rule.duplicate(true)
 
 
 func apply_proxy_targets_json(payload: String) -> bool:
@@ -68,10 +82,4 @@ func _attach_card_to_proxy_target(card_id: String, card: Dictionary) -> bool:
 
 
 func _default_offset_rule() -> Dictionary:
-	return {
-		"mode": "right_top",
-		"offset_space": "world",
-		"right_m": 0.35,
-		"up_m": 0.25,
-		"fallback": "hold_last_pose"
-	}
+	return default_offset_rule.duplicate(true)
