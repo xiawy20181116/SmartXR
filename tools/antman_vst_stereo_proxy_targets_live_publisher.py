@@ -24,6 +24,10 @@ from collect_stereo_bbox_pairs import (  # noqa: E402
     _create_stereo_readers_and_trackers,
     build_stereo_bbox_pair_record,
 )
+from collect_stereo_keypoint_pairs import (  # noqa: E402
+    _normalize_pose_output_for_bbox,
+    build_stereo_keypoint_pair_record,
+)
 from dump_antman_vst_humantrackor_jsonl import DEFAULT_ANTMAN_ROOT, startup_error_status  # noqa: E402
 from smartxr.publisher import normalize_source_payload  # noqa: E402
 from smartxr.stereo_depth import (  # noqa: E402
@@ -47,6 +51,14 @@ HELD_DEPTH_SOURCE = "held_last_good_depth"
 DEFAULT_POSITION_FILTER_MIN_CUTOFF = 1.0
 DEFAULT_POSITION_FILTER_BETA = 0.08
 DEFAULT_POSITION_FILTER_D_CUTOFF = 1.0
+DEFAULT_POSE_MODEL = "yolov8n-pose.pt"
+DEFAULT_POSE_IMGSZ = 640
+DEFAULT_POSE_CONFIDENCE = 0.25
+DEFAULT_MIN_KEYPOINT_SCORE = 0.5
+DEFAULT_POSE_ASSOCIATION_MARGIN_PX = 8.0
+DEFAULT_MAX_POSE_ASSOCIATION_DISTANCE_PX = 120.0
+BBOX_TOP_CENTER_FALLBACK_DEPTH_SOURCE = "bbox_top_center_fallback"
+KEYPOINT_DEPTH_ANCHOR_KINDS = {"shoulder_midpoint", "nose", "ear_midpoint"}
 
 
 def is_proxy_targets_request(first_line: str) -> bool:
@@ -682,6 +694,75 @@ def _record_to_pair(record: dict[str, Any]) -> StereoDetectionPair:
     )
 
 
+def _xy_pair_or_none(value: Any) -> list[float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    try:
+        return [float(value[0]), float(value[1])]
+    except (TypeError, ValueError):
+        return None
+
+
+def _fallback_keypoint_anchor(anchor: dict[str, Any], reason: str) -> dict[str, Any]:
+    payload = copy.deepcopy(anchor)
+    payload["fallback_reason"] = reason
+    payload["depth_source"] = BBOX_TOP_CENTER_FALLBACK_DEPTH_SOURCE
+    return payload
+
+
+def _selected_anchor_plan(record: dict[str, Any]) -> dict[str, Any]:
+    left_bbox = list(record["left_bbox_xyxy"])
+    right_bbox = list(record["right_bbox_xyxy"])
+    bbox_left_anchor = _bbox_top_center_from_xyxy(left_bbox)
+    bbox_right_anchor = _bbox_top_center_from_xyxy(right_bbox)
+    anchor = record.get("selected_anchor")
+    if not isinstance(anchor, dict):
+        return {
+            "source": "bbox_default",
+            "anchor_kind": ANCHOR_KIND_BBOX_TOP_CENTER,
+            "left_anchor_px": bbox_left_anchor,
+            "right_anchor_px": bbox_right_anchor,
+            "depth_source": None,
+            "depth_confidence": "high",
+            "keypoint_anchor": None,
+        }
+
+    kind = str(anchor.get("kind", ""))
+    left_kind = str(anchor.get("left_kind", kind))
+    right_kind = str(anchor.get("right_kind", kind))
+    left_px = _xy_pair_or_none(anchor.get("left_px"))
+    right_px = _xy_pair_or_none(anchor.get("right_px"))
+
+    fallback_reason = None
+    if kind not in KEYPOINT_DEPTH_ANCHOR_KINDS:
+        fallback_reason = "no_keypoint_anchor" if kind in {"bbox_top_center", "missing", ""} else "anchor_kind_mismatch"
+    elif left_kind != kind or right_kind != kind:
+        fallback_reason = "anchor_kind_mismatch"
+    elif left_px is None or right_px is None:
+        fallback_reason = "missing_anchor_px"
+
+    if fallback_reason is not None:
+        return {
+            "source": "keypoint_fallback",
+            "anchor_kind": ANCHOR_KIND_BBOX_TOP_CENTER,
+            "left_anchor_px": bbox_left_anchor,
+            "right_anchor_px": bbox_right_anchor,
+            "depth_source": BBOX_TOP_CENTER_FALLBACK_DEPTH_SOURCE,
+            "depth_confidence": "low",
+            "keypoint_anchor": _fallback_keypoint_anchor(anchor, fallback_reason),
+        }
+
+    return {
+        "source": "keypoint",
+        "anchor_kind": kind,
+        "left_anchor_px": left_px,
+        "right_anchor_px": right_px,
+        "depth_source": kind,
+        "depth_confidence": "high",
+        "keypoint_anchor": copy.deepcopy(anchor),
+    }
+
+
 def _held_stereo_record(
     record: dict[str, Any],
     calibration: Any,
@@ -691,15 +772,16 @@ def _held_stereo_record(
 ) -> dict[str, Any]:
     left_bbox = list(record["left_bbox_xyxy"])
     right_bbox = list(record["right_bbox_xyxy"])
-    left_anchor = _bbox_top_center_from_xyxy(left_bbox)
-    right_anchor = _bbox_top_center_from_xyxy(right_bbox)
+    anchor_plan = _selected_anchor_plan(record)
+    left_anchor = anchor_plan["left_anchor_px"]
+    right_anchor = anchor_plan["right_anchor_px"]
     left_size = _bbox_dict_from_xyxy(left_bbox)
     right_size = _bbox_dict_from_xyxy(right_bbox)
     disparity_px = float(left_anchor[0] - right_anchor[0])
     vertical_error_px = float(left_anchor[1] - right_anchor[1])
     box_width_ratio = left_size["w"] / max(right_size["w"], 1.0)
     box_height_ratio = left_size["h"] / max(right_size["h"], 1.0)
-    return {
+    stereo_record = {
         "schema_version": 1,
         "pair_id": str(record["pair_id"]),
         "frame_id": int(record["frame_id"]),
@@ -710,7 +792,7 @@ def _held_stereo_record(
             "right_xyxy": right_bbox,
         },
         "confidence": float(record.get("confidence", 1.0)),
-        "anchor_kind": ANCHOR_KIND_BBOX_TOP_CENTER,
+        "anchor_kind": anchor_plan["anchor_kind"],
         "left_anchor_px": left_anchor,
         "right_anchor_px": right_anchor,
         "disparity_px": disparity_px,
@@ -729,6 +811,12 @@ def _held_stereo_record(
         "depth_update_allowed": False,
         "held_reason": record.get("selection", {}).get("held_reason"),
     }
+    if anchor_plan.get("keypoint_anchor") is not None:
+        stereo_record["keypoint_anchor"] = anchor_plan["keypoint_anchor"]
+    pose_association = record.get("pose_association")
+    if isinstance(pose_association, dict):
+        stereo_record["pose_association"] = copy.deepcopy(pose_association)
+    return stereo_record
 
 
 def build_proxy_targets_message_from_stereo_bbox_record(
@@ -758,18 +846,22 @@ def build_proxy_targets_message_from_stereo_bbox_record(
     if not isinstance(selection, dict):
         selection = {}
     depth_update_allowed = selection.get("depth_update_allowed", True) is not False
+    anchor_plan = _selected_anchor_plan(record)
     if depth_update_allowed:
-        stereo_record = triangulate_detection_pair(
-            _record_to_pair(record),
-            calibration,
-            anchor_kind=ANCHOR_KIND_BBOX_TOP_CENTER,
-            gate_config=gate_config,
-        )
+        triangulate_kwargs: dict[str, Any] = {
+            "anchor_kind": anchor_plan["anchor_kind"],
+            "gate_config": gate_config,
+        }
+        if anchor_plan.get("source") != "bbox_default":
+            triangulate_kwargs["left_anchor_px"] = anchor_plan["left_anchor_px"]
+            triangulate_kwargs["right_anchor_px"] = anchor_plan["right_anchor_px"]
+            triangulate_kwargs["depth_source"] = anchor_plan["depth_source"]
+        stereo_record = triangulate_detection_pair(_record_to_pair(record), calibration, **triangulate_kwargs)
         if stereo_record.get("stereo_ok") is not True:
             return None
         depth_m = float(stereo_record["depth_m"])
-        depth_source = stereo_record["depth_source"]
-        depth_confidence = "high"
+        depth_source = anchor_plan["depth_source"] or stereo_record["depth_source"]
+        depth_confidence = str(anchor_plan["depth_confidence"])
     else:
         depth_m = _positive_float_or_none(selection.get("last_good_depth"))
         if depth_m is None:
@@ -784,6 +876,13 @@ def build_proxy_targets_message_from_stereo_bbox_record(
         )
         depth_source = HELD_DEPTH_SOURCE
         depth_confidence = "low"
+
+    keypoint_anchor = anchor_plan.get("keypoint_anchor")
+    if keypoint_anchor is not None:
+        stereo_record["keypoint_anchor"] = copy.deepcopy(keypoint_anchor)
+    pose_association = record.get("pose_association")
+    if isinstance(pose_association, dict):
+        stereo_record["pose_association"] = copy.deepcopy(pose_association)
 
     left_bbox = list(record["left_bbox_xyxy"])
     source_payload = {
@@ -829,6 +928,10 @@ def build_proxy_targets_message_from_stereo_bbox_record(
             }
         ],
     }
+    if keypoint_anchor is not None:
+        source_payload["detections"][0]["stereo"]["keypoint_anchor"] = copy.deepcopy(keypoint_anchor)
+    if isinstance(pose_association, dict):
+        source_payload["detections"][0]["stereo"]["pose_association"] = copy.deepcopy(pose_association)
     message = normalize_source_payload(source_payload, sequence=sequence, card_id=card_id)
     message["timestamp_ms"] = source_payload["timestamp_ms"]
     if not message["targets"]:
@@ -838,6 +941,8 @@ def build_proxy_targets_message_from_stereo_bbox_record(
     _DEPTH_TRACE_CONTEXT[id(message)] = {
         "bbox": detection["bbox"],
         "stereo": detection["stereo"],
+        "keypoint_anchor": copy.deepcopy(keypoint_anchor) if keypoint_anchor is not None else None,
+        "pose_association": copy.deepcopy(pose_association) if isinstance(pose_association, dict) else None,
         "selection": dict(record.get("selection", {})),
     }
     return message
@@ -1024,6 +1129,16 @@ def build_depth_trace_event(
             "stereo": stereo,
         }
     )
+    keypoint_anchor = trace_context.get("keypoint_anchor")
+    if keypoint_anchor is None and isinstance(stereo, dict):
+        keypoint_anchor = stereo.get("keypoint_anchor")
+    if isinstance(keypoint_anchor, dict):
+        event["keypoint_anchor"] = copy.deepcopy(keypoint_anchor)
+    pose_association = trace_context.get("pose_association")
+    if pose_association is None and isinstance(stereo, dict):
+        pose_association = stereo.get("pose_association")
+    if isinstance(pose_association, dict):
+        event["pose_association"] = copy.deepcopy(pose_association)
     position_filter = target.get("position_filter") or source_coordinate.get("position_filter")
     if isinstance(position_filter, dict):
         event["position_filter"] = copy.deepcopy(position_filter)
@@ -1160,17 +1275,128 @@ def write_depth_trace_event(trace_path: Path | None, event: dict[str, Any]) -> N
         handle.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
+def _attach_keypoint_anchor_to_record(
+    record: dict[str, Any],
+    *,
+    left_frame: Any,
+    right_frame: Any,
+    left_pose_estimator: Any,
+    right_pose_estimator: Any,
+    min_keypoint_score: float,
+    pose_association_margin_px: float,
+    max_pose_association_distance_px: float,
+) -> dict[str, Any]:
+    left_keypoints, left_scores = left_pose_estimator(left_frame)
+    right_keypoints, right_scores = right_pose_estimator(right_frame)
+    left_normalized, left_association = _normalize_pose_output_for_bbox(
+        left_keypoints,
+        left_scores,
+        target_bbox_xyxy=record.get("left_bbox_xyxy"),
+        association_margin_px=pose_association_margin_px,
+        max_association_distance_px=max_pose_association_distance_px,
+    )
+    right_normalized, right_association = _normalize_pose_output_for_bbox(
+        right_keypoints,
+        right_scores,
+        target_bbox_xyxy=record.get("right_bbox_xyxy"),
+        association_margin_px=pose_association_margin_px,
+        max_association_distance_px=max_pose_association_distance_px,
+    )
+    keypoint_record = build_stereo_keypoint_pair_record(
+        frame_id=int(record["frame_id"]),
+        timestamp_ms=int(record.get("timestamp_ms", int(time.time() * 1000))),
+        left_keypoints=left_normalized,
+        right_keypoints=right_normalized,
+        bbox_pair=record,
+        min_score=min_keypoint_score,
+        left_pose_association=left_association,
+        right_pose_association=right_association,
+    )
+    record["source"] = "vst_stereo_keypoint"
+    record["selected_anchor"] = copy.deepcopy(keypoint_record["selected_anchor"])
+    record["keypoints"] = copy.deepcopy(keypoint_record["keypoints"])
+    record["pose_association"] = copy.deepcopy(keypoint_record.get("pose_association", {}))
+    return {
+        "keypoint_anchor": copy.deepcopy(record["selected_anchor"]),
+        "pose_association": copy.deepcopy(record["pose_association"]),
+    }
+
+
+class UltralyticsPoseEstimator:
+    def __init__(
+        self,
+        *,
+        model: str | Path,
+        imgsz: int,
+        conf: float,
+        device: str | None,
+    ) -> None:
+        try:
+            from ultralytics import YOLO
+        except Exception as exc:
+            raise RuntimeError("ultralytics is required for --enable-keypoint-anchor") from exc
+
+        self.model_path = str(model)
+        self.imgsz = int(imgsz)
+        self.conf = float(conf)
+        self.device = device
+        self.model = YOLO(self.model_path)
+
+    def __call__(self, frame: Any) -> tuple[Any, Any]:
+        kwargs: dict[str, Any] = {
+            "imgsz": self.imgsz,
+            "conf": self.conf,
+            "verbose": False,
+        }
+        if self.device is not None:
+            kwargs["device"] = self.device
+        results = self.model.predict(frame, **kwargs)
+        if not results:
+            return [], []
+        keypoints = getattr(results[0], "keypoints", None)
+        if keypoints is None:
+            return [], []
+        xy = getattr(keypoints, "xy", None)
+        scores = getattr(keypoints, "conf", None)
+        xy_list = xy.cpu().numpy().tolist() if hasattr(xy, "cpu") else []
+        if scores is None:
+            score_list = [[1.0] * len(person) for person in xy_list]
+        else:
+            score_list = scores.cpu().numpy().tolist() if hasattr(scores, "cpu") else []
+        return xy_list, score_list
+
+
+def create_pose_estimators(args: argparse.Namespace) -> tuple[Any | None, Any | None]:
+    if not getattr(args, "enable_keypoint_anchor", False):
+        return None, None
+    device = getattr(args, "pose_device", None)
+    if device is None:
+        device = getattr(args, "device", None)
+    estimator = UltralyticsPoseEstimator(
+        model=getattr(args, "pose_model", DEFAULT_POSE_MODEL),
+        imgsz=getattr(args, "pose_imgsz", DEFAULT_POSE_IMGSZ),
+        conf=getattr(args, "pose_conf", DEFAULT_POSE_CONFIDENCE),
+        device=device,
+    )
+    return estimator, estimator
+
+
 def next_live_stereo_proxy_targets_message_with_diagnostics(
     *,
     left_reader: Any,
     right_reader: Any,
     left_tracker: Any,
     right_tracker: Any,
+    left_pose_estimator: Any | None = None,
+    right_pose_estimator: Any | None = None,
     sequence: int,
     card_id: str = "CardAnchor",
     recorded_width: int = 880,
     recorded_height: int = 660,
     min_confidence: float = 0.5,
+    min_keypoint_score: float = DEFAULT_MIN_KEYPOINT_SCORE,
+    pose_association_margin_px: float = DEFAULT_POSE_ASSOCIATION_MARGIN_PX,
+    max_pose_association_distance_px: float = DEFAULT_MAX_POSE_ASSOCIATION_DISTANCE_PX,
     max_empty_reads: int | None = None,
     max_read_attempts: int | None = None,
     sleep_seconds: float = 0.005,
@@ -1226,11 +1452,13 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
             right_frame = pending_right.pop(right_frame_id)
             left_received_at_ms = pending_left_received_at_ms.pop(left_frame_id, None)
             right_received_at_ms = pending_right_received_at_ms.pop(right_frame_id, None)
+            left_tracker_frame = _frame_for_tracker(left_frame)
+            right_tracker_frame = _frame_for_tracker(right_frame)
             left_detect_started = time.perf_counter()
-            left_tracking_result = left_tracker.process_frame(_frame_for_tracker(left_frame))
+            left_tracking_result = left_tracker.process_frame(left_tracker_frame)
             stage_timing["left_detect_ms"] = float(stage_timing.get("left_detect_ms", 0.0)) + _elapsed_ms(left_detect_started)
             right_detect_started = time.perf_counter()
-            right_tracking_result = right_tracker.process_frame(_frame_for_tracker(right_frame))
+            right_tracking_result = right_tracker.process_frame(right_tracker_frame)
             stage_timing["right_detect_ms"] = float(stage_timing.get("right_detect_ms", 0.0)) + _elapsed_ms(right_detect_started)
             diagnostics["temporal"] = _pair_temporal_diagnostics(
                 left_frame_id=left_frame_id,
@@ -1267,6 +1495,35 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
                     right_frame_id=right_frame_id,
                 )
                 continue
+            if left_pose_estimator is not None and right_pose_estimator is not None:
+                keypoint_anchor_started = time.perf_counter()
+                try:
+                    keypoint_diagnostics = _attach_keypoint_anchor_to_record(
+                        record,
+                        left_frame=left_tracker_frame,
+                        right_frame=right_tracker_frame,
+                        left_pose_estimator=left_pose_estimator,
+                        right_pose_estimator=right_pose_estimator,
+                        min_keypoint_score=min_keypoint_score,
+                        pose_association_margin_px=pose_association_margin_px,
+                        max_pose_association_distance_px=max_pose_association_distance_px,
+                    )
+                    diagnostics.update(keypoint_diagnostics)
+                except Exception as exc:
+                    diagnostics["keypoint_anchor"] = {
+                        "kind": "disabled",
+                        "fallback_reason": "pose_estimation_failed",
+                        "error": str(exc),
+                    }
+                finally:
+                    stage_timing["keypoint_anchor_ms"] = (
+                        float(stage_timing.get("keypoint_anchor_ms", 0.0)) + _elapsed_ms(keypoint_anchor_started)
+                    )
+            elif left_pose_estimator is not None or right_pose_estimator is not None:
+                diagnostics["keypoint_anchor"] = {
+                    "kind": "disabled",
+                    "fallback_reason": "one_eye_pose_estimator_missing",
+                }
             diagnostics.update(record.get("selection", {}))
             message_build_started = time.perf_counter()
             message = build_proxy_targets_message_from_stereo_bbox_record(
@@ -1322,8 +1579,13 @@ def _detector_loop(
     right_reader: Any,
     left_tracker: Any,
     right_tracker: Any,
+    left_pose_estimator: Any | None = None,
+    right_pose_estimator: Any | None = None,
     card_id: str,
     min_confidence: float,
+    min_keypoint_score: float,
+    pose_association_margin_px: float,
+    max_pose_association_distance_px: float,
     recorded_width: int,
     recorded_height: int,
     log_every: int,
@@ -1358,11 +1620,16 @@ def _detector_loop(
             right_reader=right_reader,
             left_tracker=left_tracker,
             right_tracker=right_tracker,
+            left_pose_estimator=left_pose_estimator,
+            right_pose_estimator=right_pose_estimator,
             sequence=detector_sequence,
             card_id=card_id,
             recorded_width=recorded_width,
             recorded_height=recorded_height,
             min_confidence=min_confidence,
+            min_keypoint_score=min_keypoint_score,
+            pose_association_margin_px=pose_association_margin_px,
+            max_pose_association_distance_px=max_pose_association_distance_px,
             max_empty_reads=max_empty_reads,
             max_vertical_error_px=max_vertical_error_px,
             target_stabilizer=target_stabilizer,
@@ -1407,9 +1674,14 @@ def _broadcast_loop(
     right_reader: Any,
     left_tracker: Any,
     right_tracker: Any,
+    left_pose_estimator: Any | None = None,
+    right_pose_estimator: Any | None = None,
     hz: float,
     card_id: str,
     min_confidence: float,
+    min_keypoint_score: float = DEFAULT_MIN_KEYPOINT_SCORE,
+    pose_association_margin_px: float = DEFAULT_POSE_ASSOCIATION_MARGIN_PX,
+    max_pose_association_distance_px: float = DEFAULT_MAX_POSE_ASSOCIATION_DISTANCE_PX,
     recorded_width: int,
     recorded_height: int,
     log_every: int,
@@ -1436,8 +1708,13 @@ def _broadcast_loop(
             "right_reader": right_reader,
             "left_tracker": left_tracker,
             "right_tracker": right_tracker,
+            "left_pose_estimator": left_pose_estimator,
+            "right_pose_estimator": right_pose_estimator,
             "card_id": card_id,
             "min_confidence": min_confidence,
+            "min_keypoint_score": min_keypoint_score,
+            "pose_association_margin_px": pose_association_margin_px,
+            "max_pose_association_distance_px": max_pose_association_distance_px,
             "recorded_width": recorded_width,
             "recorded_height": recorded_height,
             "log_every": log_every,
@@ -1523,6 +1800,7 @@ def _client_loop(conn: socket.socket, address: Any, hub: BroadcastHub) -> None:
 def serve(args: argparse.Namespace) -> int:
     try:
         left_reader, right_reader, left_tracker, right_tracker = _create_stereo_readers_and_trackers(args)
+        left_pose_estimator, right_pose_estimator = create_pose_estimators(args)
     except Exception as exc:
         status, exit_code = startup_error_status(exc, Path(".tmp/antman_vst_stereo_proxy_targets_live_publisher.jsonl"))
         print(json.dumps(status, ensure_ascii=False, separators=(",", ":")), flush=True)
@@ -1534,7 +1812,10 @@ def serve(args: argparse.Namespace) -> int:
             server.bind((args.host, args.port))
             server.listen(8)
             print(f"stereo proxy_targets live publisher listening on ws://{args.host}:{args.port}/proxy_targets", flush=True)
-            print("source: Left/Right VST SHM + HumanTrackor bbox stereo", flush=True)
+            source_label = "Left/Right VST SHM + HumanTrackor bbox stereo"
+            if args.enable_keypoint_anchor:
+                source_label += " + YOLO pose keypoint anchor"
+            print(f"source: {source_label}", flush=True)
             print("waiting for WebSocket client; sent seq appears after a stereo pair passes confidence/depth gates", flush=True)
             hub = BroadcastHub()
             threading.Thread(
@@ -1545,9 +1826,14 @@ def serve(args: argparse.Namespace) -> int:
                     "right_reader": right_reader,
                     "left_tracker": left_tracker,
                     "right_tracker": right_tracker,
+                    "left_pose_estimator": left_pose_estimator,
+                    "right_pose_estimator": right_pose_estimator,
                     "hz": args.hz,
                     "card_id": args.card_id,
                     "min_confidence": args.min_confidence,
+                    "min_keypoint_score": args.min_keypoint_score,
+                    "pose_association_margin_px": args.pose_association_margin_px,
+                    "max_pose_association_distance_px": args.max_pose_association_distance_px,
                     "recorded_width": args.recorded_width,
                     "recorded_height": args.recorded_height,
                     "log_every": args.log_every,
@@ -1611,6 +1897,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--backend", default="ultralytics")
     parser.add_argument("--imgsz", type=int, default=320)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--enable-keypoint-anchor", action="store_true")
+    parser.add_argument("--pose-model", default=DEFAULT_POSE_MODEL)
+    parser.add_argument("--pose-imgsz", type=int, default=DEFAULT_POSE_IMGSZ)
+    parser.add_argument("--pose-conf", type=float, default=DEFAULT_POSE_CONFIDENCE)
+    parser.add_argument("--pose-device", default=None)
+    parser.add_argument("--min-keypoint-score", type=float, default=DEFAULT_MIN_KEYPOINT_SCORE)
+    parser.add_argument("--pose-association-margin-px", type=float, default=DEFAULT_POSE_ASSOCIATION_MARGIN_PX)
+    parser.add_argument("--max-pose-association-distance-px", type=float, default=DEFAULT_MAX_POSE_ASSOCIATION_DISTANCE_PX)
     return parser.parse_args()
 
 

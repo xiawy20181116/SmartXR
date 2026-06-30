@@ -22,12 +22,19 @@ from antman_vst_stereo_proxy_targets_live_publisher import (  # noqa: E402
     DEFAULT_POSITION_FILTER_BETA,
     DEFAULT_POSITION_FILTER_D_CUTOFF,
     DEFAULT_POSITION_FILTER_MIN_CUTOFF,
+    DEFAULT_MAX_POSE_ASSOCIATION_DISTANCE_PX,
+    DEFAULT_MIN_KEYPOINT_SCORE,
+    DEFAULT_POSE_ASSOCIATION_MARGIN_PX,
+    DEFAULT_POSE_CONFIDENCE,
+    DEFAULT_POSE_IMGSZ,
+    DEFAULT_POSE_MODEL,
     DEFAULT_SOURCE_HZ,
     BroadcastHub,
     _broadcast_loop,
     _client_loop,
     _format_address,
     _handshake,
+    create_pose_estimators,
     is_proxy_targets_request,
 )
 from dump_antman_vst_humantrackor_jsonl import DEFAULT_ANTMAN_ROOT, _install_antman_paths  # noqa: E402
@@ -262,6 +269,7 @@ def serve(args: argparse.Namespace) -> int:
             source_hz=args.source_hz,
         )
         left_tracker, right_tracker = create_trackers(args)
+        left_pose_estimator, right_pose_estimator = create_pose_estimators(args)
     except Exception as exc:
         status = {
             "source_alive": False,
@@ -283,6 +291,8 @@ def serve(args: argparse.Namespace) -> int:
             )
             print(f"source: stereo package replay {Path(args.package_dir).resolve()}", flush=True)
             print(f"replay_timing={args.replay_timing} source_hz={args.source_hz}", flush=True)
+            if args.enable_keypoint_anchor:
+                print("keypoint_anchor=enabled pose_model=%s" % args.pose_model, flush=True)
             hub = BroadcastHub()
             threading.Thread(
                 target=_broadcast_loop,
@@ -292,9 +302,14 @@ def serve(args: argparse.Namespace) -> int:
                     "right_reader": right_reader,
                     "left_tracker": left_tracker,
                     "right_tracker": right_tracker,
+                    "left_pose_estimator": left_pose_estimator,
+                    "right_pose_estimator": right_pose_estimator,
                     "hz": args.hz,
                     "card_id": args.card_id,
                     "min_confidence": args.min_confidence,
+                    "min_keypoint_score": args.min_keypoint_score,
+                    "pose_association_margin_px": args.pose_association_margin_px,
+                    "max_pose_association_distance_px": args.max_pose_association_distance_px,
                     "recorded_width": args.recorded_width,
                     "recorded_height": args.recorded_height,
                     "log_every": args.log_every,
@@ -355,6 +370,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--backend", default="ultralytics")
     parser.add_argument("--imgsz", type=int, default=320)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--enable-keypoint-anchor", action="store_true")
+    parser.add_argument("--pose-model", default=DEFAULT_POSE_MODEL)
+    parser.add_argument("--pose-imgsz", type=int, default=DEFAULT_POSE_IMGSZ)
+    parser.add_argument("--pose-conf", type=float, default=DEFAULT_POSE_CONFIDENCE)
+    parser.add_argument("--pose-device", default=None)
+    parser.add_argument("--min-keypoint-score", type=float, default=DEFAULT_MIN_KEYPOINT_SCORE)
+    parser.add_argument("--pose-association-margin-px", type=float, default=DEFAULT_POSE_ASSOCIATION_MARGIN_PX)
+    parser.add_argument("--max-pose-association-distance-px", type=float, default=DEFAULT_MAX_POSE_ASSOCIATION_DISTANCE_PX)
     return parser.parse_args(argv)
 
 

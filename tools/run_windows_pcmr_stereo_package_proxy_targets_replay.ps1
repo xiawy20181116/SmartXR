@@ -22,6 +22,12 @@ param(
     [switch]$UseAntmanPassthroughOverlay,
     [switch]$KeepReceiverOpen,
     [switch]$DemoOnly,
+    [switch]$EnableKeypointAnchor,
+    [string]$PoseModel = "yolov8n-pose.pt",
+    [int]$PoseImgsz = 640,
+    [double]$PoseConf = 0.25,
+    [double]$MinKeypointScore = 0.5,
+    [string]$PoseDevice = "",
     [string]$PythonExe = ""
 )
 
@@ -180,6 +186,8 @@ $PackageDirLiteral = ConvertTo-PowerShellLiteral $ResolvedPackageDir
 $ReplayTimingLiteral = ConvertTo-PowerShellLiteral $ReplayTiming
 $AntmanRootLiteral = ConvertTo-PowerShellLiteral $AntmanRoot
 $GodotExeLiteral = ConvertTo-PowerShellLiteral $GodotExe
+$PoseModelLiteral = ConvertTo-PowerShellLiteral $PoseModel
+$PoseDeviceLiteral = ConvertTo-PowerShellLiteral $PoseDevice
 $WsUrlLiteral = ConvertTo-PowerShellLiteral $WsUrl
 $SenderLogLiteral = ConvertTo-PowerShellLiteral $SenderLog
 $ReceiverLogLiteral = ConvertTo-PowerShellLiteral $ReceiverLog
@@ -193,6 +201,7 @@ $SenderReadyFileLiteral = ConvertTo-PowerShellLiteral $SenderReadyFile
 $UseOverlayLiteral = if ($UseAntmanPassthroughOverlay) { "`$true" } else { "`$false" }
 $KeepReceiverOpenLiteral = if ($KeepReceiverOpen) { "`$true" } else { "`$false" }
 $DemoOnlyLiteral = if ($DemoOnly) { "`$true" } else { "`$false" }
+$EnableKeypointAnchorLiteral = if ($EnableKeypointAnchor) { "`$true" } else { "`$false" }
 
 $SenderContent = @"
 `$ErrorActionPreference = "Stop"
@@ -203,6 +212,7 @@ Write-Host "[sender] WebSocket: $WsUrl"
 Write-Host "[sender] Package: $ResolvedPackageDir"
 Write-Host "[sender] Replay timing: $ReplayTiming source_hz=$SourceHz publish_hz=$Hz"
 Write-Host "[sender] Position filter: min_cutoff=$PositionFilterMinCutoff beta=$PositionFilterBeta"
+Write-Host "[sender] Keypoint anchor: $EnableKeypointAnchor pose_model=$PoseModel pose_imgsz=$PoseImgsz min_keypoint_score=$MinKeypointScore"
 Write-Host "[sender] Depth trace: $DepthTraceFile"
 Write-Host "[sender] A healthy replay should print published stereo seq=..."
 `$PublisherArgs = @(
@@ -222,6 +232,18 @@ Write-Host "[sender] A healthy replay should print published stereo seq=..."
   "--log-every", "$LogEvery",
   "--depth-trace", $DepthTraceFileLiteral
 )
+if ($EnableKeypointAnchorLiteral) {
+  `$PublisherArgs += @(
+    "--enable-keypoint-anchor",
+    "--pose-model", $PoseModelLiteral,
+    "--pose-imgsz", "$PoseImgsz",
+    "--pose-conf", "$PoseConf",
+    "--min-keypoint-score", "$MinKeypointScore"
+  )
+  if ($PoseDeviceLiteral -ne '') {
+    `$PublisherArgs += @("--pose-device", $PoseDeviceLiteral)
+  }
+}
 & $PythonExeLiteral @PublisherArgs 2>&1 | Tee-Object -FilePath $SenderLogLiteral -Append
 `$ExitCode = `$LASTEXITCODE
 Write-Host "[sender] Stereo package replay sender exited with code `$ExitCode"
@@ -366,6 +388,7 @@ Write-Host "WebSocket: $WsUrl"
 Write-Host "Package:   $ResolvedPackageDir"
 Write-Host "Timing:    $ReplayTiming source_hz=$SourceHz publish_hz=$Hz"
 Write-Host "Filter:    min_cutoff=$PositionFilterMinCutoff beta=$PositionFilterBeta"
+Write-Host "Keypoint anchor: $EnableKeypointAnchor"
 Write-Host "Demo only: $DemoOnly"
 Write-Host "Work dir:  $WorkDir"
 Write-Host "Depth trace: $DepthTraceFile"
