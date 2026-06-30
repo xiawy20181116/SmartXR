@@ -2,15 +2,22 @@ param(
     [string]$AntmanRoot = "E:\xia\Antman_smart",
     [string]$VstAiShmRoot = "E:\xia\Antman\0422\0527\P1\vst_ai_shm",
     [string]$GodotExe = "E:\xia\Godot_v4.6.2-stable_win64.exe\Godot_v4.6.2-stable_win64.exe",
+    [string]$SmartXROptionsPath = "config\smartxr_options.json",
     [string]$HostName = "127.0.0.1",
     [int]$Port = 8766,
     [double]$Hz = 20.0,
     [double]$MinConfidence = 0.5,
+    [double]$PositionFilterMinCutoff = 1.0,
+    [double]$PositionFilterBeta = 0.08,
     [int]$RecordedWidth = 880,
     [int]$RecordedHeight = 660,
     [int]$LogEvery = 20,
     [double]$SenderReadyTimeoutSeconds = 45.0,
     [double]$ProxyTargetsTimeoutSeconds = 60.0,
+    [ValidateSet("", "dynamic", "world_latched")]
+    [string]$ProxyTargetsAnchorMode = "",
+    [ValidateSet("", "negative_z_forward", "positive_z_forward")]
+    [string]$ProxyTargetsHeadZMode = "",
     [int]$MonitorMinPackets = 10,
     [double]$MonitorTimeoutSeconds = 20.0,
     [switch]$UseAntmanPassthroughOverlay,
@@ -27,6 +34,11 @@ param(
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = [string](Resolve-Path (Join-Path -Path $PSScriptRoot -ChildPath ".."))
+$ResolvedSmartXROptionsPath = if ([System.IO.Path]::IsPathRooted($SmartXROptionsPath)) {
+    [System.IO.Path]::GetFullPath($SmartXROptionsPath)
+} else {
+    [System.IO.Path]::GetFullPath((Join-Path -Path $RepoRoot -ChildPath $SmartXROptionsPath))
+}
 $Publisher = Join-Path -Path $RepoRoot -ChildPath "tools\antman_vst_stereo_proxy_targets_live_publisher.py"
 $PcmrRunner = Join-Path -Path $RepoRoot -ChildPath "tools\run_windows_pcmr.ps1"
 $MonitorRunner = Join-Path -Path $RepoRoot -ChildPath "tools\run_proxy_targets_live_monitor.ps1"
@@ -144,7 +156,7 @@ if ($PythonExe -eq "") {
     }
 }
 
-foreach ($RequiredPath in @($Publisher, $PcmrRunner, $MonitorRunner, $HealthValidator, $RunDiagnosticsAnalyzer)) {
+foreach ($RequiredPath in @($Publisher, $PcmrRunner, $MonitorRunner, $HealthValidator, $RunDiagnosticsAnalyzer, $ResolvedSmartXROptionsPath)) {
     if (-not (Test-Path -LiteralPath $RequiredPath)) {
         throw "Required file not found: $RequiredPath"
     }
@@ -167,6 +179,9 @@ $RunDiagnosticsAnalyzerLiteral = ConvertTo-PowerShellLiteral $RunDiagnosticsAnal
 $AntmanRootLiteral = ConvertTo-PowerShellLiteral $AntmanRoot
 $VstAiShmRootLiteral = ConvertTo-PowerShellLiteral $VstAiShmRoot
 $GodotExeLiteral = ConvertTo-PowerShellLiteral $GodotExe
+$ProxyTargetsAnchorModeLiteral = ConvertTo-PowerShellLiteral $ProxyTargetsAnchorMode
+$ProxyTargetsHeadZModeLiteral = ConvertTo-PowerShellLiteral $ProxyTargetsHeadZMode
+$SmartXROptionsPathLiteral = ConvertTo-PowerShellLiteral $ResolvedSmartXROptionsPath
 $PoseModelLiteral = ConvertTo-PowerShellLiteral $PoseModel
 $PoseDeviceLiteral = ConvertTo-PowerShellLiteral $PoseDevice
 $WsUrlLiteral = ConvertTo-PowerShellLiteral $WsUrl
@@ -191,6 +206,8 @@ Write-Host "[sender] SmartXR stereo sender"
 Write-Host "[sender] WebSocket: $WsUrl"
 Write-Host "[sender] Expected depth_source=pov_stereo_triangulation depth_confidence=high by default, or shoulder_midpoint when keypoint anchor is enabled"
 Write-Host "[sender] Keypoint anchor: $EnableKeypointAnchor pose_model=$PoseModel pose_imgsz=$PoseImgsz min_keypoint_score=$MinKeypointScore"
+Write-Host "[sender] Position filter: min_cutoff=$PositionFilterMinCutoff beta=$PositionFilterBeta"
+Write-Host "[sender] SmartXR options: $ResolvedSmartXROptionsPath"
 Write-Host "[sender] Depth trace: $DepthTraceFile"
 Write-Host "[sender] VST AI SHM root: $VstAiShmRoot"
 Write-Host "[sender] A later healthy run should print sent stereo seq=..."
@@ -203,9 +220,12 @@ Write-Host "[sender] A later healthy run should print sent stereo seq=..."
   "--port", "$Port",
   "--hz", "$Hz",
   "--min-confidence", "$MinConfidence",
+  "--position-filter-min-cutoff", "$PositionFilterMinCutoff",
+  "--position-filter-beta", "$PositionFilterBeta",
   "--recorded-width", "$RecordedWidth",
   "--recorded-height", "$RecordedHeight",
   "--log-every", "$LogEvery",
+  "--smartxr-options", $SmartXROptionsPathLiteral,
   "--depth-trace", $DepthTraceFileLiteral
 )
 if ($EnableKeypointAnchorLiteral) {
@@ -241,7 +261,14 @@ Write-Host "[receiver] Sender ready; starting PCMR validation."
   GodotExe = $GodotExeLiteral
   ValidateProxyTargets = `$true
   ProxyTargetsWsUrl = $WsUrlLiteral
+  SmartXROptionsPath = $SmartXROptionsPathLiteral
   ProxyTargetsTimeoutSeconds = $ProxyTargetsTimeoutSeconds
+}
+if ($ProxyTargetsAnchorModeLiteral -ne '') {
+  `$ArgsList["ProxyTargetsAnchorMode"] = $ProxyTargetsAnchorModeLiteral
+}
+if ($ProxyTargetsHeadZModeLiteral -ne '') {
+  `$ArgsList["ProxyTargetsHeadZMode"] = $ProxyTargetsHeadZModeLiteral
 }
 if ($UseOverlayLiteral) {
   `$ArgsList["UseAntmanPassthroughOverlay"] = `$true
@@ -338,10 +365,14 @@ Write-Host "SmartXR-PCMR stereo proxy_targets live manual validation"
 Write-Host "This opens one Windows Terminal window with three tabs when wt.exe is available."
 Write-Host "It falls back to three visible PowerShell windows otherwise."
 Write-Host "WebSocket: $WsUrl"
+Write-Host "Anchor mode: $ProxyTargetsAnchorMode"
+Write-Host "Head Z mode: $ProxyTargetsHeadZMode"
+Write-Host "SmartXR options: $ResolvedSmartXROptionsPath"
 Write-Host "Work dir:  $WorkDir"
 Write-Host "VST AI SHM root: $VstAiShmRoot"
 Write-Host "Keep receiver Godot open: $KeepReceiverOpen"
 Write-Host "Keypoint anchor: $EnableKeypointAnchor"
+Write-Host "Filter:    min_cutoff=$PositionFilterMinCutoff beta=$PositionFilterBeta"
 Write-Host "Depth trace: $DepthTraceFile"
 Write-Host ""
 

@@ -15,9 +15,20 @@ const CONFIG_RES := "user://smartxr_options.json"
 
 ## Environment variable names. PROXY_TARGETS_WS_URL predates this class and
 ## keeps its historical name; new settings use the SMARTXR_ prefix.
+const ENV_OPTIONS_PATH := "SMARTXR_OPTIONS_PATH"
 const ENV_CONTROL_WS_URL := "SMARTXR_CONTROL_WS_URL"
 const ENV_PROXY_TARGETS_WS_URL := "PROXY_TARGETS_WS_URL"
 const ENV_PROXY_TARGETS_WS_ENABLED := "SMARTXR_PROXY_TARGETS_WS_ENABLED"
+const ENV_PROXY_TARGETS_ANCHOR_MODE := "SMARTXR_PROXY_TARGETS_ANCHOR_MODE"
+const ENV_PROXY_TARGETS_HEAD_Z_MODE := "SMARTXR_PROXY_TARGETS_HEAD_Z_MODE"
+const ENV_PROXY_TARGETS_CARD_OFFSET_MODE := "SMARTXR_PROXY_TARGETS_CARD_OFFSET_MODE"
+const ENV_PROXY_TARGETS_CARD_OFFSET_SPACE := "SMARTXR_PROXY_TARGETS_CARD_OFFSET_SPACE"
+const ENV_PROXY_TARGETS_CARD_DEPTH_SCALE := "SMARTXR_PROXY_TARGETS_CARD_DEPTH_SCALE"
+const ENV_PROXY_TARGETS_CARD_DEPTH_OFFSET_M := "SMARTXR_PROXY_TARGETS_CARD_DEPTH_OFFSET_M"
+const ENV_PROXY_TARGETS_CARD_RIGHT_WIDTH_FRACTION := "SMARTXR_PROXY_TARGETS_CARD_RIGHT_WIDTH_FRACTION"
+const ENV_PROXY_TARGETS_CARD_RIGHT_ANGLE_DEG := "SMARTXR_PROXY_TARGETS_CARD_RIGHT_ANGLE_DEG"
+const ENV_PROXY_TARGETS_CARD_UP_M := "SMARTXR_PROXY_TARGETS_CARD_UP_M"
+const ENV_PROXY_TARGETS_CARD_FALLBACK := "SMARTXR_PROXY_TARGETS_CARD_FALLBACK"
 const ENV_VST_HORIZONTAL_FOV_DEG := "SMARTXR_VST_HORIZONTAL_FOV_DEG"
 const ENV_VST_VERTICAL_FOV_DEG := "SMARTXR_VST_VERTICAL_FOV_DEG"
 const ENV_VST_PRINCIPAL_POINT_X := "SMARTXR_VST_PRINCIPAL_POINT_X"
@@ -34,7 +45,10 @@ var _config_loaded := false
 # own file breaks compilation in no-project mode (script-only probes), where
 # class_name global registration does not happen.
 static func load_options():
-	return load_options_from(CONFIG_RES)
+	var config_path := OS.get_environment(ENV_OPTIONS_PATH).strip_edges()
+	if config_path.is_empty():
+		config_path = CONFIG_RES
+	return load_options_from(config_path)
 
 
 ## Same as load_options() but reading the config from an explicit path.
@@ -105,6 +119,34 @@ func proxy_targets_ws_url(default_url: String) -> String:
 ## Whether the proxy_targets live WebSocket consumer should run.
 func proxy_targets_ws_enabled(default_enabled: bool) -> bool:
 	return resolve_bool("proxy_targets_ws_enabled", ENV_PROXY_TARGETS_WS_ENABLED, default_enabled)
+
+
+## proxy_targets card anchor comparison mode: dynamic or world_latched.
+func proxy_targets_anchor_mode(default_mode: String) -> String:
+	return resolve_string("proxy_targets_anchor_mode", ENV_PROXY_TARGETS_ANCHOR_MODE, default_mode)
+
+
+## proxy_targets head-space Z convention comparison mode.
+func proxy_targets_head_z_mode(default_mode: String) -> String:
+	return resolve_string("proxy_targets_head_z_mode", ENV_PROXY_TARGETS_HEAD_Z_MODE, default_mode)
+
+
+## proxy_targets card offset rule used when the card binding omits one.
+func proxy_targets_card_offset_rule(default_rule: Dictionary) -> Dictionary:
+	var rule := default_rule.duplicate(true)
+	var nested = _config.get("proxy_targets_card_offset_rule", {})
+	if typeof(nested) == TYPE_DICTIONARY:
+		for key in nested.keys():
+			rule[key] = nested[key]
+	rule["mode"] = resolve_string("proxy_targets_card_offset_mode", ENV_PROXY_TARGETS_CARD_OFFSET_MODE, str(rule.get("mode", "depth_scaled_right_half_width")))
+	rule["offset_space"] = resolve_string("proxy_targets_card_offset_space", ENV_PROXY_TARGETS_CARD_OFFSET_SPACE, str(rule.get("offset_space", "world")))
+	rule["depth_scale"] = resolve_float("proxy_targets_card_depth_scale", ENV_PROXY_TARGETS_CARD_DEPTH_SCALE, float(rule.get("depth_scale", 1.0)))
+	rule["depth_offset_m"] = resolve_float("proxy_targets_card_depth_offset_m", ENV_PROXY_TARGETS_CARD_DEPTH_OFFSET_M, float(rule.get("depth_offset_m", 0.0)))
+	rule["right_width_fraction"] = resolve_float("proxy_targets_card_right_width_fraction", ENV_PROXY_TARGETS_CARD_RIGHT_WIDTH_FRACTION, float(rule.get("right_width_fraction", 0.5)))
+	rule["right_angle_deg"] = resolve_float("proxy_targets_card_right_angle_deg", ENV_PROXY_TARGETS_CARD_RIGHT_ANGLE_DEG, float(rule.get("right_angle_deg", 15.0)))
+	rule["up_m"] = resolve_float("proxy_targets_card_up_m", ENV_PROXY_TARGETS_CARD_UP_M, float(rule.get("up_m", 0.0)))
+	rule["fallback"] = resolve_string("proxy_targets_card_fallback", ENV_PROXY_TARGETS_CARD_FALLBACK, str(rule.get("fallback", "hold_last_pose")))
+	return rule
 
 
 ## Whether the in-headset diagnostic Label3D is visible.

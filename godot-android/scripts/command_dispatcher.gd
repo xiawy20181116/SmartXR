@@ -15,6 +15,7 @@ const EFFECT_APPLY_3DOF_ANCHOR := "apply_3dof_anchor"
 const EFFECT_DEBUG_TARGET_FREE := "debug_target_free"
 const EFFECT_DEBUG_TARGET_RESET := "debug_target_reset"
 const EFFECT_HIDE_VST_BBOX_FRAME := "hide_vst_bbox_frame"
+const EFFECT_RESET_PROXY_WORLD_LATCHES := "reset_proxy_world_latches"
 
 
 static func default_config(overrides: Dictionary = {}) -> Dictionary:
@@ -63,6 +64,7 @@ static func default_state(config: Dictionary) -> Dictionary:
 static func apply_command(state: Dictionary, command: String, config: Dictionary) -> Dictionary:
 	var next_state := _copy_state(state)
 	var effects := []
+	var apply_3dof_anchor := true
 	next_state["last_command"] = command
 	match command:
 		"yaw_left", "left", "move_left", "a":
@@ -145,11 +147,15 @@ static func apply_command(state: Dictionary, command: String, config: Dictionary
 			effects.append(EFFECT_DEBUG_TARGET_FREE)
 		"debug_target_reset":
 			effects.append(EFFECT_DEBUG_TARGET_RESET)
+		"reset_proxy_world_latch", "reset_world_anchor", "world_latch_reset":
+			effects.append(EFFECT_RESET_PROXY_WORLD_LATCHES)
+			apply_3dof_anchor = false
 		"reset", "r":
 			next_state = default_state(config)
 			next_state["last_command"] = command
 			effects.append(EFFECT_HIDE_VST_BBOX_FRAME)
-	effects.append(EFFECT_APPLY_3DOF_ANCHOR)
+	if apply_3dof_anchor:
+		effects.append(EFFECT_APPLY_3DOF_ANCHOR)
 	next_state["effects"] = effects
 	return next_state
 

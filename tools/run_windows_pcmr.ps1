@@ -5,6 +5,11 @@ param(
     [switch]$KeepGodotOpen,
     [switch]$UseAntmanPassthroughOverlay,
     [string]$ProxyTargetsWsUrl = "ws://127.0.0.1:8766/proxy_targets",
+    [ValidateSet("", "dynamic", "world_latched")]
+    [string]$ProxyTargetsAnchorMode = "",
+    [ValidateSet("", "negative_z_forward", "positive_z_forward")]
+    [string]$ProxyTargetsHeadZMode = "",
+    [string]$SmartXROptionsPath = "",
     [double]$ProxyTargetsTimeoutSeconds = 15.0,
     [string]$GodotExe = "E:\xia\Godot_v4.6.2-stable_win64.exe\Godot_v4.6.2-stable_win64.exe"
 )
@@ -22,6 +27,14 @@ $WorkDir = Join-Path $RepoRoot ".tmp\windows_pcmr_proxy_targets"
 $GodotLog = Join-Path $WorkDir "godot_pcmr.log"
 $GodotErr = Join-Path $WorkDir "godot_pcmr.err.log"
 $WorkDirStatusFile = Join-Path $WorkDir "proxy_targets_live_status.json"
+$ResolvedSmartXROptionsPath = ""
+if (-not [string]::IsNullOrWhiteSpace($SmartXROptionsPath)) {
+    if ([System.IO.Path]::IsPathRooted($SmartXROptionsPath)) {
+        $ResolvedSmartXROptionsPath = [System.IO.Path]::GetFullPath($SmartXROptionsPath)
+    } else {
+        $ResolvedSmartXROptionsPath = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $SmartXROptionsPath))
+    }
+}
 
 function Restore-EnvVar {
     param(
@@ -67,6 +80,9 @@ Write-Host "SmartXR-PCMR Windows validation"
 Write-Host "Before running in PCMR, start SteamVR / WMR / Meta Link and make it the active OpenXR runtime."
 Write-Host "Project: $ProjectDir"
 Write-Host "ProxyTargets WS: $ProxyTargetsWsUrl"
+Write-Host "ProxyTargets anchor mode: $ProxyTargetsAnchorMode"
+Write-Host "ProxyTargets head Z mode: $ProxyTargetsHeadZMode"
+Write-Host "SmartXR options path: $ResolvedSmartXROptionsPath"
 if ($ValidateProxyTargets) {
     Write-Host "SmartXR-PCMR proxy_targets live validation"
     Write-Host "Status file: $StatusFile"
@@ -84,12 +100,28 @@ if ($UseAntmanPassthroughOverlay) {
 & $GxrExtensionSwitch -Mode disable -ProjectDir $ProjectDir
 $ExitCode = 0
 $OldProxyTargetsWsUrl = $env:PROXY_TARGETS_WS_URL
+$OldSmartXROptionsPath = $env:SMARTXR_OPTIONS_PATH
+$OldProxyTargetsAnchorMode = $env:SMARTXR_PROXY_TARGETS_ANCHOR_MODE
+$OldProxyTargetsHeadZMode = $env:SMARTXR_PROXY_TARGETS_HEAD_Z_MODE
 $OldPassthroughOverlay = $env:SMARTXR_USE_PASSTHROUGH_OVERLAY
 $OldStatusHudVisible = $env:SMARTXR_STATUS_HUD_VISIBLE
 $GodotProcess = $null
 
 try {
     $env:PROXY_TARGETS_WS_URL = $ProxyTargetsWsUrl
+    if (-not [string]::IsNullOrWhiteSpace($ResolvedSmartXROptionsPath)) {
+        $env:SMARTXR_OPTIONS_PATH = $ResolvedSmartXROptionsPath
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ProxyTargetsAnchorMode)) {
+        $env:SMARTXR_PROXY_TARGETS_ANCHOR_MODE = $ProxyTargetsAnchorMode
+    } else {
+        Remove-Item "Env:\SMARTXR_PROXY_TARGETS_ANCHOR_MODE" -ErrorAction SilentlyContinue
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ProxyTargetsHeadZMode)) {
+        $env:SMARTXR_PROXY_TARGETS_HEAD_Z_MODE = $ProxyTargetsHeadZMode
+    } else {
+        Remove-Item "Env:\SMARTXR_PROXY_TARGETS_HEAD_Z_MODE" -ErrorAction SilentlyContinue
+    }
     if ($ValidateProxyTargets -and [string]::IsNullOrWhiteSpace($env:SMARTXR_STATUS_HUD_VISIBLE)) {
         $env:SMARTXR_STATUS_HUD_VISIBLE = "0"
     }
@@ -137,6 +169,9 @@ try {
         Stop-ChildProcess -Process $GodotProcess
     }
     Restore-EnvVar -Name "PROXY_TARGETS_WS_URL" -Value $OldProxyTargetsWsUrl
+    Restore-EnvVar -Name "SMARTXR_OPTIONS_PATH" -Value $OldSmartXROptionsPath
+    Restore-EnvVar -Name "SMARTXR_PROXY_TARGETS_ANCHOR_MODE" -Value $OldProxyTargetsAnchorMode
+    Restore-EnvVar -Name "SMARTXR_PROXY_TARGETS_HEAD_Z_MODE" -Value $OldProxyTargetsHeadZMode
     Restore-EnvVar -Name "SMARTXR_USE_PASSTHROUGH_OVERLAY" -Value $OldPassthroughOverlay
     Restore-EnvVar -Name "SMARTXR_STATUS_HUD_VISIBLE" -Value $OldStatusHudVisible
     & $GxrExtensionSwitch -Mode enable -ProjectDir $ProjectDir

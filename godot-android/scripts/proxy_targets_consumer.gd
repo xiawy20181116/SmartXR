@@ -1,12 +1,21 @@
 extends Node3D
 class_name ProxyTargetsConsumer
 
+const ANCHOR_MODE_DYNAMIC := "dynamic"
+const ANCHOR_MODE_WORLD_LATCHED := "world_latched"
+const HEAD_Z_MODE_NEGATIVE_FORWARD := "negative_z_forward"
+const HEAD_Z_MODE_POSITIVE_FORWARD := "positive_z_forward"
 
 var proxy_root: Node3D = null
 var head_reference: Node3D = null
+var proxy_anchor_mode := ANCHOR_MODE_DYNAMIC
+var proxy_head_z_mode := HEAD_Z_MODE_NEGATIVE_FORWARD
 var _proxies := {}
 var _card_bindings := {}
 var _last_applied_target_info := {}
+var _world_latches := {}
+var _world_latch_references := {}
+var _world_latch_sizes := {}
 
 
 func _ready() -> void:
@@ -57,6 +66,30 @@ func set_head_reference(reference: Node3D) -> void:
 	head_reference = reference
 
 
+func set_proxy_head_z_mode(mode: String) -> void:
+	proxy_head_z_mode = _normalize_proxy_head_z_mode(mode)
+
+
+func set_proxy_anchor_mode(mode: String) -> void:
+	var normalized := _normalize_proxy_anchor_mode(mode)
+	if normalized == proxy_anchor_mode:
+		return
+	proxy_anchor_mode = normalized
+	if proxy_anchor_mode == ANCHOR_MODE_DYNAMIC:
+		reset_world_latches()
+
+
+func reset_world_latches() -> void:
+	_world_latches.clear()
+	_world_latch_references.clear()
+	_world_latch_sizes.clear()
+	for proxy_id in _proxies:
+		var proxy: Node3D = _proxies.get(proxy_id, null)
+		if proxy != null:
+			proxy.set_meta("proxy_world_latched", false)
+			proxy.set_meta("proxy_world_latch_state", "reset")
+
+
 func get_last_applied_target_info() -> Dictionary:
 	return _last_applied_target_info.duplicate(true)
 
@@ -65,6 +98,10 @@ func _apply_target(target: Dictionary) -> void:
 	var target_id := str(target.get("target_id", ""))
 	if target_id.is_empty():
 		return
+	if _target_is_lost(target):
+		_world_latches.erase(target_id)
+		_world_latch_references.erase(target_id)
+		_world_latch_sizes.erase(target_id)
 
 	var proxy: Node3D = _proxies.get(target_id, null)
 	if proxy == null:
@@ -76,24 +113,53 @@ func _apply_target(target: Dictionary) -> void:
 	var transform_data: Variant = target.get("transform", {})
 	if typeof(transform_data) == TYPE_DICTIONARY:
 		var parsed_transform := _parse_transform(transform_data, proxy.global_transform)
+		var target_size_m := _target_size_m(target)
 		var local_position := parsed_transform.origin
+		var runtime_transform := parsed_transform
+		var runtime_local_position := local_position
 		var coordinate_space := _target_coordinate_space(target)
 		var world_from_head_applied := false
+		var world_latched := false
+		var world_latch_state := ANCHOR_MODE_DYNAMIC
+		var offset_reference_transform := _head_reference_transform()
 		if _is_head_coordinate_space(coordinate_space) and head_reference != null:
-			parsed_transform = _head_transform_to_world(parsed_transform)
+			runtime_transform = _head_transform_for_runtime(parsed_transform)
+			runtime_local_position = runtime_transform.origin
+			parsed_transform = _head_transform_to_world(runtime_transform)
 			world_from_head_applied = true
+		if proxy_anchor_mode == ANCHOR_MODE_WORLD_LATCHED:
+			var latch_result := _apply_world_latch(target_id, target, parsed_transform, proxy.global_transform, offset_reference_transform, target_size_m)
+			parsed_transform = latch_result.get("transform", parsed_transform)
+			offset_reference_transform = latch_result.get("reference_transform", offset_reference_transform)
+			target_size_m = latch_result.get("target_size_m", target_size_m)
+			world_latched = bool(latch_result.get("world_latched", false))
+			world_latch_state = str(latch_result.get("world_latch_state", "-"))
 		proxy.global_transform = parsed_transform
 		proxy.set_meta("proxy_coordinate_space", coordinate_space)
 		proxy.set_meta("proxy_world_from_head_applied", world_from_head_applied)
 		proxy.set_meta("proxy_local_position", local_position)
+		proxy.set_meta("proxy_runtime_local_position", runtime_local_position)
 		proxy.set_meta("proxy_world_position", parsed_transform.origin)
+		proxy.set_meta("proxy_target_size_m", target_size_m)
+		proxy.set_meta("proxy_target_width_m", target_size_m.x)
+		proxy.set_meta("proxy_head_z_mode", proxy_head_z_mode)
+		proxy.set_meta("proxy_anchor_mode", proxy_anchor_mode)
+		proxy.set_meta("proxy_world_latched", world_latched)
+		proxy.set_meta("proxy_world_latch_state", world_latch_state)
+		proxy.set_meta("proxy_world_latch_reference_transform", offset_reference_transform)
 		_last_applied_target_info = {
 			"target_id": target_id,
 			"source": str(target.get("source", "")),
 			"coordinate_space": coordinate_space,
 			"world_from_head_applied": world_from_head_applied,
 			"local_position": _vec3_to_array(local_position),
+			"runtime_local_position": _vec3_to_array(runtime_local_position),
 			"world_position": _vec3_to_array(parsed_transform.origin),
+			"target_size_m": _vec3_to_array(target_size_m),
+			"head_z_mode": proxy_head_z_mode,
+			"anchor_mode": proxy_anchor_mode,
+			"world_latched": world_latched,
+			"world_latch_state": world_latch_state,
 		}
 	proxy.visible = str(target.get("state", "tracked")) != "lost"
 	proxy.set_meta("proxy_target_id", target_id)
@@ -125,6 +191,21 @@ func _parse_quaternion(value, fallback: Quaternion) -> Quaternion:
 	return Quaternion(float(value[0]), float(value[1]), float(value[2]), float(value[3])).normalized()
 
 
+func _target_size_m(target: Dictionary) -> Vector3:
+	var size = target.get("target_size_m", {})
+	if typeof(size) != TYPE_DICTIONARY:
+		var source_coordinate = target.get("source_coordinate", {})
+		if typeof(source_coordinate) == TYPE_DICTIONARY:
+			size = source_coordinate.get("target_size_m", {})
+	if typeof(size) != TYPE_DICTIONARY:
+		return Vector3.ZERO
+	return Vector3(
+		maxf(float(size.get("width", 0.0)), 0.0),
+		maxf(float(size.get("height", 0.0)), 0.0),
+		maxf(float(size.get("depth", 0.0)), 0.0)
+	)
+
+
 func _target_coordinate_space(target: Dictionary) -> String:
 	var transform_space := str(target.get("transform_space", "")).strip_edges().to_lower()
 	if not transform_space.is_empty():
@@ -147,10 +228,81 @@ func _is_head_coordinate_space(coordinate_space: String) -> bool:
 	return ["head", "godot_head", "camera", "xr_camera"].has(coordinate_space.strip_edges().to_lower())
 
 
+func _apply_world_latch(target_id: String, target: Dictionary, world_transform: Transform3D, current_world_transform: Transform3D, reference_transform: Transform3D, target_size_m: Vector3) -> Dictionary:
+	if proxy_anchor_mode != ANCHOR_MODE_WORLD_LATCHED:
+		return {"transform": world_transform, "world_latched": false, "world_latch_state": ANCHOR_MODE_DYNAMIC}
+	if _target_is_lost(target):
+		_world_latches.erase(target_id)
+		_world_latch_references.erase(target_id)
+		_world_latch_sizes.erase(target_id)
+		return {"transform": world_transform, "reference_transform": reference_transform, "target_size_m": target_size_m, "world_latched": false, "world_latch_state": "cleared_lost"}
+	if _world_latches.has(target_id):
+		return {
+			"transform": _world_latches[target_id],
+			"reference_transform": _world_latch_references.get(target_id, reference_transform),
+			"target_size_m": _world_latch_sizes.get(target_id, target_size_m),
+			"world_latched": true,
+			"world_latch_state": "latched_held"
+		}
+	if not _target_is_fresh(target):
+		return {"transform": current_world_transform, "reference_transform": reference_transform, "target_size_m": target_size_m, "world_latched": false, "world_latch_state": "waiting_fresh"}
+	_world_latches[target_id] = world_transform
+	_world_latch_references[target_id] = reference_transform
+	_world_latch_sizes[target_id] = target_size_m
+	return {"transform": world_transform, "reference_transform": reference_transform, "target_size_m": target_size_m, "world_latched": true, "world_latch_state": "latched_fresh"}
+
+
+func _target_is_fresh(target: Dictionary) -> bool:
+	if _target_is_lost(target):
+		return false
+	if bool(target.get("held", false)):
+		return false
+	var freshness = target.get("freshness", {})
+	if typeof(freshness) == TYPE_DICTIONARY:
+		var freshness_state := str(freshness.get("state", "")).strip_edges().to_lower()
+		if not freshness_state.is_empty():
+			return freshness_state == "fresh"
+	var tracking_confidence := str(target.get("tracking_confidence", "")).strip_edges().to_lower()
+	if not tracking_confidence.is_empty():
+		return tracking_confidence == "fresh"
+	return true
+
+
+func _target_is_lost(target: Dictionary) -> bool:
+	return str(target.get("state", "tracked")).strip_edges().to_lower() == "lost"
+
+
+func _normalize_proxy_anchor_mode(mode: String) -> String:
+	var normalized := mode.strip_edges().to_lower()
+	if normalized == ANCHOR_MODE_WORLD_LATCHED:
+		return ANCHOR_MODE_WORLD_LATCHED
+	return ANCHOR_MODE_DYNAMIC
+
+
+func _normalize_proxy_head_z_mode(mode: String) -> String:
+	var normalized := mode.strip_edges().to_lower()
+	if normalized == HEAD_Z_MODE_POSITIVE_FORWARD:
+		return HEAD_Z_MODE_POSITIVE_FORWARD
+	return HEAD_Z_MODE_NEGATIVE_FORWARD
+
+
+func _head_transform_for_runtime(head_transform: Transform3D) -> Transform3D:
+	var runtime_transform := head_transform
+	if proxy_head_z_mode == HEAD_Z_MODE_POSITIVE_FORWARD:
+		runtime_transform.origin.z = -runtime_transform.origin.z
+	return runtime_transform
+
+
 func _head_transform_to_world(head_transform: Transform3D) -> Transform3D:
 	if head_reference == null:
 		return head_transform
 	return head_reference.global_transform * head_transform
+
+
+func _head_reference_transform() -> Transform3D:
+	if head_reference == null:
+		return Transform3D.IDENTITY
+	return head_reference.global_transform
 
 
 func _vec3_to_array(value: Vector3) -> Array:

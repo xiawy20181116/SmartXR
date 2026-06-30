@@ -18,8 +18,16 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("[switch]$ValidateProxyTargets", source)
         self.assertIn("[switch]$UseAntmanPassthroughOverlay", source)
         self.assertIn('[string]$ProxyTargetsWsUrl = "ws://127.0.0.1:8766/proxy_targets"', source)
+        self.assertIn('[ValidateSet("", "dynamic", "world_latched")]', source)
+        self.assertIn('[string]$ProxyTargetsAnchorMode = ""', source)
+        self.assertIn('[ValidateSet("", "negative_z_forward", "positive_z_forward")]', source)
+        self.assertIn('[string]$ProxyTargetsHeadZMode = ""', source)
+        self.assertIn('[string]$SmartXROptionsPath = ""', source)
         self.assertIn("[double]$ProxyTargetsTimeoutSeconds = 15.0", source)
         self.assertIn("PROXY_TARGETS_WS_URL", source)
+        self.assertIn("SMARTXR_OPTIONS_PATH", source)
+        self.assertIn("SMARTXR_PROXY_TARGETS_ANCHOR_MODE", source)
+        self.assertIn("SMARTXR_PROXY_TARGETS_HEAD_Z_MODE", source)
         self.assertIn("SMARTXR_USE_PASSTHROUGH_OVERLAY", source)
         self.assertIn("SMARTXR_STATUS_HUD_VISIBLE", source)
         self.assertIn("passthrough_overlay_status.json", source)
@@ -28,10 +36,18 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("--require", source)
         self.assertIn("attached", source)
         self.assertIn("SmartXR-PCMR proxy_targets live validation", source)
+        self.assertIn("ProxyTargets anchor mode: $ProxyTargetsAnchorMode", source)
+        self.assertIn("ProxyTargets head Z mode: $ProxyTargetsHeadZMode", source)
+        self.assertIn("SmartXR options path: $ResolvedSmartXROptionsPath", source)
         self.assertIn("SmartXR-PCMR Antman passthrough overlay", source)
+        self.assertIn("Restore-EnvVar -Name \"SMARTXR_OPTIONS_PATH\"", source)
+        self.assertIn("Restore-EnvVar -Name \"SMARTXR_PROXY_TARGETS_ANCHOR_MODE\"", source)
+        self.assertIn("Restore-EnvVar -Name \"SMARTXR_PROXY_TARGETS_HEAD_Z_MODE\"", source)
         self.assertIn("Restore-EnvVar -Name \"SMARTXR_USE_PASSTHROUGH_OVERLAY\"", source)
         self.assertIn("Restore-EnvVar -Name \"SMARTXR_STATUS_HUD_VISIBLE\"", source)
         self.assertIn("Restore-EnvVar -Name \"PROXY_TARGETS_WS_URL\"", source)
+        self.assertIn('if (-not [string]::IsNullOrWhiteSpace($ProxyTargetsAnchorMode)) {', source)
+        self.assertIn('if (-not [string]::IsNullOrWhiteSpace($ProxyTargetsHeadZMode)) {', source)
 
     def test_validate_proxy_targets_hides_in_headset_status_hud(self):
         source = RUNNER.read_text(encoding="utf-8")
@@ -83,6 +99,8 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("receiver waits for sender_ready", source)
         self.assertIn("ValidateProxyTargets = `$true", source)
         self.assertIn("ProxyTargetsWsUrl = $WsUrlLiteral", source)
+        self.assertIn('`$ArgsList["ProxyTargetsAnchorMode"] = $ProxyTargetsAnchorModeLiteral', source)
+        self.assertIn('`$ArgsList["ProxyTargetsHeadZMode"] = $ProxyTargetsHeadZModeLiteral', source)
         self.assertIn("ws://${HostName}:${Port}/proxy_targets", source)
         self.assertIn("depth_confidence=high", source)
 
@@ -115,6 +133,8 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("GodotExe = $GodotExeLiteral", source)
         self.assertIn("ValidateProxyTargets = `$true", source)
         self.assertIn("ProxyTargetsWsUrl = $WsUrlLiteral", source)
+        self.assertIn('`$ArgsList["ProxyTargetsAnchorMode"] = $ProxyTargetsAnchorModeLiteral', source)
+        self.assertIn('`$ArgsList["ProxyTargetsHeadZMode"] = $ProxyTargetsHeadZModeLiteral', source)
         self.assertIn("ProxyTargetsTimeoutSeconds = $ProxyTargetsTimeoutSeconds", source)
         self.assertIn("$MonitorArgs = @{", source)
         self.assertIn("$MonitorArgsList = @(", source)
@@ -220,6 +240,41 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn('"--position-filter-beta", "$PositionFilterBeta"', source)
         self.assertIn("Position filter: min_cutoff=$PositionFilterMinCutoff beta=$PositionFilterBeta", source)
 
+    def test_stereo_runners_expose_proxy_targets_anchor_mode(self):
+        for runner in (STEREO_LIVE_RUNNER, STEREO_PACKAGE_REPLAY_RUNNER):
+            with self.subTest(runner=runner.name):
+                self.assertTrue(runner.exists())
+                source = runner.read_text(encoding="utf-8")
+                self.assertIn('[ValidateSet("", "dynamic", "world_latched")]', source)
+                self.assertIn('[string]$ProxyTargetsAnchorMode = ""', source)
+                self.assertIn("$ProxyTargetsAnchorModeLiteral = ConvertTo-PowerShellLiteral $ProxyTargetsAnchorMode", source)
+                self.assertIn('if ($ProxyTargetsAnchorModeLiteral -ne \'\') {', source)
+                self.assertIn('`$ArgsList["ProxyTargetsAnchorMode"] = $ProxyTargetsAnchorModeLiteral', source)
+                self.assertIn("Anchor mode: $ProxyTargetsAnchorMode", source)
+
+    def test_stereo_runners_expose_proxy_targets_head_z_mode(self):
+        for runner in (STEREO_LIVE_RUNNER, STEREO_PACKAGE_REPLAY_RUNNER):
+            with self.subTest(runner=runner.name):
+                self.assertTrue(runner.exists())
+                source = runner.read_text(encoding="utf-8")
+                self.assertIn('[ValidateSet("", "negative_z_forward", "positive_z_forward")]', source)
+                self.assertIn('[string]$ProxyTargetsHeadZMode = ""', source)
+                self.assertIn("$ProxyTargetsHeadZModeLiteral = ConvertTo-PowerShellLiteral $ProxyTargetsHeadZMode", source)
+                self.assertIn('if ($ProxyTargetsHeadZModeLiteral -ne \'\') {', source)
+                self.assertIn('`$ArgsList["ProxyTargetsHeadZMode"] = $ProxyTargetsHeadZModeLiteral', source)
+                self.assertIn("Head Z mode: $ProxyTargetsHeadZMode", source)
+
+    def test_stereo_runners_pass_shared_smartxr_options_path_to_sender_and_receiver(self):
+        for runner in (STEREO_LIVE_RUNNER, STEREO_PACKAGE_REPLAY_RUNNER):
+            with self.subTest(runner=runner.name):
+                self.assertTrue(runner.exists())
+                source = runner.read_text(encoding="utf-8")
+                self.assertIn('[string]$SmartXROptionsPath = "config\\smartxr_options.json"', source)
+                self.assertIn("$SmartXROptionsPathLiteral = ConvertTo-PowerShellLiteral $ResolvedSmartXROptionsPath", source)
+                self.assertIn('"--smartxr-options", $SmartXROptionsPathLiteral', source)
+                self.assertIn("SmartXROptionsPath = $SmartXROptionsPathLiteral", source)
+                self.assertIn("SmartXR options: $ResolvedSmartXROptionsPath", source)
+
     def test_stereo_package_replay_runner_supports_demo_only_receiver(self):
         self.assertTrue(STEREO_PACKAGE_REPLAY_RUNNER.exists())
         source = STEREO_PACKAGE_REPLAY_RUNNER.read_text(encoding="utf-8")
@@ -230,6 +285,9 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("if ($DemoOnlyLiteral) {", source)
         self.assertIn("& $GxrExtensionSwitchLiteral -Mode disable -ProjectDir $ProjectDirLiteral", source)
         self.assertIn('$env:PROXY_TARGETS_WS_URL = $WsUrlLiteral', source)
+        self.assertIn('$env:SMARTXR_OPTIONS_PATH = $SmartXROptionsPathLiteral', source)
+        self.assertIn('if ($ProxyTargetsHeadZModeLiteral -ne \'\') {', source)
+        self.assertIn('`$env:SMARTXR_PROXY_TARGETS_HEAD_Z_MODE = $ProxyTargetsHeadZModeLiteral', source)
         self.assertIn('$env:SMARTXR_STATUS_HUD_VISIBLE = "1"', source)
         self.assertIn('`$OldGodotErrorActionPreference = `$ErrorActionPreference', source)
         self.assertIn('`$ErrorActionPreference = "Continue"', source)

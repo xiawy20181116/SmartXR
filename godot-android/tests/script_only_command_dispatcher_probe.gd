@@ -149,6 +149,10 @@ func _run_checks() -> String:
 	_checks["debug_commands_return_side_effects"] = _effects(debug_free) == [dispatcher_script.EFFECT_DEBUG_TARGET_FREE, dispatcher_script.EFFECT_APPLY_3DOF_ANCHOR] \
 		and _effects(debug_reset) == [dispatcher_script.EFFECT_DEBUG_TARGET_RESET, dispatcher_script.EFFECT_APPLY_3DOF_ANCHOR]
 
+	var latch_reset: Dictionary = dispatcher_script.apply_command(state, "reset_world_anchor", config)
+	_checks["reset_proxy_world_latch_returns_latch_effect"] = str(latch_reset.get("last_command")) == "reset_world_anchor" \
+		and _effects(latch_reset) == [dispatcher_script.EFFECT_RESET_PROXY_WORLD_LATCHES]
+
 	var unknown: Dictionary = dispatcher_script.apply_command(state, "unknown", config)
 	_checks["unknown_command_only_tracks_last_command_and_3dof"] = str(unknown.get("last_command")) == "unknown" \
 		and float(unknown.get("anchor_yaw_deg")) == 0.0 \

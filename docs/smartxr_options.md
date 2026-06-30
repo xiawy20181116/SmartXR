@@ -10,8 +10,9 @@ For every setting, highest priority first:
 
 1. **Environment variable** — e.g. set per `adb shell setprop` wrapper, test
    harness, or desktop run.
-2. **Config file** — `user://smartxr_options.json` on the device, a flat JSON
-   object keyed by setting name.
+2. **Config file** — `user://smartxr_options.json` on the device by default,
+   or the file named by `SMARTXR_OPTIONS_PATH` in desktop runners. The Windows
+   live/replay scripts default this path to `config\smartxr_options.json`.
 3. **Default** — the script const passed by the caller (unchanged behavior
    when neither override exists).
 
@@ -19,9 +20,19 @@ For every setting, highest priority first:
 
 | Config key | Environment variable | Default (const) | Meaning |
 |---|---|---|---|
+| config path | `SMARTXR_OPTIONS_PATH` | `user://smartxr_options.json` | Optional JSON file path override for desktop/manual runs |
 | `control_ws_url` | `SMARTXR_CONTROL_WS_URL` | `WS_URL` in `AndroidMovingCard.gd` | Keyboard control channel (`ws_control.py` server) |
 | `proxy_targets_ws_url` | `PROXY_TARGETS_WS_URL` | `PROXY_TARGETS_WS_URL` const | proxy_targets live stream endpoint |
 | `proxy_targets_ws_enabled` | `SMARTXR_PROXY_TARGETS_WS_ENABLED` | `PROXY_TARGETS_WS_ENABLED` const | Whether the live consumer runs |
+| `proxy_targets_anchor_mode` | `SMARTXR_PROXY_TARGETS_ANCHOR_MODE` | `PROXY_TARGETS_ANCHOR_MODE` const (`dynamic`) | Card/proxy comparison mode: `dynamic` reprojects every fresh head-space target; `world_latched` latches the first fresh target's Godot world pose until lost or reset |
+| `proxy_targets_head_z_mode` | `SMARTXR_PROXY_TARGETS_HEAD_Z_MODE` | `PROXY_TARGETS_HEAD_Z_MODE` const (`negative_z_forward`) | Head-space Z convention comparison mode: `negative_z_forward` keeps the publisher's current Godot-style `-Z` forward target; `positive_z_forward` flips head-space Z before applying the XR head reference |
+| `proxy_targets_card_offset_rule` | see flat keys below | `PROXY_TARGETS_CARD_OFFSET_RULE` const / publisher default | Nested object for card placement next to a proxy target. This is read by both the Python sender and Godot fallback |
+| `proxy_targets_card_offset_mode` | `SMARTXR_PROXY_TARGETS_CARD_OFFSET_MODE` | `depth_scaled_right_half_width` | Flat override for `proxy_targets_card_offset_rule.mode` |
+| `proxy_targets_card_depth_scale` | `SMARTXR_PROXY_TARGETS_CARD_DEPTH_SCALE` | `1.3` | Multiplies target depth before placing the card, so `1.3` moves it behind the person relative to the viewer |
+| `proxy_targets_card_depth_offset_m` | `SMARTXR_PROXY_TARGETS_CARD_DEPTH_OFFSET_M` | `0.0` | Adds meters after `depth_scale`; positive moves farther along the viewer-to-target depth ray, negative moves closer |
+| `proxy_targets_card_right_width_fraction` | `SMARTXR_PROXY_TARGETS_CARD_RIGHT_WIDTH_FRACTION` | `0.5` | Horizontal offset as a fraction of estimated person width. Positive is viewer-right, negative is viewer-left |
+| `proxy_targets_card_right_angle_deg` | `SMARTXR_PROXY_TARGETS_CARD_RIGHT_ANGLE_DEG` | `15.0` | Horizontal offset angle for `depth_scaled_right_angle`; the right offset is `tan(angle) * final_depth` |
+| `proxy_targets_card_up_m` | `SMARTXR_PROXY_TARGETS_CARD_UP_M` | `0.0` | Extra vertical offset in meters |
 | `status_hud_visible` | `SMARTXR_STATUS_HUD_VISIBLE` | `STATUS_HUD_VISIBLE` const | Whether the in-headset diagnostic text HUD is visible; status JSON is still written when hidden |
 | `vst_horizontal_fov_deg` | `SMARTXR_VST_HORIZONTAL_FOV_DEG` | `BBOX_HORIZONTAL_FOV_DEG` const | Right-eye VST horizontal FOV for bbox projection |
 | `vst_vertical_fov_deg` | `SMARTXR_VST_VERTICAL_FOV_DEG` | `BBOX_VERTICAL_FOV_DEG` const | Right-eye VST vertical FOV for bbox projection |
@@ -39,13 +50,30 @@ other non-empty value is false.
 
 ## Example config file
 
-`user://smartxr_options.json`:
+The repo includes an editable desktop config at `config\smartxr_options.json`.
+The stereo live and package replay runners pass it to both the Python
+publisher and Godot receiver by default, so this is the fastest place to tune
+card depth/right offset during PCMR testing.
+
+`config\smartxr_options.json` or `user://smartxr_options.json`:
 
 ```json
 {
   "control_ws_url": "ws://192.168.1.20:8766/control",
   "proxy_targets_ws_url": "ws://192.168.1.20:8766/proxy_targets",
   "proxy_targets_ws_enabled": true,
+  "proxy_targets_anchor_mode": "world_latched",
+  "proxy_targets_head_z_mode": "negative_z_forward",
+  "proxy_targets_card_offset_rule": {
+    "mode": "depth_scaled_right_angle",
+    "offset_space": "world",
+    "depth_scale": 1.3,
+    "depth_offset_m": 2.0,
+    "right_angle_deg": 15.0,
+    "right_width_fraction": 0.5,
+    "up_m": 0.0,
+    "fallback": "hold_last_pose"
+  },
   "status_hud_visible": true,
   "vst_horizontal_fov_deg": 70.0,
   "vst_vertical_fov_deg": 43.0,
@@ -54,6 +82,27 @@ other non-empty value is false.
   "vst_focal_length_x": 0.0,
   "vst_focal_length_y": 0.0
 }
+```
+
+For quick A/B, edit only these values:
+
+```json
+{
+  "proxy_targets_card_offset_rule": {
+    "depth_scale": 1.15,
+    "depth_offset_m": 0.2,
+    "right_angle_deg": 12.0,
+    "right_width_fraction": -0.5,
+    "up_m": 0.0
+  }
+}
+```
+
+You can point a run at another file with:
+
+```powershell
+.\tools\run_windows_pcmr_stereo_proxy_targets_live.ps1 `
+  -SmartXROptionsPath ".tmp\smartxr_options_ab.json"
 ```
 
 `VSTCapture.status_snapshot()` reports `horizontal_fov_deg`,

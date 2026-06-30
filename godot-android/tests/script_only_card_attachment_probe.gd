@@ -38,12 +38,16 @@ var _attachment_for_detach = null
 class FakeTargetAdapter:
 	var transform := Transform3D.IDENTITY
 	var available := true
+	var metadata := {}
 
 	func is_available() -> bool:
 		return available
 
 	func get_global_transform() -> Transform3D:
 		return transform
+
+	func get_meta_value(key: String, fallback = null):
+		return metadata.get(key, fallback)
 
 
 # Checks run from the first main-loop iteration instead of _initialize: the
@@ -130,6 +134,34 @@ func _run_checks() -> String:
 	var dispatched_local: Transform3D = attachment_script.offset_transform(rotated, target_space_rule)
 	_checks["offset_transform_target_space_local"] = dispatched_local.origin.is_equal_approx(local_transform.origin) \
 		and dispatched_local.basis.is_equal_approx(rotated.basis)
+	var metric_rule := {"mode": "depth_scaled_right_half_width", "depth_scale": 1.3, "right_width_fraction": 0.5}
+	var metric_transform: Transform3D = attachment_script.offset_transform_with_context(
+		Transform3D(Basis(), Vector3(0.0, 1.0, -2.0)),
+		metric_rule,
+		Transform3D.IDENTITY,
+		Vector3(0.8, 1.6, 0.0)
+	)
+	_checks["metric_offset_scales_depth_and_right_half_width"] = metric_transform.origin.is_equal_approx(Vector3(0.4, 1.0, -2.6)) \
+		and metric_transform.basis.is_equal_approx(Basis())
+	var metric_offset_rule := {"mode": "depth_scaled_right_half_width", "depth_scale": 1.3, "depth_offset_m": 0.2, "right_width_fraction": 0.5}
+	var metric_offset_transform: Transform3D = attachment_script.offset_transform_with_context(
+		Transform3D(Basis(), Vector3(0.0, 1.0, -2.0)),
+		metric_offset_rule,
+		Transform3D.IDENTITY,
+		Vector3(0.8, 1.6, 0.0)
+	)
+	_checks["metric_offset_adds_depth_offset_after_scale"] = metric_offset_transform.origin.is_equal_approx(Vector3(0.4, 1.0, -2.8)) \
+		and metric_offset_transform.basis.is_equal_approx(Basis())
+	var angle_rule := {"mode": "depth_scaled_right_angle", "depth_scale": 1.3, "depth_offset_m": 0.2, "right_angle_deg": 15.0}
+	var angle_transform: Transform3D = attachment_script.offset_transform_with_context(
+		Transform3D(Basis(), Vector3(0.0, 1.0, -2.0)),
+		angle_rule,
+		Transform3D.IDENTITY,
+		Vector3(0.01, 1.6, 0.0)
+	)
+	var expected_angle_right := tan(deg_to_rad(15.0)) * 2.8
+	_checks["metric_angle_offset_uses_final_depth"] = angle_transform.origin.is_equal_approx(Vector3(expected_angle_right, 1.0, -2.8)) \
+		and angle_transform.basis.is_equal_approx(Basis())
 
 	# Scene-tree stage for anchor global_transform reads/writes.
 	var stage := Node3D.new()
@@ -149,6 +181,7 @@ func _run_checks() -> String:
 
 	var target := FakeTargetAdapter.new()
 	target.transform = Transform3D(Basis(), Vector3(1.0, 2.0, 3.0))
+	target.metadata["proxy_target_size_m"] = Vector3(0.8, 1.6, 0.0)
 	_adapters["t1"] = target
 
 	_checks["attach_unknown_target_rejected"] = attachment.attach("CardAnchor", "nope") == false and attachment.is_empty()
@@ -193,6 +226,34 @@ func _run_checks() -> String:
 		and other_anchor.global_transform.origin.is_equal_approx(Vector3(4.0, 5.0, 6.0 - 0.35))
 	single_other.attach("ThirdCard", "t1")
 	_checks["update_two_attachments_without_primary_skips"] = single_other.update_attachments(other_anchor, "CardAnchor") == false
+
+	var metric_attachment = attachment_script.new()
+	metric_attachment.set_resolver(_resolve_adapter)
+	metric_attachment.set_reference_transform_provider(func(): return Transform3D.IDENTITY)
+	target.transform = Transform3D(Basis(), Vector3(0.0, 1.0, -2.0))
+	_checks["metric_attach_uses_adapter_target_size"] = metric_attachment.attach("MetricCard", "t1", metric_rule) == true
+	var metric_seeded = metric_attachment.last_resolved_position("MetricCard")
+	_checks["metric_attach_depth_scale_width_half"] = metric_seeded is Vector3 \
+		and Vector3(metric_seeded).is_equal_approx(Vector3(0.4, 1.0, -2.6))
+	var latched_metric_attachment = attachment_script.new()
+	latched_metric_attachment.set_resolver(_resolve_adapter)
+	latched_metric_attachment.set_reference_transform_provider(func(): return Transform3D(Basis(), Vector3(1.0, 0.0, 0.0)))
+	target.metadata["proxy_world_latched"] = true
+	target.metadata["proxy_world_latch_reference_transform"] = Transform3D.IDENTITY
+	_checks["metric_latched_attach_uses_latched_reference"] = latched_metric_attachment.attach("LatchedMetricCard", "t1", metric_rule) == true
+	var latched_metric_seeded = latched_metric_attachment.last_resolved_position("LatchedMetricCard")
+	_checks["metric_latched_reference_stays_world_fixed"] = latched_metric_seeded is Vector3 \
+		and Vector3(latched_metric_seeded).is_equal_approx(Vector3(0.4, 1.0, -2.6))
+	var angle_metric_attachment = attachment_script.new()
+	angle_metric_attachment.set_resolver(_resolve_adapter)
+	angle_metric_attachment.set_reference_transform_provider(func(): return Transform3D.IDENTITY)
+	target.metadata["proxy_target_size_m"] = Vector3(0.01, 1.6, 0.0)
+	_checks["metric_angle_attach_uses_adapter_target"] = angle_metric_attachment.attach("AngleMetricCard", "t1", angle_rule) == true
+	var angle_metric_seeded = angle_metric_attachment.last_resolved_position("AngleMetricCard")
+	_checks["metric_angle_attach_ignores_target_width"] = angle_metric_seeded is Vector3 \
+		and Vector3(angle_metric_seeded).is_equal_approx(Vector3(expected_angle_right, 1.0, -2.8))
+	target.metadata.erase("proxy_world_latched")
+	target.metadata.erase("proxy_world_latch_reference_transform")
 
 	# 6. Fallback: hold_last_pose (default) against an unavailable target,
 	# then against a target the resolver no longer knows.

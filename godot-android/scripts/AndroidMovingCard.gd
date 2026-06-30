@@ -37,6 +37,18 @@ const PROXY_TARGETS_VALIDATION_ENABLED := true
 const PROXY_TARGETS_SAMPLE_RES := "res://fixtures/proxy_targets_sample.json"
 const PROXY_TARGETS_WS_ENABLED := true
 const PROXY_TARGETS_WS_URL := "ws://127.0.0.1:8766/proxy_targets"
+const PROXY_TARGETS_ANCHOR_MODE := "dynamic"
+const PROXY_TARGETS_HEAD_Z_MODE := "negative_z_forward"
+const PROXY_TARGETS_CARD_OFFSET_RULE := {
+	"mode": "depth_scaled_right_half_width",
+	"offset_space": "world",
+	"depth_scale": 1.3,
+	"depth_offset_m": 0.0,
+	"right_width_fraction": 0.5,
+	"right_angle_deg": 15.0,
+	"up_m": 0.0,
+	"fallback": "hold_last_pose",
+}
 const STATUS_HUD_VISIBLE := true
 const PASSTHROUGH_OVERLAY_ENV := "SMARTXR_USE_PASSTHROUGH_OVERLAY"
 const PASSTHROUGH_OVERLAY_VIEWPORT_SIZE := Vector2i(512, 256)
@@ -282,10 +294,6 @@ func _build_passthrough_overlay_layer() -> void:
 	_update_passthrough_overlay_layer()
 
 
-func _make_passthrough_overlay_ui() -> Control:
-	return Control.new()
-
-
 ## Delegates camera/origin construction to xr_bootstrap.gd (XROrigin3D +
 ## XRCamera3D when XR is active, FallbackCamera otherwise) and copies the
 ## nodes back so the snapshot keys camera_position / camera_rotation_degrees /
@@ -365,7 +373,13 @@ func _build_proxy_targets_validation() -> void:
 		PROXY_TARGETS_SAMPLE_RES
 	)
 	_proxy_targets_consumer = result.get("consumer", null)
+	if _proxy_targets_consumer != null and _proxy_targets_consumer.has_method("set_proxy_anchor_mode"):
+		_proxy_targets_consumer.set_proxy_anchor_mode(_proxy_targets_anchor_mode())
+	if _proxy_targets_consumer != null and _proxy_targets_consumer.has_method("set_proxy_head_z_mode"):
+		_proxy_targets_consumer.set_proxy_head_z_mode(_proxy_targets_head_z_mode())
 	_proxy_targets_card_adapter = result.get("card_adapter", null)
+	if _proxy_targets_card_adapter != null and _proxy_targets_card_adapter.has_method("set_default_offset_rule"):
+		_proxy_targets_card_adapter.set_default_offset_rule(_options.proxy_targets_card_offset_rule(PROXY_TARGETS_CARD_OFFSET_RULE))
 	_proxy_targets_target_source = result.get("target_source", null)
 	var sample_command := str(result.get("sample_command", ""))
 	if not sample_command.is_empty():
@@ -378,6 +392,14 @@ func _proxy_targets_ws_enabled() -> bool:
 
 func _proxy_targets_ws_url() -> String:
 	return _options.proxy_targets_ws_url(PROXY_TARGETS_WS_URL)
+
+
+func _proxy_targets_anchor_mode() -> String:
+	return _options.proxy_targets_anchor_mode(PROXY_TARGETS_ANCHOR_MODE)
+
+
+func _proxy_targets_head_z_mode() -> String:
+	return _options.proxy_targets_head_z_mode(PROXY_TARGETS_HEAD_Z_MODE)
 
 
 func _control_ws_url() -> String:
@@ -583,8 +605,15 @@ func unregister_target(target_id: String) -> void:
 ## detach_card so the anchor-mode flip stays where the state lives (ADR-4).
 func _setup_card_attachment() -> void:
 	_card_attachment.set_resolver(_target_registry.resolve)
+	_card_attachment.set_reference_transform_provider(_card_reference_transform)
 	_card_attachment.set_on_applied(_on_card_attachment_applied)
 	_card_attachment.set_on_detach_card(detach_card)
+
+
+func _card_reference_transform() -> Transform3D:
+	if _camera != null:
+		return _camera.global_transform
+	return Transform3D.IDENTITY
 
 
 func _on_card_attachment_applied() -> void:
@@ -702,8 +731,17 @@ func _run_command_effects(effects: Array) -> void:
 				_debug_target_marker = null
 			CommandDispatcherScript.EFFECT_DEBUG_TARGET_RESET:
 				_build_debug_target_marker()
+			CommandDispatcherScript.EFFECT_RESET_PROXY_WORLD_LATCHES:
+				_reset_proxy_world_latches()
 			CommandDispatcherScript.EFFECT_APPLY_3DOF_ANCHOR:
 				_apply_3dof_anchor_transform()
+
+
+func _reset_proxy_world_latches() -> void:
+	if _proxy_targets_consumer == null:
+		return
+	if _proxy_targets_consumer.has_method("reset_world_latches"):
+		_proxy_targets_consumer.reset_world_latches()
 
 
 func _apply_bbox_payload(parsed: Dictionary) -> void:
@@ -781,7 +819,11 @@ func _orient_node_for_3dof_reading(node: Node3D) -> void:
 	if _camera != null:
 		camera_position = _camera.global_transform.origin
 	var world_position := node.global_transform.origin
-	var away_from_camera := world_position + camera_position.direction_to(world_position)
+	var flat_camera_position := Vector3(camera_position.x, world_position.y, camera_position.z)
+	var flat_direction := flat_camera_position.direction_to(world_position)
+	if flat_direction.length_squared() < 0.000001:
+		flat_direction = Vector3(0.0, 0.0, -1.0)
+	var away_from_camera := world_position + flat_direction
 	node.look_at(away_from_camera, Vector3.UP)
 
 

@@ -39,6 +39,7 @@ from antman_vst_stereo_proxy_targets_live_publisher import (  # noqa: E402
 )
 from dump_antman_vst_humantrackor_jsonl import DEFAULT_ANTMAN_ROOT, _install_antman_paths  # noqa: E402
 from smartxr.nv12_reader import read_packet_file  # noqa: E402
+from smartxr.schema import load_card_offset_rule  # noqa: E402
 from smartxr.stereo_package import StereoPair, load_stereo_package  # noqa: E402
 
 
@@ -293,6 +294,12 @@ def serve(args: argparse.Namespace) -> int:
             print(f"replay_timing={args.replay_timing} source_hz={args.source_hz}", flush=True)
             if args.enable_keypoint_anchor:
                 print("keypoint_anchor=enabled pose_model=%s" % args.pose_model, flush=True)
+            offset_rule = load_card_offset_rule(args.smartxr_options)
+            print(
+                "card_offset_rule=%s"
+                % json.dumps(offset_rule, ensure_ascii=False, separators=(",", ":")),
+                flush=True,
+            )
             hub = BroadcastHub()
             threading.Thread(
                 target=_broadcast_loop,
@@ -306,6 +313,7 @@ def serve(args: argparse.Namespace) -> int:
                     "right_pose_estimator": right_pose_estimator,
                     "hz": args.hz,
                     "card_id": args.card_id,
+                    "offset_rule": offset_rule,
                     "min_confidence": args.min_confidence,
                     "min_keypoint_score": args.min_keypoint_score,
                     "pose_association_margin_px": args.pose_association_margin_px,
@@ -354,6 +362,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--hz", type=float, default=20.0)
     parser.add_argument("--card-id", default="CardAnchor")
+    parser.add_argument("--smartxr-options", type=Path, default=None)
     parser.add_argument("--log-every", type=int, default=20)
     parser.add_argument("--min-confidence", type=float, default=0.5)
     parser.add_argument("--max-empty-reads", type=int, default=120)

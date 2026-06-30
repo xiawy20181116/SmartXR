@@ -25,13 +25,32 @@ Required target fields:
 
 Optional target diagnostics:
 
-- `source_coordinate`: compact publisher-side calibration metadata for real-device alignment checks. For VST bbox sources this records `coordinate_space`, `publisher_convention`, `camera_axes`, `head_axes`, `anchor`, `depth_source`, `uses_right_eye_to_head`, `source_frame`, `camera_point_m`, and `head_position_m`. The `source_frame.anchor_depth` field is diagnostic depth in meters; it intentionally avoids raw field names that the canonical schema rejects.
+- `target_size_m`: publisher-derived physical target size in meters, for example `{ "width": 0.72, "height": 1.80 }`. This is derived geometry, not raw bbox data.
+- `source_coordinate`: compact publisher-side calibration metadata for real-device alignment checks. For VST bbox sources this records `coordinate_space`, `publisher_convention`, `camera_axes`, `head_axes`, `anchor`, `depth_source`, `uses_right_eye_to_head`, `source_frame`, `camera_point_m`, `head_position_m`, and optionally the same `target_size_m`. The `source_frame.anchor_depth` field is diagnostic depth in meters; it intentionally avoids raw field names that the canonical schema rejects.
 
 Required card fields:
 
 - `card_id`: card wrapper ID, such as `CardAnchor`
 - `target_id`: ID of a target in the same message
 - `offset_rule`: optional object; if omitted, adapter defaults apply
+
+Default card placement:
+
+- `mode=depth_scaled_right_half_width`
+- `depth_scale=1.3`: card position is placed 30% farther than the target in the horizontal viewer-to-target depth plane.
+- `depth_offset_m=0.0`: after scaling, this adds meters along the horizontal viewer-to-target depth ray; positive moves farther, negative moves closer.
+- `right_width_fraction=0.5`: card is shifted right by half of `target_size_m.width` along the viewer's horizontal right axis.
+
+Angle-based placement is available with `mode=depth_scaled_right_angle`.
+It keeps the same `depth_scale` and `depth_offset_m`, then computes horizontal
+right offset as `tan(right_angle_deg) * final_depth`. This is useful when the
+card should occupy a stable visual angle beside the person instead of following
+the estimated bbox width.
+
+In `world_latched` comparison mode, Godot latches the first fresh target's
+world transform, viewer reference transform, and target size. The same
+placement rule is then evaluated from those stored values until target loss or
+manual reset, instead of re-reading the moving headset pose every frame.
 
 Godot consumer/adapter must not read bbox or detection fields. Raw VST/external fields such as `bbox`, `boxes`, `detection`, `detections`, `image`, or `depth_m` belong on the publisher side and must be converted before reaching `proxy_targets`.
 

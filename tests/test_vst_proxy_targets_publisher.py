@@ -108,6 +108,104 @@ class VSTProxyTargetsPublisherTests(unittest.TestCase):
         self.assertEqual(source_frame["principal_point_x"], 430.0)
         self.assertEqual(source_frame["principal_point_y"], 340.0)
 
+    def test_vst_bbox_publishes_metric_target_size_without_raw_bbox(self):
+        publisher = load_module(PUBLISHER, "vst_proxy_targets_publisher")
+        validator = load_module(VALIDATOR, "validate_proxy_targets_payload_schema")
+
+        message = publisher.normalize_source_payload(
+            {
+                "source": "vst",
+                "image": {
+                    "w": 880,
+                    "h": 660,
+                    "camera": {"fx": 400.0, "fy": 500.0, "cx": 440.0, "cy": 330.0},
+                },
+                "detections": [
+                    {
+                        "id": "person-sized",
+                        "confidence": 0.9,
+                        "depth_m": 2.0,
+                        "bbox": {"cx": 440.0, "cy": 330.0, "w": 100.0, "h": 200.0},
+                    }
+                ],
+            }
+        )
+
+        target = message["targets"][0]
+        self.assertEqual(validator.validate_message(message), [])
+        self.assertNotIn("bbox", json.dumps(message))
+        self.assertAlmostEqual(target["target_size_m"]["width"], 0.5)
+        self.assertAlmostEqual(target["target_size_m"]["height"], 0.8)
+        self.assertEqual(target["source_coordinate"]["target_size_m"], target["target_size_m"])
+
+    def test_normalize_source_payload_accepts_configured_card_offset_rule(self):
+        publisher = load_module(PUBLISHER, "vst_proxy_targets_publisher")
+        offset_rule = {
+            "mode": "depth_scaled_right_angle",
+            "offset_space": "world",
+            "depth_scale": 1.15,
+            "depth_offset_m": 0.2,
+            "right_angle_deg": 12.5,
+            "right_width_fraction": -0.5,
+            "up_m": 0.1,
+            "fallback": "hold_last_pose",
+        }
+
+        message = publisher.normalize_source_payload(
+            {
+                "source": "vst",
+                "image": {
+                    "w": 880,
+                    "h": 660,
+                    "camera": {"fx": 400.0, "fy": 500.0, "cx": 440.0, "cy": 330.0},
+                },
+                "detections": [
+                    {
+                        "id": "person-sized",
+                        "confidence": 0.9,
+                        "depth_m": 2.0,
+                        "bbox": {"cx": 440.0, "cy": 330.0, "w": 100.0, "h": 200.0},
+                    }
+                ],
+            },
+            offset_rule=offset_rule,
+        )
+
+        self.assertEqual(message["cards"][0]["offset_rule"], offset_rule)
+
+    def test_card_offset_rule_can_load_from_smartxr_options_json(self):
+        from smartxr.schema import load_card_offset_rule
+
+        config_dir = ROOT / "tests" / "tmp"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_path = config_dir / "smartxr_options_unit.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "proxy_targets_card_offset_rule": {
+                        "mode": "depth_scaled_right_angle",
+                        "depth_scale": 1.15,
+                        "depth_offset_m": 0.2,
+                        "right_angle_deg": 12.5,
+                        "right_width_fraction": -0.5,
+                        "up_m": 0.1,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        offset_rule = load_card_offset_rule(config_path)
+
+        self.assertEqual(offset_rule["mode"], "depth_scaled_right_angle")
+        self.assertEqual(offset_rule["offset_space"], "world")
+        self.assertEqual(offset_rule["depth_scale"], 1.15)
+        self.assertEqual(offset_rule["depth_offset_m"], 0.2)
+        self.assertEqual(offset_rule["right_angle_deg"], 12.5)
+        self.assertEqual(offset_rule["right_width_fraction"], -0.5)
+        self.assertEqual(offset_rule["up_m"], 0.1)
+        self.assertEqual(offset_rule["fallback"], "hold_last_pose")
+
     def test_vst_bbox_projection_prefers_calibrated_focal_lengths(self):
         publisher = load_module(PUBLISHER, "vst_proxy_targets_publisher")
 

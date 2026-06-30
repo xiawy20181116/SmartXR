@@ -72,7 +72,12 @@ func build_proxy_targets_status_snapshot(values: Dictionary) -> Dictionary:
 		"source_coordinate": values.get("source_coordinate"),
 		"world_from_head_applied": values.get("world_from_head_applied"),
 		"local_position": values.get("local_position"),
+		"runtime_local_position": values.get("runtime_local_position"),
 		"world_position": values.get("world_position"),
+		"head_z_mode": values.get("head_z_mode"),
+		"anchor_mode": values.get("anchor_mode"),
+		"world_latched": values.get("world_latched"),
+		"world_latch_state": values.get("world_latch_state"),
 		"error": values.get("error"),
 	}
 

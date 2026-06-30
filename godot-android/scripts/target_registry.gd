@@ -61,6 +61,12 @@ class Node3DTargetAdapter:
 			return Transform3D.IDENTITY
 		return target.global_transform
 
+	func get_meta_value(key: String, fallback = null):
+		var target := get_node3d()
+		if target == null or not target.has_meta(key):
+			return fallback
+		return target.get_meta(key)
+
 
 var _targets := {}
 

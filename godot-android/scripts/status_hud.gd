@@ -151,7 +151,12 @@ func _write_proxy_targets_status_file(snapshot: Dictionary, delta: float) -> voi
 		"source_coordinate_summary": _source_coordinate_summary(proxy.get("source_coordinate", {})),
 		"world_from_head_applied": _truthy(proxy.get("world_from_head_applied", false)),
 		"proxy_local_position": _format_vec3(proxy.get("local_position", Vector3.ZERO)),
+		"proxy_runtime_local_position": _format_vec3(proxy.get("runtime_local_position", Vector3.ZERO)),
 		"proxy_world_position": _format_vec3(proxy.get("world_position", Vector3.ZERO)),
+		"proxy_head_z_mode": str(proxy.get("head_z_mode", "negative_z_forward")),
+		"proxy_anchor_mode": str(proxy.get("anchor_mode", "dynamic")),
+		"proxy_world_latched": _truthy(proxy.get("world_latched", false)),
+		"proxy_world_latch_state": str(proxy.get("world_latch_state", "-")),
 		"error": str(proxy.get("error", "-")),
 		"last_command": str(snapshot.get("last_command", "none")),
 	}
@@ -204,7 +209,7 @@ func _format_xr_status_line(snapshot: Dictionary) -> String:
 
 
 func _format_proxy_targets_status_line(proxy: Dictionary) -> String:
-	return "ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s src=%s err=%s" % [
+	return "ProxyWS: %s sub=%s packets=%d parsed=%d live=%d apply=%d seq=%d bytes=%d type=%s pos=%s card=%s src=%s err=%s mode=%s latch=%s state=%s" % [
 		"connected" if _truthy(proxy.get("ws_connected", false)) else "waiting",
 		str(_truthy(proxy.get("ws_subscribed", false))),
 		_integer_value(proxy.get("packets", 0)),
@@ -218,6 +223,9 @@ func _format_proxy_targets_status_line(proxy: Dictionary) -> String:
 		_format_vec3_or_na(proxy.get("card_node_position")),
 		_source_coordinate_summary(proxy.get("source_coordinate", {})),
 		str(proxy.get("error", "-")),
+		str(proxy.get("anchor_mode", "dynamic")),
+		str(_truthy(proxy.get("world_latched", false))),
+		str(proxy.get("world_latch_state", "-")),
 	]
 
 
