@@ -158,6 +158,110 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(message["cards"][0]["card_id"], "StereoCard")
         self.assertEqual(validator.validate_message(message), [])
 
+    def test_builds_message_from_keypoint_anchor_record(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        stereo_record = {
+            "source": "vst_stereo_keypoint",
+            "frame_id": 12,
+            "pair_id": "pair-000012",
+            "person_id": "person-2-4",
+            "timestamp_ms": 1780911169200,
+            "left_bbox_xyxy": [640, 240, 720, 520],
+            "right_bbox_xyxy": [608, 240, 688, 520],
+            "confidence": 0.91,
+            "selected_anchor": {
+                "kind": "shoulder_midpoint",
+                "keypoints": ["left_shoulder", "right_shoulder"],
+                "left_kind": "shoulder_midpoint",
+                "right_kind": "shoulder_midpoint",
+                "left_keypoints": ["left_shoulder", "right_shoulder"],
+                "right_keypoints": ["left_shoulder", "right_shoulder"],
+                "left_px": [670.0, 300.0],
+                "right_px": [638.0, 300.0],
+                "left_score": 0.87,
+                "right_score": 0.84,
+                "score": 0.84,
+            },
+            "keypoints": {
+                "left": {
+                    "left_shoulder": {"xy": [650.0, 300.0], "score": 0.90},
+                    "right_shoulder": {"xy": [690.0, 300.0], "score": 0.87},
+                },
+                "right": {
+                    "left_shoulder": {"xy": [618.0, 300.0], "score": 0.88},
+                    "right_shoulder": {"xy": [658.0, 300.0], "score": 0.84},
+                },
+            },
+            "pose_association": {
+                "left": {"status": "matched", "selected_person_index": 0},
+                "right": {"status": "matched", "selected_person_index": 0},
+            },
+        }
+
+        message = publisher.build_proxy_targets_message_from_stereo_bbox_record(
+            stereo_record,
+            sequence=5,
+            card_id="StereoCard",
+            recorded_width=880,
+            recorded_height=660,
+        )
+
+        self.assertIsNotNone(message)
+        target = message["targets"][0]
+        self.assertEqual(target["depth_source"], "shoulder_midpoint")
+        self.assertEqual(target["depth_confidence"], "high")
+        self.assertEqual(target["stereo"]["anchor_kind"], "shoulder_midpoint")
+        self.assertEqual(target["stereo"]["left_anchor_px"], [670.0, 300.0])
+        self.assertEqual(target["stereo"]["right_anchor_px"], [638.0, 300.0])
+        self.assertEqual(target["stereo"]["keypoint_anchor"]["score"], 0.84)
+        self.assertEqual(target["stereo"]["pose_association"]["left"]["status"], "matched")
+
+        event = publisher.build_depth_trace_event(
+            message=message,
+            diagnostics={"reason": "target_ready", "last_pair_frame_id": 12},
+        )
+        self.assertEqual(event["depth_source"], "shoulder_midpoint")
+        self.assertEqual(event["stereo"]["anchor_kind"], "shoulder_midpoint")
+        self.assertEqual(event["keypoint_anchor"]["kind"], "shoulder_midpoint")
+
+    def test_keypoint_anchor_record_falls_back_to_bbox_when_anchor_is_mixed(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        stereo_record = {
+            "source": "vst_stereo_keypoint",
+            "frame_id": 13,
+            "pair_id": "pair-000013",
+            "person_id": "person-2-4",
+            "timestamp_ms": 1780911169233,
+            "left_bbox_xyxy": [640, 240, 720, 520],
+            "right_bbox_xyxy": [608, 240, 688, 520],
+            "confidence": 0.91,
+            "selected_anchor": {
+                "kind": "mixed",
+                "left_kind": "shoulder_midpoint",
+                "right_kind": "nose",
+                "left_px": [670.0, 300.0],
+                "right_px": [648.0, 250.0],
+                "score": 0.75,
+            },
+        }
+
+        message = publisher.build_proxy_targets_message_from_stereo_bbox_record(
+            stereo_record,
+            sequence=6,
+            recorded_width=880,
+            recorded_height=660,
+        )
+
+        self.assertIsNotNone(message)
+        target = message["targets"][0]
+        self.assertEqual(target["depth_source"], "bbox_top_center_fallback")
+        self.assertEqual(target["depth_confidence"], "low")
+        self.assertEqual(target["stereo"]["anchor_kind"], "bbox_top_center")
+        self.assertEqual(target["stereo"]["left_anchor_px"], [680.0, 240.0])
+        self.assertEqual(target["stereo"]["keypoint_anchor"]["fallback_reason"], "anchor_kind_mismatch")
+
     def test_depth_gate_marks_held_stereo_record_as_low_confidence(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
 
@@ -306,6 +410,118 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(diagnostics["frames_seen_left"], 2)
         self.assertEqual(diagnostics["frames_seen_right"], 1)
         self.assertEqual(diagnostics["last_pair_frame_id"], 42)
+
+    def test_live_stereo_message_attaches_keypoint_anchor_from_pose_estimators(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        class FakeReader:
+            def __init__(self, frame):
+                self.frame = frame
+                self.used = False
+
+            def read_latest(self):
+                if self.used:
+                    return True, -1, None
+                self.used = True
+                return True, 42, self.frame
+
+            def get_stats(self):
+                return {}
+
+        class FakeTracker:
+            def __init__(self, bbox):
+                self.bbox = bbox
+
+            def process_frame(self, frame):
+                return FakeTrackingResult([FakePerson(bbox=self.bbox)])
+
+        class FakePoseEstimator:
+            def __init__(self, left_shoulder, right_shoulder):
+                self.left_shoulder = left_shoulder
+                self.right_shoulder = right_shoulder
+                self.calls = []
+
+            def __call__(self, frame):
+                self.calls.append(frame)
+                points = [[0.0, 0.0] for _ in range(17)]
+                scores = [0.0 for _ in range(17)]
+                points[5] = list(self.left_shoulder)
+                points[6] = list(self.right_shoulder)
+                scores[5] = 0.91
+                scores[6] = 0.86
+                return [points], [scores]
+
+        left_pose = FakePoseEstimator((650.0, 300.0), (690.0, 300.0))
+        right_pose = FakePoseEstimator((618.0, 300.0), (658.0, 300.0))
+
+        message, diagnostics = publisher.next_live_stereo_proxy_targets_message_with_diagnostics(
+            left_reader=FakeReader(FakeFrame(timestamp_us=1_000_000)),
+            right_reader=FakeReader(FakeFrame(timestamp_us=1_000_100)),
+            left_tracker=FakeTracker((640, 240, 720, 520)),
+            right_tracker=FakeTracker((608, 240, 688, 520)),
+            left_pose_estimator=left_pose,
+            right_pose_estimator=right_pose,
+            min_keypoint_score=0.5,
+            sequence=0,
+            max_read_attempts=1,
+            sleep_seconds=0,
+        )
+
+        self.assertIsNotNone(message)
+        target = message["targets"][0]
+        self.assertEqual(target["depth_source"], "shoulder_midpoint")
+        self.assertEqual(target["stereo"]["anchor_kind"], "shoulder_midpoint")
+        self.assertEqual(target["stereo"]["left_anchor_px"], [670.0, 300.0])
+        self.assertEqual(target["stereo"]["right_anchor_px"], [638.0, 300.0])
+        self.assertEqual(diagnostics["keypoint_anchor"]["kind"], "shoulder_midpoint")
+        self.assertEqual(diagnostics["pose_association"]["left"]["status"], "matched")
+        self.assertEqual(len(left_pose.calls), 1)
+        self.assertEqual(len(right_pose.calls), 1)
+
+    def test_live_stereo_pose_failure_falls_back_to_bbox_stereo(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        class FakeReader:
+            def __init__(self, frame):
+                self.frame = frame
+                self.used = False
+
+            def read_latest(self):
+                if self.used:
+                    return True, -1, None
+                self.used = True
+                return True, 42, self.frame
+
+            def get_stats(self):
+                return {}
+
+        class FakeTracker:
+            def __init__(self, bbox):
+                self.bbox = bbox
+
+            def process_frame(self, frame):
+                return FakeTrackingResult([FakePerson(bbox=self.bbox)])
+
+        class FailingPoseEstimator:
+            def __call__(self, frame):
+                raise RuntimeError("pose backend unavailable")
+
+        message, diagnostics = publisher.next_live_stereo_proxy_targets_message_with_diagnostics(
+            left_reader=FakeReader(FakeFrame(timestamp_us=1_000_000)),
+            right_reader=FakeReader(FakeFrame(timestamp_us=1_000_100)),
+            left_tracker=FakeTracker((640, 240, 720, 520)),
+            right_tracker=FakeTracker((608, 240, 688, 520)),
+            left_pose_estimator=FailingPoseEstimator(),
+            right_pose_estimator=FailingPoseEstimator(),
+            sequence=0,
+            max_read_attempts=1,
+            sleep_seconds=0,
+        )
+
+        self.assertIsNotNone(message)
+        self.assertEqual(message["targets"][0]["depth_source"], "pov_stereo_triangulation")
+        self.assertEqual(message["targets"][0]["stereo"]["anchor_kind"], "bbox_top_center")
+        self.assertEqual(diagnostics["keypoint_anchor"]["fallback_reason"], "pose_estimation_failed")
 
     def test_live_stereo_diagnostics_include_temporal_pair_details(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
@@ -1101,6 +1317,9 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
 
         self.assertIn("depth_estimation_trace.jsonl", source)
         self.assertIn("--depth-trace", source)
+        self.assertIn("EnableKeypointAnchor", source)
+        self.assertIn("--enable-keypoint-anchor", source)
+        self.assertIn("--min-keypoint-score", source)
 
     def test_runner_declares_stereo_source_and_staged_probe(self):
         source = RUNNER.read_text(encoding="utf-8")

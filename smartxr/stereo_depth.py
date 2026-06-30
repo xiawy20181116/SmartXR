@@ -345,6 +345,12 @@ def _detection_pair_anchor_px(
     )
 
 
+def _anchor_px_tuple(value: Sequence[float], name: str) -> tuple[float, float]:
+    if len(value) != 2:
+        raise ValueError(f"{name} must contain two xy values")
+    return (float(value[0]), float(value[1]))
+
+
 def _base_stereo_record(
     pair: StereoDetectionPair,
     calibration: StereoCalibration,
@@ -359,6 +365,7 @@ def _base_stereo_record(
     gate_config: StereoGateConfig | None,
     stereo_ok: bool,
     rejection_reason: str | None,
+    depth_source: str = DEPTH_SOURCE_POV_STEREO,
 ) -> dict[str, Any]:
     record: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -378,7 +385,7 @@ def _base_stereo_record(
         "vertical_error_px": vertical_error_px,
         "box_width_ratio": box_width_ratio,
         "box_height_ratio": box_height_ratio,
-        "depth_source": DEPTH_SOURCE_POV_STEREO,
+        "depth_source": str(depth_source),
         "is_ground_truth": False,
         "pose_quality": POSE_QUALITY_STEREO,
         "calibration_ref": calibration.calibration_id,
@@ -403,6 +410,7 @@ def _reject_stereo_record(
     box_height_ratio: float,
     gate_config: StereoGateConfig,
     rejection_reason: str,
+    depth_source: str = DEPTH_SOURCE_POV_STEREO,
 ) -> dict[str, Any]:
     return _base_stereo_record(
         pair,
@@ -417,6 +425,7 @@ def _reject_stereo_record(
         gate_config=gate_config,
         stereo_ok=False,
         rejection_reason=rejection_reason,
+        depth_source=depth_source,
     )
 
 
@@ -454,11 +463,21 @@ def triangulate_detection_pair(
     calibration: StereoCalibration,
     *,
     anchor_kind: str = ANCHOR_KIND_BBOX_CENTER,
+    left_anchor_px: Sequence[float] | None = None,
+    right_anchor_px: Sequence[float] | None = None,
+    depth_source: str | None = None,
     gate_config: StereoGateConfig | None = None,
     known_distance_m: float | None = None,
     tolerance_m: float | None = None,
 ) -> dict[str, Any]:
-    left_anchor_px, right_anchor_px = _detection_pair_anchor_px(pair, anchor_kind)
+    if left_anchor_px is None and right_anchor_px is None:
+        left_anchor_px, right_anchor_px = _detection_pair_anchor_px(pair, anchor_kind)
+    elif left_anchor_px is None or right_anchor_px is None:
+        raise ValueError("left_anchor_px and right_anchor_px must be provided together")
+    else:
+        left_anchor_px = _anchor_px_tuple(left_anchor_px, "left_anchor_px")
+        right_anchor_px = _anchor_px_tuple(right_anchor_px, "right_anchor_px")
+    record_depth_source = DEPTH_SOURCE_POV_STEREO if depth_source is None else str(depth_source)
     left_x, left_y = left_anchor_px
     right_x, right_y = right_anchor_px
     disparity_px = left_x - right_x
@@ -485,6 +504,7 @@ def triangulate_detection_pair(
                 box_height_ratio=box_height_ratio,
                 gate_config=gate_config,
                 rejection_reason="low_confidence",
+                depth_source=record_depth_source,
             )
         if (
             gate_config.min_box_ratio is not None
@@ -505,6 +525,7 @@ def triangulate_detection_pair(
                 box_height_ratio=box_height_ratio,
                 gate_config=gate_config,
                 rejection_reason="box_width_ratio_out_of_range",
+                depth_source=record_depth_source,
             )
         if gate_config.gate_box_height_ratio and (
             (
@@ -527,6 +548,7 @@ def triangulate_detection_pair(
                 box_height_ratio=box_height_ratio,
                 gate_config=gate_config,
                 rejection_reason="box_height_ratio_out_of_range",
+                depth_source=record_depth_source,
             )
         if (
             gate_config.max_vertical_error_px is not None
@@ -544,6 +566,7 @@ def triangulate_detection_pair(
                 box_height_ratio=box_height_ratio,
                 gate_config=gate_config,
                 rejection_reason="vertical_error_too_large",
+                depth_source=record_depth_source,
             )
         if disparity_px <= 0.0:
             return _reject_stereo_record(
@@ -558,6 +581,7 @@ def triangulate_detection_pair(
                 box_height_ratio=box_height_ratio,
                 gate_config=gate_config,
                 rejection_reason="non_positive_disparity",
+                depth_source=record_depth_source,
             )
 
     depth_m = depth_from_disparity(disparity_px, calibration)
@@ -581,6 +605,7 @@ def triangulate_detection_pair(
                 box_height_ratio=box_height_ratio,
                 gate_config=gate_config,
                 rejection_reason="depth_out_of_range",
+                depth_source=record_depth_source,
             )
 
     position = calibration.left.unproject(left_x, left_y, depth_m)
@@ -598,6 +623,7 @@ def triangulate_detection_pair(
         gate_config=gate_config,
         stereo_ok=True,
         rejection_reason=None,
+        depth_source=record_depth_source,
     )
     record["depth_m"] = depth_m
     record["position"] = position

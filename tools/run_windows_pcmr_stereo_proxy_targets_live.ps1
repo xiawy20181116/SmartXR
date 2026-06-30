@@ -15,6 +15,12 @@ param(
     [double]$MonitorTimeoutSeconds = 20.0,
     [switch]$UseAntmanPassthroughOverlay,
     [switch]$KeepReceiverOpen,
+    [switch]$EnableKeypointAnchor,
+    [string]$PoseModel = "yolov8n-pose.pt",
+    [int]$PoseImgsz = 640,
+    [double]$PoseConf = 0.25,
+    [double]$MinKeypointScore = 0.5,
+    [string]$PoseDevice = "",
     [string]$PythonExe = ""
 )
 
@@ -161,6 +167,8 @@ $RunDiagnosticsAnalyzerLiteral = ConvertTo-PowerShellLiteral $RunDiagnosticsAnal
 $AntmanRootLiteral = ConvertTo-PowerShellLiteral $AntmanRoot
 $VstAiShmRootLiteral = ConvertTo-PowerShellLiteral $VstAiShmRoot
 $GodotExeLiteral = ConvertTo-PowerShellLiteral $GodotExe
+$PoseModelLiteral = ConvertTo-PowerShellLiteral $PoseModel
+$PoseDeviceLiteral = ConvertTo-PowerShellLiteral $PoseDevice
 $WsUrlLiteral = ConvertTo-PowerShellLiteral $WsUrl
 $SenderLogLiteral = ConvertTo-PowerShellLiteral $SenderLog
 $ReceiverLogLiteral = ConvertTo-PowerShellLiteral $ReceiverLog
@@ -173,6 +181,7 @@ $PcmrStatusFileLiteral = ConvertTo-PowerShellLiteral $PcmrStatusFile
 $SenderReadyFileLiteral = ConvertTo-PowerShellLiteral $SenderReadyFile
 $UseOverlayLiteral = if ($UseAntmanPassthroughOverlay) { "`$true" } else { "`$false" }
 $KeepReceiverOpenLiteral = if ($KeepReceiverOpen) { "`$true" } else { "`$false" }
+$EnableKeypointAnchorLiteral = if ($EnableKeypointAnchor) { "`$true" } else { "`$false" }
 
 $SenderContent = @"
 `$ErrorActionPreference = "Stop"
@@ -180,7 +189,8 @@ $SenderContent = @"
 Set-Location -LiteralPath $RepoRootLiteral
 Write-Host "[sender] SmartXR stereo sender"
 Write-Host "[sender] WebSocket: $WsUrl"
-Write-Host "[sender] Expected depth_source=pov_stereo_triangulation depth_confidence=high"
+Write-Host "[sender] Expected depth_source=pov_stereo_triangulation depth_confidence=high by default, or shoulder_midpoint when keypoint anchor is enabled"
+Write-Host "[sender] Keypoint anchor: $EnableKeypointAnchor pose_model=$PoseModel pose_imgsz=$PoseImgsz min_keypoint_score=$MinKeypointScore"
 Write-Host "[sender] Depth trace: $DepthTraceFile"
 Write-Host "[sender] VST AI SHM root: $VstAiShmRoot"
 Write-Host "[sender] A later healthy run should print sent stereo seq=..."
@@ -198,6 +208,18 @@ Write-Host "[sender] A later healthy run should print sent stereo seq=..."
   "--log-every", "$LogEvery",
   "--depth-trace", $DepthTraceFileLiteral
 )
+if ($EnableKeypointAnchorLiteral) {
+  `$PublisherArgs += @(
+    "--enable-keypoint-anchor",
+    "--pose-model", $PoseModelLiteral,
+    "--pose-imgsz", "$PoseImgsz",
+    "--pose-conf", "$PoseConf",
+    "--min-keypoint-score", "$MinKeypointScore"
+  )
+  if ($PoseDeviceLiteral -ne '') {
+    `$PublisherArgs += @("--pose-device", $PoseDeviceLiteral)
+  }
+}
 & $PythonExeLiteral @PublisherArgs 2>&1 | Tee-Object -FilePath $SenderLogLiteral -Append
 `$ExitCode = `$LASTEXITCODE
 Write-Host "[sender] Stereo sender exited with code `$ExitCode"
@@ -319,6 +341,7 @@ Write-Host "WebSocket: $WsUrl"
 Write-Host "Work dir:  $WorkDir"
 Write-Host "VST AI SHM root: $VstAiShmRoot"
 Write-Host "Keep receiver Godot open: $KeepReceiverOpen"
+Write-Host "Keypoint anchor: $EnableKeypointAnchor"
 Write-Host "Depth trace: $DepthTraceFile"
 Write-Host ""
 

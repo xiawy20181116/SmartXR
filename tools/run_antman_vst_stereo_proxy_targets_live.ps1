@@ -13,6 +13,12 @@ param(
     [double]$ProbeProcessTimeoutSeconds = 90.0,
     [int]$MonitorMinPackets = 0,
     [double]$MonitorTimeoutSeconds = 20.0,
+    [switch]$EnableKeypointAnchor,
+    [string]$PoseModel = "yolov8n-pose.pt",
+    [int]$PoseImgsz = 640,
+    [double]$PoseConf = 0.25,
+    [double]$MinKeypointScore = 0.5,
+    [string]$PoseDevice = "",
     [string]$PythonExe = ""
 )
 
@@ -76,6 +82,7 @@ Write-Host "WebSocket:   $WsUrl"
 Write-Host "Python:      $PythonExe"
 Write-Host "Work dir:    $WorkDir"
 Write-Host "Depth trace: $DepthTraceFile"
+Write-Host "Keypoints:   $EnableKeypointAnchor"
 
 try {
     $PublisherArgs = @(
@@ -91,6 +98,18 @@ try {
         "--max-empty-reads", [string]$MaxEmptyReads,
         "--depth-trace", [string]$DepthTraceFile
     )
+    if ($EnableKeypointAnchor) {
+        $PublisherArgs += @(
+            "--enable-keypoint-anchor",
+            "--pose-model", $PoseModel,
+            "--pose-imgsz", [string]$PoseImgsz,
+            "--pose-conf", [string]$PoseConf,
+            "--min-keypoint-score", [string]$MinKeypointScore
+        )
+        if ($PoseDevice -ne "") {
+            $PublisherArgs += @("--pose-device", $PoseDevice)
+        }
+    }
 
     $PublisherProcess = Start-Process `
         -FilePath $PythonExe `
