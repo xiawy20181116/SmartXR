@@ -58,6 +58,8 @@ class GodotCardAttachmentTests(unittest.TestCase):
         self.assertIn('"depth_scaled_right_angle":', source)
         self.assertIn('adapter.get_meta_value("proxy_world_latched", false)', source)
         self.assertIn('adapter.get_meta_value("proxy_world_latch_reference_transform", null)', source)
+        self.assertIn("func _should_hold_card_transform(adapter, attachment: Dictionary) -> bool:", source)
+        self.assertIn('adapter.get_meta_value("proxy_world_latch_state", "")', source)
         self.assertIn('"right_top", "top_right":', source)
         # The subsystem is dependency-free: target lookup and the detach
         # route come in as Callables from the card, and it never resolves
@@ -122,6 +124,8 @@ class GodotCardAttachmentTests(unittest.TestCase):
         self.assertIn("metric_offset_adds_depth_offset_after_scale", probe)
         self.assertIn("metric_angle_offset_uses_final_depth", probe)
         self.assertIn("metric_angle_attach_ignores_target_width", probe)
+        self.assertIn("dynamic_held_reattach_preserves_last_transform", probe)
+        self.assertIn("dynamic_held_update_holds_last_card_transform", probe)
         self.assertIn("metric_attach_depth_scale_width_half", probe)
         self.assertIn("metric_latched_reference_stays_world_fixed", probe)
         self.assertIn("offset_vector_front_default", probe)
