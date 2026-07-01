@@ -401,7 +401,7 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn('adapter.get_meta_value("proxy_target_size_m", Vector3.ZERO)', attachment)
         self.assertIn("_card_state.mark_attached(target_id)", source)
         self.assertIn("_orient_card_for_3dof_reading()", source)
-        self.assertRegex(source, r"if _anchor_mode == \"target\":\s+_update_target_attachments\(\)")
+        self.assertRegex(source, r"if _anchor_mode == \"target\":\s+_update_target_attachments\(delta\)")
 
     def test_debug_marker_target_can_drive_real_device_validation(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -735,11 +735,13 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("var _pose_trace_writer = PoseTraceWriterScript.new()", source)
         self.assertIn("_pose_trace_writer.setup(_options.proxy_targets_pose_trace_path(PROXY_TARGETS_POSE_TRACE_PATH))", source)
         self.assertIn("_pose_trace_writer.write(delta, _build_status_snapshot())", source)
+        self.assertIn('"card_reacquire_state": _card_attachment.reacquire_state(CARD_ANCHOR_NAME)', source)
         self.assertNotIn("func _write_pose_trace(delta: float) -> void:", source)
         self.assertIn('"head_pose": _head_pose(snapshot)', writer)
         self.assertIn('"proxy_world": _proxy_world(proxy)', writer)
         self.assertIn('"card_world": _card_world(snapshot, proxy)', writer)
         self.assertIn('"anchor_state": _anchor_state(snapshot, proxy)', writer)
+        self.assertIn('"card_reacquire_state": str(proxy.get("card_reacquire_state", "idle"))', writer)
         self.assertIn("FileAccess.READ_WRITE", writer)
         self.assertIn("file.seek_end()", writer)
         self.assertIn("file.store_line(JSON.stringify(event))", writer)

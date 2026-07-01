@@ -76,6 +76,7 @@ func status_values(runtime_values: Dictionary) -> Dictionary:
 		"card_resolved_position": runtime_values.get("card_resolved_position"),
 		"card_node_position": runtime_values.get("card_node_position"),
 		"card_apply_count": runtime_values.get("card_apply_count"),
+		"card_reacquire_state": str(runtime_values.get("card_reacquire_state", "idle")),
 		"packets": runtime_values.get("packets"),
 		"parsed": _parsed_messages,
 		"live": runtime_values.get("live"),

@@ -50,6 +50,13 @@ const PROXY_TARGETS_CARD_OFFSET_RULE := {
 	"up_m": 0.0,
 	"fallback": "hold_last_pose",
 }
+const PROXY_TARGETS_CARD_REACQUIRE_RULE := {
+	"enabled": true,
+	"trigger": "dynamic_held_to_dynamic",
+	"smoothing_ms": 250.0,
+	"max_step_m": 0.2,
+	"settle_epsilon_m": 0.03,
+}
 const STATUS_HUD_VISIBLE := true
 const PASSTHROUGH_OVERLAY_ENV := "SMARTXR_USE_PASSTHROUGH_OVERLAY"
 const PASSTHROUGH_OVERLAY_VIEWPORT_SIZE := Vector2i(512, 256)
@@ -516,7 +523,7 @@ func _process(delta: float) -> void:
 	if _anchor_mode == "bbox":
 		_apply_bbox_anchor()
 	if _anchor_mode == "target":
-		_update_target_attachments()
+		_update_target_attachments(delta)
 	else:
 		_apply_3dof_anchor_transform()
 	_update_passthrough_overlay_layer()
@@ -573,14 +580,14 @@ func update_vst_target(target_id: String, transform: Transform3D, confidence: fl
 	return attached
 
 
-func _advance_vst_target_state(_delta: float) -> void:
+func _advance_vst_target_state(delta: float) -> void:
 	if _vst_target_source == null:
 		return
 	_vst_target_source.advance(float(Time.get_ticks_msec()))
 	if _vst_target_source.target_state() == TargetSourceScript.TRACKABLE_STATE_LOST:
 		return
 	if _anchor_mode == "target" and _card_attachment.has_attachment(CARD_ANCHOR_NAME):
-		_update_target_attachments()
+		_update_target_attachments(delta)
 
 
 func _on_vst_target_updated(_target_id: String, _transform: Transform3D) -> void:
@@ -613,6 +620,7 @@ func _setup_card_attachment() -> void:
 	_card_attachment.set_reference_transform_provider(_card_reference_transform)
 	_card_attachment.set_on_applied(_on_card_attachment_applied)
 	_card_attachment.set_on_detach_card(detach_card)
+	_card_attachment.set_reacquire_rule(_options.proxy_targets_card_reacquire_rule(PROXY_TARGETS_CARD_REACQUIRE_RULE))
 
 
 func _card_reference_transform() -> Transform3D:
@@ -644,10 +652,10 @@ func detach_card(card_id: String) -> void:
 		_apply_3dof_anchor_transform()
 
 
-func _update_target_attachments() -> void:
+func _update_target_attachments(delta_s := 0.0) -> void:
 	if _card_anchor == null:
 		return
-	if not _card_attachment.update_attachments(_card_anchor, CARD_ANCHOR_NAME):
+	if not _card_attachment.update_attachments(_card_anchor, CARD_ANCHOR_NAME, delta_s):
 		return
 	if _face_camera_enabled:
 		_orient_card_for_3dof_reading()
@@ -920,6 +928,7 @@ func _build_proxy_targets_status_snapshot() -> Dictionary:
 		"card_resolved_position": _proxy_targets_card_resolved_position(),
 		"card_node_position": _proxy_targets_card_node_position(),
 		"card_apply_count": _proxy_targets_card_apply_count,
+		"card_reacquire_state": _card_attachment.reacquire_state(CARD_ANCHOR_NAME),
 	}))
 
 

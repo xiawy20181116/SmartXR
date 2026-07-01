@@ -278,6 +278,44 @@ func _run_checks() -> String:
 	_checks["dynamic_held_update_holds_last_card_transform"] = dynamic_held_attachment.update_attachments(held_anchor, "HeldCard") == true \
 		and held_anchor.global_transform.origin.is_equal_approx(held_pose)
 
+	var reacquire_anchor := Node3D.new()
+	reacquire_anchor.name = "DynamicReacquireAnchorProbe"
+	stage.add_child(reacquire_anchor)
+	var reacquire_attachment = attachment_script.new()
+	reacquire_attachment.set_resolver(_resolve_adapter)
+	reacquire_attachment.set_reacquire_rule({
+		"enabled": true,
+		"trigger": "dynamic_held_to_dynamic",
+		"smoothing_ms": 250,
+		"max_step_m": 0.2,
+		"settle_epsilon_m": 0.03,
+	})
+	var reacquire_target := FakeTargetAdapter.new()
+	reacquire_target.transform = Transform3D(Basis(), Vector3(0.0, 0.0, -1.0))
+	reacquire_target.metadata["proxy_world_latch_state"] = "dynamic"
+	_adapters["reacquire_target"] = reacquire_target
+	var zero_offset_rule := {"mode": "front", "distance_m": 0.0, "offset_space": "world"}
+	_checks["dynamic_reacquire_attaches"] = reacquire_attachment.attach("ReacquireCard", "reacquire_target", zero_offset_rule) == true
+	reacquire_attachment.update_attachments(reacquire_anchor, "ReacquireCard", 0.016)
+	var reacquire_start := reacquire_anchor.global_transform.origin
+	reacquire_target.transform = Transform3D(Basis(), Vector3(4.0, 0.0, -1.0))
+	reacquire_target.metadata["proxy_world_latch_state"] = "dynamic_held"
+	reacquire_attachment.update_attachments(reacquire_anchor, "ReacquireCard", 0.016)
+	_checks["dynamic_reacquire_held_segment_still_holds"] = reacquire_anchor.global_transform.origin.is_equal_approx(reacquire_start) \
+		and reacquire_attachment.reacquire_state("ReacquireCard") == "idle"
+	reacquire_target.metadata["proxy_world_latch_state"] = "dynamic"
+	var first_fresh_ok: bool = reacquire_attachment.update_attachments(reacquire_anchor, "ReacquireCard", 0.1)
+	var first_fresh_step := reacquire_start.distance_to(reacquire_anchor.global_transform.origin)
+	_checks["dynamic_reacquire_clamps_first_fresh_step"] = first_fresh_ok \
+		and first_fresh_step <= 0.2001 and first_fresh_step >= 0.199
+	_checks["dynamic_reacquire_reports_clamped_state"] = reacquire_attachment.reacquire_state("ReacquireCard") == "clamped"
+	var reacquire_guard := 0
+	while reacquire_guard < 40 and reacquire_attachment.reacquire_state("ReacquireCard") != "settled":
+		reacquire_attachment.update_attachments(reacquire_anchor, "ReacquireCard", 0.1)
+		reacquire_guard += 1
+	_checks["dynamic_reacquire_settles_after_catching_target"] = reacquire_anchor.global_transform.origin.distance_to(Vector3(4.0, 0.0, -1.0)) <= 0.03
+	_checks["dynamic_reacquire_reports_settled_state"] = reacquire_attachment.reacquire_state("ReacquireCard") == "settled"
+
 	# 6. Fallback: hold_last_pose (default) against an unavailable target,
 	# then against a target the resolver no longer knows.
 	anchor.global_transform = Transform3D(Basis(), Vector3(10.0, 10.0, 10.0))

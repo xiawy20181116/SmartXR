@@ -34,6 +34,11 @@ For every setting, highest priority first:
 | `proxy_targets_card_right_width_fraction` | `SMARTXR_PROXY_TARGETS_CARD_RIGHT_WIDTH_FRACTION` | `0.5` | Horizontal offset as a fraction of estimated person width. Positive is viewer-right, negative is viewer-left |
 | `proxy_targets_card_right_angle_deg` | `SMARTXR_PROXY_TARGETS_CARD_RIGHT_ANGLE_DEG` | `15.0` | Horizontal offset angle for `depth_scaled_right_angle`; the right offset is `tan(angle) * final_depth` |
 | `proxy_targets_card_up_m` | `SMARTXR_PROXY_TARGETS_CARD_UP_M` | `0.0` | Extra vertical offset in meters |
+| `proxy_targets_card_reacquire_rule` | see flat keys below | `PROXY_TARGETS_CARD_REACQUIRE_RULE` const | Dynamic-mode experiment rule for smoothing/clamping card world pose when a target returns fresh after a `dynamic_held` segment |
+| `proxy_targets_card_reacquire_enabled` | `SMARTXR_PROXY_TARGETS_CARD_REACQUIRE_ENABLED` | `true` | Enables the re-acquire rule |
+| `proxy_targets_card_reacquire_smoothing_ms` | `SMARTXR_PROXY_TARGETS_CARD_REACQUIRE_SMOOTHING_MS` | `250` | Approximate time window used to move from the held card pose toward the fresh target |
+| `proxy_targets_card_reacquire_max_step_m` | `SMARTXR_PROXY_TARGETS_CARD_REACQUIRE_MAX_STEP_M` | `0.2` | Per-frame card world movement clamp during re-acquire; `0.2` m should suppress `card_world jump > 20cm` by construction |
+| `proxy_targets_card_reacquire_settle_epsilon_m` | `SMARTXR_PROXY_TARGETS_CARD_REACQUIRE_SETTLE_EPSILON_M` | `0.03` | Distance threshold where the card snaps to the fresh target and reports settled |
 | `status_hud_visible` | `SMARTXR_STATUS_HUD_VISIBLE` | `STATUS_HUD_VISIBLE` const | Whether the in-headset diagnostic text HUD is visible; status JSON is still written when hidden |
 | `vst_horizontal_fov_deg` | `SMARTXR_VST_HORIZONTAL_FOV_DEG` | `BBOX_HORIZONTAL_FOV_DEG` const | Right-eye VST horizontal FOV for bbox projection |
 | `vst_vertical_fov_deg` | `SMARTXR_VST_VERTICAL_FOV_DEG` | `BBOX_VERTICAL_FOV_DEG` const | Right-eye VST vertical FOV for bbox projection |
@@ -82,6 +87,13 @@ runs.
     "up_m": 0.0,
     "fallback": "hold_last_pose"
   },
+  "proxy_targets_card_reacquire_rule": {
+    "enabled": true,
+    "trigger": "dynamic_held_to_dynamic",
+    "smoothing_ms": 250,
+    "max_step_m": 0.2,
+    "settle_epsilon_m": 0.03
+  },
   "status_hud_visible": true,
   "vst_horizontal_fov_deg": 70.0,
   "vst_vertical_fov_deg": 43.0,
@@ -91,6 +103,14 @@ runs.
   "vst_focal_length_y": 0.0
 }
 ```
+
+With `trigger: "dynamic_held_to_dynamic"`, `dynamic_held` frames continue to
+hold the previous card world transform. When the next fresh `dynamic` target
+arrives, the card moves toward it with the configured smoothing/clamp instead
+of teleporting on the first fresh frame. Pose trace JSONL records
+`anchor_state.card_reacquire_state` as `idle`, `smoothing`, `clamped`, or
+`settled`, so fast-motion comparisons can tell whether each large jump was
+handled by the re-acquire rule.
 
 For quick A/B, edit only these values:
 

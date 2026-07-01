@@ -70,6 +70,7 @@ func _run_checks() -> String:
 		"card_resolved_position": Vector3(4.0, 5.0, 6.0),
 		"card_node_position": Vector3(7.0, 8.0, 9.0),
 		"card_apply_count": 11,
+		"card_reacquire_state": "smoothing",
 		"packets": 13,
 		"parsed": 17,
 		"live": 19,
@@ -100,6 +101,7 @@ func _run_checks() -> String:
 		"card_resolved_position",
 		"card_node_position",
 		"card_apply_count",
+		"card_reacquire_state",
 		"packets",
 		"parsed",
 		"live",
@@ -118,7 +120,9 @@ func _run_checks() -> String:
 		"world_latch_state",
 		"error",
 	]
-	_checks["proxy_fragment_uses_values"] = proxy_snapshot.get("ws_url") == "ws://probe" and proxy_snapshot.get("sequence") == 23
+	_checks["proxy_fragment_uses_values"] = proxy_snapshot.get("ws_url") == "ws://probe" \
+		and proxy_snapshot.get("sequence") == 23 \
+		and proxy_snapshot.get("card_reacquire_state") == "smoothing"
 
 	var overlay_snapshot: Dictionary = composer.build_passthrough_overlay_status_snapshot({
 		"enabled": true,

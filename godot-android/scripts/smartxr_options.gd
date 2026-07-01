@@ -30,6 +30,10 @@ const ENV_PROXY_TARGETS_CARD_RIGHT_WIDTH_FRACTION := "SMARTXR_PROXY_TARGETS_CARD
 const ENV_PROXY_TARGETS_CARD_RIGHT_ANGLE_DEG := "SMARTXR_PROXY_TARGETS_CARD_RIGHT_ANGLE_DEG"
 const ENV_PROXY_TARGETS_CARD_UP_M := "SMARTXR_PROXY_TARGETS_CARD_UP_M"
 const ENV_PROXY_TARGETS_CARD_FALLBACK := "SMARTXR_PROXY_TARGETS_CARD_FALLBACK"
+const ENV_PROXY_TARGETS_CARD_REACQUIRE_ENABLED := "SMARTXR_PROXY_TARGETS_CARD_REACQUIRE_ENABLED"
+const ENV_PROXY_TARGETS_CARD_REACQUIRE_SMOOTHING_MS := "SMARTXR_PROXY_TARGETS_CARD_REACQUIRE_SMOOTHING_MS"
+const ENV_PROXY_TARGETS_CARD_REACQUIRE_MAX_STEP_M := "SMARTXR_PROXY_TARGETS_CARD_REACQUIRE_MAX_STEP_M"
+const ENV_PROXY_TARGETS_CARD_REACQUIRE_SETTLE_EPSILON_M := "SMARTXR_PROXY_TARGETS_CARD_REACQUIRE_SETTLE_EPSILON_M"
 const ENV_VST_HORIZONTAL_FOV_DEG := "SMARTXR_VST_HORIZONTAL_FOV_DEG"
 const ENV_VST_VERTICAL_FOV_DEG := "SMARTXR_VST_VERTICAL_FOV_DEG"
 const ENV_VST_PRINCIPAL_POINT_X := "SMARTXR_VST_PRINCIPAL_POINT_X"
@@ -152,6 +156,20 @@ func proxy_targets_card_offset_rule(default_rule: Dictionary) -> Dictionary:
 	rule["right_angle_deg"] = resolve_float("proxy_targets_card_right_angle_deg", ENV_PROXY_TARGETS_CARD_RIGHT_ANGLE_DEG, float(rule.get("right_angle_deg", 15.0)))
 	rule["up_m"] = resolve_float("proxy_targets_card_up_m", ENV_PROXY_TARGETS_CARD_UP_M, float(rule.get("up_m", 0.0)))
 	rule["fallback"] = resolve_string("proxy_targets_card_fallback", ENV_PROXY_TARGETS_CARD_FALLBACK, str(rule.get("fallback", "hold_last_pose")))
+	return rule
+
+
+## proxy_targets card dynamic_held -> dynamic re-acquire smoothing/clamp rule.
+func proxy_targets_card_reacquire_rule(default_rule: Dictionary) -> Dictionary:
+	var rule := default_rule.duplicate(true)
+	var nested = _config.get("proxy_targets_card_reacquire_rule", {})
+	if typeof(nested) == TYPE_DICTIONARY:
+		for key in nested.keys():
+			rule[key] = nested[key]
+	rule["enabled"] = resolve_bool("proxy_targets_card_reacquire_enabled", ENV_PROXY_TARGETS_CARD_REACQUIRE_ENABLED, bool(rule.get("enabled", false)))
+	rule["smoothing_ms"] = resolve_float("proxy_targets_card_reacquire_smoothing_ms", ENV_PROXY_TARGETS_CARD_REACQUIRE_SMOOTHING_MS, float(rule.get("smoothing_ms", 250.0)))
+	rule["max_step_m"] = resolve_float("proxy_targets_card_reacquire_max_step_m", ENV_PROXY_TARGETS_CARD_REACQUIRE_MAX_STEP_M, float(rule.get("max_step_m", 0.2)))
+	rule["settle_epsilon_m"] = resolve_float("proxy_targets_card_reacquire_settle_epsilon_m", ENV_PROXY_TARGETS_CARD_REACQUIRE_SETTLE_EPSILON_M, float(rule.get("settle_epsilon_m", 0.03)))
 	return rule
 
 
