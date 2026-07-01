@@ -75,8 +75,7 @@ func set_proxy_anchor_mode(mode: String) -> void:
 	if normalized == proxy_anchor_mode:
 		return
 	proxy_anchor_mode = normalized
-	if proxy_anchor_mode == ANCHOR_MODE_DYNAMIC:
-		reset_world_latches()
+	reset_world_latches()
 
 
 func reset_world_latches() -> void:
@@ -127,7 +126,14 @@ func _apply_target(target: Dictionary) -> void:
 			runtime_local_position = runtime_transform.origin
 			parsed_transform = _head_transform_to_world(runtime_transform)
 			world_from_head_applied = true
-		if proxy_anchor_mode == ANCHOR_MODE_WORLD_LATCHED:
+		if proxy_anchor_mode == ANCHOR_MODE_DYNAMIC:
+			var dynamic_result := _apply_dynamic_hold(target_id, target, parsed_transform, proxy.global_transform, offset_reference_transform, target_size_m)
+			parsed_transform = dynamic_result.get("transform", parsed_transform)
+			offset_reference_transform = dynamic_result.get("reference_transform", offset_reference_transform)
+			target_size_m = dynamic_result.get("target_size_m", target_size_m)
+			world_latched = bool(dynamic_result.get("world_latched", false))
+			world_latch_state = str(dynamic_result.get("world_latch_state", ANCHOR_MODE_DYNAMIC))
+		elif proxy_anchor_mode == ANCHOR_MODE_WORLD_LATCHED:
 			var latch_result := _apply_world_latch(target_id, target, parsed_transform, proxy.global_transform, offset_reference_transform, target_size_m)
 			parsed_transform = latch_result.get("transform", parsed_transform)
 			offset_reference_transform = latch_result.get("reference_transform", offset_reference_transform)
@@ -226,6 +232,30 @@ func _target_coordinate_space(target: Dictionary) -> String:
 
 func _is_head_coordinate_space(coordinate_space: String) -> bool:
 	return ["head", "godot_head", "camera", "xr_camera"].has(coordinate_space.strip_edges().to_lower())
+
+
+func _apply_dynamic_hold(target_id: String, target: Dictionary, world_transform: Transform3D, current_world_transform: Transform3D, reference_transform: Transform3D, target_size_m: Vector3) -> Dictionary:
+	if proxy_anchor_mode != ANCHOR_MODE_DYNAMIC:
+		return {"transform": world_transform, "reference_transform": reference_transform, "target_size_m": target_size_m, "world_latched": false, "world_latch_state": ANCHOR_MODE_DYNAMIC}
+	if _target_is_lost(target):
+		_world_latches.erase(target_id)
+		_world_latch_references.erase(target_id)
+		_world_latch_sizes.erase(target_id)
+		return {"transform": world_transform, "reference_transform": reference_transform, "target_size_m": target_size_m, "world_latched": false, "world_latch_state": "cleared_lost"}
+	if _target_is_fresh(target):
+		_world_latches[target_id] = world_transform
+		_world_latch_references[target_id] = reference_transform
+		_world_latch_sizes[target_id] = target_size_m
+		return {"transform": world_transform, "reference_transform": reference_transform, "target_size_m": target_size_m, "world_latched": false, "world_latch_state": ANCHOR_MODE_DYNAMIC}
+	if _world_latches.has(target_id):
+		return {
+			"transform": _world_latches[target_id],
+			"reference_transform": _world_latch_references.get(target_id, reference_transform),
+			"target_size_m": _world_latch_sizes.get(target_id, target_size_m),
+			"world_latched": true,
+			"world_latch_state": "dynamic_held"
+		}
+	return {"transform": current_world_transform, "reference_transform": reference_transform, "target_size_m": target_size_m, "world_latched": false, "world_latch_state": "dynamic_waiting_fresh"}
 
 
 func _apply_world_latch(target_id: String, target: Dictionary, world_transform: Transform3D, current_world_transform: Transform3D, reference_transform: Transform3D, target_size_m: Vector3) -> Dictionary:
