@@ -255,6 +255,29 @@ func _run_checks() -> String:
 	target.metadata.erase("proxy_world_latched")
 	target.metadata.erase("proxy_world_latch_reference_transform")
 
+	var held_anchor := Node3D.new()
+	held_anchor.name = "DynamicHeldAnchorProbe"
+	stage.add_child(held_anchor)
+	var dynamic_held_attachment = attachment_script.new()
+	dynamic_held_attachment.set_resolver(_resolve_adapter)
+	dynamic_held_attachment.set_reference_transform_provider(func(): return Transform3D.IDENTITY)
+	var held_target := FakeTargetAdapter.new()
+	held_target.transform = Transform3D(Basis(), Vector3(0.0, 1.0, -2.0))
+	held_target.metadata["proxy_world_latch_state"] = "dynamic"
+	_adapters["held_target"] = held_target
+	_checks["dynamic_held_attach_seeded_from_fresh_target"] = dynamic_held_attachment.attach("HeldCard", "held_target", angle_rule) == true
+	dynamic_held_attachment.update_attachments(held_anchor, "HeldCard")
+	var held_pose := held_anchor.global_transform.origin
+	held_target.transform = Transform3D(Basis(), Vector3(2.0, 1.0, -4.0))
+	held_target.metadata["proxy_world_latched"] = true
+	held_target.metadata["proxy_world_latch_state"] = "dynamic_held"
+	held_target.metadata["proxy_world_latch_reference_transform"] = Transform3D(Basis(), Vector3(5.0, 0.0, 0.0))
+	_checks["dynamic_held_reattach_preserves_last_transform"] = dynamic_held_attachment.attach("HeldCard", "held_target", angle_rule) == true \
+		and Vector3(dynamic_held_attachment.last_resolved_position("HeldCard")).is_equal_approx(held_pose)
+	held_anchor.global_transform = Transform3D(Basis(), Vector3(9.0, 9.0, 9.0))
+	_checks["dynamic_held_update_holds_last_card_transform"] = dynamic_held_attachment.update_attachments(held_anchor, "HeldCard") == true \
+		and held_anchor.global_transform.origin.is_equal_approx(held_pose)
+
 	# 6. Fallback: hold_last_pose (default) against an unavailable target,
 	# then against a target the resolver no longer knows.
 	anchor.global_transform = Transform3D(Basis(), Vector3(10.0, 10.0, 10.0))

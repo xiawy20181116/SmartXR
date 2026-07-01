@@ -82,11 +82,15 @@ func attach(card_id: String, target_id: String, offset_rule = {}) -> bool:
 	if adapter == null:
 		return false
 	var normalized := normalize_offset_rule(offset_rule)
+	var next_transform := _offset_transform_for_adapter(adapter, normalized)
+	var existing = _attachments.get(card_id)
+	if typeof(existing) == TYPE_DICTIONARY and str(existing.get("target_id", "")) == target_id and _should_hold_card_transform(adapter, existing):
+		next_transform = existing["last_transform"]
 	_attachments[card_id] = {
 		"target_id": target_id,
 		"offset_rule": normalized,
 		"fallback": str(normalized.get("fallback", TARGET_FALLBACK_HOLD_LAST_POSE)),
-		"last_transform": _offset_transform_for_adapter(adapter, normalized),
+		"last_transform": next_transform,
 	}
 	return true
 
@@ -114,6 +118,8 @@ func update_attachments(card_anchor: Node3D, primary_card_id: String) -> bool:
 	var adapter = _resolve(target_id)
 	if adapter != null and adapter.is_available():
 		var next_transform := _offset_transform_for_adapter(adapter, offset_rule)
+		if _should_hold_card_transform(adapter, attachment):
+			next_transform = attachment["last_transform"]
 		card_anchor.global_transform = next_transform
 		attachment["last_transform"] = next_transform
 		card_anchor.visible = true
@@ -359,6 +365,14 @@ func _offset_transform_for_adapter(adapter, offset_rule) -> Transform3D:
 		reference_transform,
 		target_size_m
 	)
+
+
+func _should_hold_card_transform(adapter, attachment: Dictionary) -> bool:
+	if adapter == null or not adapter.has_method("get_meta_value"):
+		return false
+	if str(adapter.get_meta_value("proxy_world_latch_state", "")).strip_edges().to_lower() != "dynamic_held":
+		return false
+	return attachment.get("last_transform", null) is Transform3D
 
 
 func _reference_transform() -> Transform3D:
