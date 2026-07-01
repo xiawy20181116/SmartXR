@@ -47,10 +47,12 @@ right offset as `tan(right_angle_deg) * final_depth`. This is useful when the
 card should occupy a stable visual angle beside the person instead of following
 the estimated bbox width.
 
-In `world_latched` comparison mode, Godot latches the first fresh target's
-world transform, viewer reference transform, and target size. The same
-placement rule is then evaluated from those stored values until target loss or
-manual reset, instead of re-reading the moving headset pose every frame.
+In `dynamic` comparison mode, fresh targets update the Godot world transform;
+stale/held packets reuse the previous world transform, viewer reference
+transform, and target size so an old head-space sample is not reprojected with
+the current headset pose. In `world_latched` mode, Godot latches the first
+fresh target's world transform and keeps using it until target loss or manual
+reset.
 
 Godot consumer/adapter must not read bbox or detection fields. Raw VST/external fields such as `bbox`, `boxes`, `detection`, `detections`, `image`, or `depth_m` belong on the publisher side and must be converted before reaching `proxy_targets`.
 
