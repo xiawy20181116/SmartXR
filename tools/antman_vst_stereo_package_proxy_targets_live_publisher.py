@@ -35,6 +35,8 @@ from antman_vst_stereo_proxy_targets_live_publisher import (  # noqa: E402
     _format_address,
     _handshake,
     create_pose_estimators,
+    DEPTH_OVERRIDE_MODES,
+    depth_override_config_from_args,
     is_proxy_targets_request,
 )
 from dump_antman_vst_humantrackor_jsonl import DEFAULT_ANTMAN_ROOT, _install_antman_paths  # noqa: E402
@@ -295,6 +297,7 @@ def serve(args: argparse.Namespace) -> int:
             if args.enable_keypoint_anchor:
                 print("keypoint_anchor=enabled pose_model=%s" % args.pose_model, flush=True)
             offset_rule = load_card_offset_rule(args.smartxr_options)
+            depth_override = depth_override_config_from_args(args)
             print(
                 "card_offset_rule=%s"
                 % json.dumps(offset_rule, ensure_ascii=False, separators=(",", ":")),
@@ -330,6 +333,7 @@ def serve(args: argparse.Namespace) -> int:
                     "position_filter_min_cutoff": args.position_filter_min_cutoff,
                     "position_filter_beta": args.position_filter_beta,
                     "position_filter_d_cutoff": args.position_filter_d_cutoff,
+                    "depth_override": depth_override,
                 },
                 daemon=True,
             ).start()
@@ -373,6 +377,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--position-filter-min-cutoff", type=float, default=DEFAULT_POSITION_FILTER_MIN_CUTOFF)
     parser.add_argument("--position-filter-beta", type=float, default=DEFAULT_POSITION_FILTER_BETA)
     parser.add_argument("--position-filter-d-cutoff", type=float, default=DEFAULT_POSITION_FILTER_D_CUTOFF)
+    parser.add_argument("--depth-override-mode", choices=DEPTH_OVERRIDE_MODES, default="real")
+    parser.add_argument("--depth-override-fixed-m", type=float, default=None)
+    parser.add_argument("--depth-override-scale", type=float, default=1.0)
+    parser.add_argument("--depth-override-offset-m", type=float, default=0.0)
+    parser.add_argument("--depth-override-noise-std-m", type=float, default=0.0)
+    parser.add_argument("--depth-override-seed", type=int, default=0)
     parser.add_argument("--recorded-width", type=int, default=880)
     parser.add_argument("--recorded-height", type=int, default=660)
     parser.add_argument("--model", default="yolov8n.pt")

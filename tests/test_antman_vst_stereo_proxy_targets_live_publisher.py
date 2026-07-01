@@ -191,6 +191,110 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertIsNotNone(message)
         self.assertEqual(message["cards"][0]["offset_rule"], offset_rule)
 
+    def test_depth_override_fixed_updates_target_depth_and_trace_metadata(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+        record = {
+            "source": "vst_stereo_bbox",
+            "frame_id": 10,
+            "pair_id": "pair-000010",
+            "person_id": "person-2-4",
+            "timestamp_ms": 1780911169157,
+            "left_bbox_xyxy": [640, 240, 720, 520],
+            "right_bbox_xyxy": [608, 240, 688, 520],
+            "confidence": 0.91,
+        }
+        baseline = publisher.build_proxy_targets_message_from_stereo_bbox_record(
+            record,
+            sequence=3,
+            recorded_width=880,
+            recorded_height=660,
+        )
+        raw_depth_m = baseline["targets"][0]["source_coordinate"]["source_frame"]["anchor_depth"]
+
+        message = publisher.build_proxy_targets_message_from_stereo_bbox_record(
+            record,
+            sequence=3,
+            recorded_width=880,
+            recorded_height=660,
+            depth_override=publisher.DepthOverrideConfig(mode="fixed", fixed_m=1.7),
+        )
+
+        self.assertIsNotNone(message)
+        target = message["targets"][0]
+        self.assertEqual(target["depth_source"], "depth_override_fixed")
+        self.assertEqual(target["source_coordinate"]["depth_source"], "depth_override_fixed")
+        self.assertAlmostEqual(target["source_coordinate"]["source_frame"]["anchor_depth"], 1.7)
+        self.assertAlmostEqual(target["stereo"]["depth_m_raw"], raw_depth_m)
+        self.assertAlmostEqual(target["stereo"]["depth_m"], 1.7)
+        self.assertEqual(target["depth_override"]["mode"], "fixed")
+        self.assertEqual(target["depth_override"]["raw_depth_m"], target["stereo"]["depth_m_raw"])
+        self.assertEqual(target["depth_override"]["applied_depth_m"], 1.7)
+
+        event = publisher.build_depth_trace_event(
+            message=message,
+            diagnostics={"reason": "target_ready", "last_pair_frame_id": 10},
+        )
+        self.assertEqual(event["depth_source"], "depth_override_fixed")
+        self.assertAlmostEqual(event["depth_m"], 1.7)
+        self.assertEqual(event["depth_override"]["mode"], "fixed")
+        self.assertAlmostEqual(event["depth_raw_m"], target["stereo"]["depth_m_raw"])
+
+    def test_depth_override_scale_offset_and_noise_are_deterministic(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+        raw_depth = 0.83671875
+
+        scaled = publisher.apply_depth_override(
+            raw_depth,
+            publisher.DepthOverrideConfig(mode="scale_offset", scale=2.0, offset_m=0.1),
+            sequence=3,
+        )
+        noisy_a = publisher.apply_depth_override(
+            raw_depth,
+            publisher.DepthOverrideConfig(mode="noise", noise_std_m=0.05, seed=42),
+            sequence=3,
+        )
+        noisy_b = publisher.apply_depth_override(
+            raw_depth,
+            publisher.DepthOverrideConfig(mode="noise", noise_std_m=0.05, seed=42),
+            sequence=3,
+        )
+
+        self.assertEqual(scaled["mode"], "scale_offset")
+        self.assertAlmostEqual(scaled["applied_depth_m"], raw_depth * 2.0 + 0.1)
+        self.assertEqual(noisy_a, noisy_b)
+        self.assertEqual(noisy_a["mode"], "noise")
+        self.assertEqual(noisy_a["seed"], 42)
+        self.assertNotAlmostEqual(noisy_a["applied_depth_m"], raw_depth)
+
+    def test_parse_args_exposes_depth_override_controls(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        args = publisher.parse_args(
+            [
+                "--depth-override-mode",
+                "scale_offset",
+                "--depth-override-fixed-m",
+                "1.7",
+                "--depth-override-scale",
+                "1.25",
+                "--depth-override-offset-m",
+                "0.2",
+                "--depth-override-noise-std-m",
+                "0.03",
+                "--depth-override-seed",
+                "123",
+            ]
+        )
+
+        config = publisher.depth_override_config_from_args(args)
+        self.assertEqual(args.depth_override_mode, "scale_offset")
+        self.assertEqual(config.normalized_mode(), "scale_offset")
+        self.assertEqual(config.fixed_m, 1.7)
+        self.assertEqual(config.scale, 1.25)
+        self.assertEqual(config.offset_m, 0.2)
+        self.assertEqual(config.noise_std_m, 0.03)
+        self.assertEqual(config.seed, 123)
+
     def test_builds_message_from_keypoint_anchor_record(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
 

@@ -9,6 +9,7 @@ param(
     [string]$ProxyTargetsAnchorMode = "",
     [ValidateSet("", "negative_z_forward", "positive_z_forward")]
     [string]$ProxyTargetsHeadZMode = "",
+    [string]$ProxyTargetsPoseTracePath = "",
     [string]$SmartXROptionsPath = "",
     [double]$ProxyTargetsTimeoutSeconds = 15.0,
     [string]$GodotExe = "E:\xia\Godot_v4.6.2-stable_win64.exe\Godot_v4.6.2-stable_win64.exe"
@@ -82,6 +83,7 @@ Write-Host "Project: $ProjectDir"
 Write-Host "ProxyTargets WS: $ProxyTargetsWsUrl"
 Write-Host "ProxyTargets anchor mode: $ProxyTargetsAnchorMode"
 Write-Host "ProxyTargets head Z mode: $ProxyTargetsHeadZMode"
+Write-Host "ProxyTargets pose trace: $ProxyTargetsPoseTracePath"
 Write-Host "SmartXR options path: $ResolvedSmartXROptionsPath"
 if ($ValidateProxyTargets) {
     Write-Host "SmartXR-PCMR proxy_targets live validation"
@@ -103,6 +105,7 @@ $OldProxyTargetsWsUrl = $env:PROXY_TARGETS_WS_URL
 $OldSmartXROptionsPath = $env:SMARTXR_OPTIONS_PATH
 $OldProxyTargetsAnchorMode = $env:SMARTXR_PROXY_TARGETS_ANCHOR_MODE
 $OldProxyTargetsHeadZMode = $env:SMARTXR_PROXY_TARGETS_HEAD_Z_MODE
+$OldProxyTargetsPoseTracePath = $env:SMARTXR_PROXY_TARGETS_POSE_TRACE_PATH
 $OldPassthroughOverlay = $env:SMARTXR_USE_PASSTHROUGH_OVERLAY
 $OldStatusHudVisible = $env:SMARTXR_STATUS_HUD_VISIBLE
 $GodotProcess = $null
@@ -121,6 +124,11 @@ try {
         $env:SMARTXR_PROXY_TARGETS_HEAD_Z_MODE = $ProxyTargetsHeadZMode
     } else {
         Remove-Item "Env:\SMARTXR_PROXY_TARGETS_HEAD_Z_MODE" -ErrorAction SilentlyContinue
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ProxyTargetsPoseTracePath)) {
+        $env:SMARTXR_PROXY_TARGETS_POSE_TRACE_PATH = $ProxyTargetsPoseTracePath
+    } else {
+        Remove-Item "Env:\SMARTXR_PROXY_TARGETS_POSE_TRACE_PATH" -ErrorAction SilentlyContinue
     }
     if ($ValidateProxyTargets -and [string]::IsNullOrWhiteSpace($env:SMARTXR_STATUS_HUD_VISIBLE)) {
         $env:SMARTXR_STATUS_HUD_VISIBLE = "0"
@@ -172,6 +180,7 @@ try {
     Restore-EnvVar -Name "SMARTXR_OPTIONS_PATH" -Value $OldSmartXROptionsPath
     Restore-EnvVar -Name "SMARTXR_PROXY_TARGETS_ANCHOR_MODE" -Value $OldProxyTargetsAnchorMode
     Restore-EnvVar -Name "SMARTXR_PROXY_TARGETS_HEAD_Z_MODE" -Value $OldProxyTargetsHeadZMode
+    Restore-EnvVar -Name "SMARTXR_PROXY_TARGETS_POSE_TRACE_PATH" -Value $OldProxyTargetsPoseTracePath
     Restore-EnvVar -Name "SMARTXR_USE_PASSTHROUGH_OVERLAY" -Value $OldPassthroughOverlay
     Restore-EnvVar -Name "SMARTXR_STATUS_HUD_VISIBLE" -Value $OldStatusHudVisible
     & $GxrExtensionSwitch -Mode enable -ProjectDir $ProjectDir

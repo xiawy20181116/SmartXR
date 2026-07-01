@@ -26,6 +26,7 @@ For every setting, highest priority first:
 | `proxy_targets_ws_enabled` | `SMARTXR_PROXY_TARGETS_WS_ENABLED` | `PROXY_TARGETS_WS_ENABLED` const | Whether the live consumer runs |
 | `proxy_targets_anchor_mode` | `SMARTXR_PROXY_TARGETS_ANCHOR_MODE` | `PROXY_TARGETS_ANCHOR_MODE` const (`dynamic`) | Card/proxy comparison mode: `dynamic` updates Godot world pose only on fresh targets and holds the previous world pose for stale/held packets; `world_latched` latches the first fresh target's Godot world pose until lost or reset |
 | `proxy_targets_head_z_mode` | `SMARTXR_PROXY_TARGETS_HEAD_Z_MODE` | `PROXY_TARGETS_HEAD_Z_MODE` const (`negative_z_forward`) | Head-space Z convention comparison mode: `negative_z_forward` keeps the publisher's current Godot-style `-Z` forward target; `positive_z_forward` flips head-space Z before applying the XR head reference |
+| `proxy_targets_pose_trace_path` | `SMARTXR_PROXY_TARGETS_POSE_TRACE_PATH` | empty | Optional JSONL output path for per-frame Godot pose trace. Each line records head pose, proxy world pose, card world pose, and anchor state; empty disables it |
 | `proxy_targets_card_offset_rule` | see flat keys below | `PROXY_TARGETS_CARD_OFFSET_RULE` const / publisher default | Nested object for card placement next to a proxy target. This is read by both the Python sender and Godot fallback |
 | `proxy_targets_card_offset_mode` | `SMARTXR_PROXY_TARGETS_CARD_OFFSET_MODE` | `depth_scaled_right_half_width` | Flat override for `proxy_targets_card_offset_rule.mode` |
 | `proxy_targets_card_depth_scale` | `SMARTXR_PROXY_TARGETS_CARD_DEPTH_SCALE` | `1.3` | Multiplies target depth before placing the card, so `1.3` moves it behind the person relative to the viewer |
@@ -55,6 +56,12 @@ The stereo live and package replay runners pass it to both the Python
 publisher and Godot receiver by default, so this is the fastest place to tune
 card depth/right offset during PCMR testing.
 
+The stereo live/replay runners also enable Godot pose tracing for experiments
+and write it to their work dir as `godot_pose_trace.jsonl`. Override
+`proxy_targets_pose_trace_path` or `SMARTXR_PROXY_TARGETS_POSE_TRACE_PATH` when
+you want a different location; leave it empty to disable tracing in normal app
+runs.
+
 `config\smartxr_options.json` or `user://smartxr_options.json`:
 
 ```json
@@ -64,6 +71,7 @@ card depth/right offset during PCMR testing.
   "proxy_targets_ws_enabled": true,
   "proxy_targets_anchor_mode": "world_latched",
   "proxy_targets_head_z_mode": "negative_z_forward",
+  "proxy_targets_pose_trace_path": "",
   "proxy_targets_card_offset_rule": {
     "mode": "depth_scaled_right_angle",
     "offset_space": "world",

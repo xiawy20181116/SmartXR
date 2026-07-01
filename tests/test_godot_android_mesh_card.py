@@ -6,6 +6,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "godot-android" / "scripts" / "AndroidMovingCard.gd"
+POSE_TRACE_WRITER = ROOT / "godot-android" / "scripts" / "pose_trace_writer.gd"
 # Status label rendering and the user:// status-file writers moved to the
 # StatusHud subsystem in M3 step 1 (YAN-74); display/format assertions are
 # pinned there, snapshot-assembly assertions stay on the card script.
@@ -724,6 +725,24 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("Camera Pos xyz: %s", hud)
         self.assertIn("Camera Rot xyz: %s", hud)
         self.assertIn("XROrigin Pos xyz: %s", hud)
+
+    def test_moving_card_can_write_pose_trace_jsonl_for_anchor_diagnosis(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        writer = POSE_TRACE_WRITER.read_text(encoding="utf-8")
+
+        self.assertIn('const PROXY_TARGETS_POSE_TRACE_PATH := ""', source)
+        self.assertIn('const PoseTraceWriterScript := preload("res://scripts/pose_trace_writer.gd")', source)
+        self.assertIn("var _pose_trace_writer = PoseTraceWriterScript.new()", source)
+        self.assertIn("_pose_trace_writer.setup(_options.proxy_targets_pose_trace_path(PROXY_TARGETS_POSE_TRACE_PATH))", source)
+        self.assertIn("_pose_trace_writer.write(delta, _build_status_snapshot())", source)
+        self.assertNotIn("func _write_pose_trace(delta: float) -> void:", source)
+        self.assertIn('"head_pose": _head_pose(snapshot)', writer)
+        self.assertIn('"proxy_world": _proxy_world(proxy)', writer)
+        self.assertIn('"card_world": _card_world(snapshot, proxy)', writer)
+        self.assertIn('"anchor_state": _anchor_state(snapshot, proxy)', writer)
+        self.assertIn("FileAccess.READ_WRITE", writer)
+        self.assertIn("file.seek_end()", writer)
+        self.assertIn("file.store_line(JSON.stringify(event))", writer)
 
     def test_android_template_has_concrete_godot_activity(self):
         source = ANDROID_ACTIVITY.read_text(encoding="utf-8")

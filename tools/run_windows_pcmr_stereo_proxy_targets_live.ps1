@@ -18,6 +18,13 @@ param(
     [string]$ProxyTargetsAnchorMode = "",
     [ValidateSet("", "negative_z_forward", "positive_z_forward")]
     [string]$ProxyTargetsHeadZMode = "",
+    [ValidateSet("real", "fixed", "scale_offset", "noise")]
+    [string]$DepthOverrideMode = "real",
+    [double]$DepthOverrideFixedM = 1.5,
+    [double]$DepthOverrideScale = 1.0,
+    [double]$DepthOverrideOffsetM = 0.0,
+    [double]$DepthOverrideNoiseStdM = 0.0,
+    [int]$DepthOverrideSeed = 0,
     [int]$MonitorMinPackets = 10,
     [double]$MonitorTimeoutSeconds = 20.0,
     [switch]$UseAntmanPassthroughOverlay,
@@ -52,6 +59,7 @@ $SenderLog = Join-Path -Path $WorkDir -ChildPath "sender.log"
 $ReceiverLog = Join-Path -Path $WorkDir -ChildPath "receiver.log"
 $MonitorLog = Join-Path -Path $WorkDir -ChildPath "monitor.log"
 $DepthTraceFile = Join-Path -Path $WorkDir -ChildPath "depth_estimation_trace.jsonl"
+$PoseTraceFile = Join-Path -Path $WorkDir -ChildPath "godot_pose_trace.jsonl"
 $HealthStatusFile = Join-Path -Path $WorkDir -ChildPath "end_to_end_health_status.json"
 $RunDiagnosticsFile = Join-Path -Path $WorkDir -ChildPath "live_run_diagnostics.json"
 $RawMonitorStatusFile = Join-Path -Path $RepoRoot -ChildPath ".tmp\proxy_targets_live_monitor\proxy_targets_live_monitor_status.json"
@@ -167,7 +175,7 @@ if ($PythonExe -ne "python" -and -not (Test-Path -LiteralPath $PythonExe)) {
 }
 
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-Remove-Item -LiteralPath $SenderLog, $ReceiverLog, $MonitorLog, $DepthTraceFile, $HealthStatusFile, $RunDiagnosticsFile, $SenderReadyFile -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $SenderLog, $ReceiverLog, $MonitorLog, $DepthTraceFile, $PoseTraceFile, $HealthStatusFile, $RunDiagnosticsFile, $SenderReadyFile -Force -ErrorAction SilentlyContinue
 
 $RepoRootLiteral = ConvertTo-PowerShellLiteral $RepoRoot
 $PythonExeLiteral = ConvertTo-PowerShellLiteral $PythonExe
@@ -181,6 +189,7 @@ $VstAiShmRootLiteral = ConvertTo-PowerShellLiteral $VstAiShmRoot
 $GodotExeLiteral = ConvertTo-PowerShellLiteral $GodotExe
 $ProxyTargetsAnchorModeLiteral = ConvertTo-PowerShellLiteral $ProxyTargetsAnchorMode
 $ProxyTargetsHeadZModeLiteral = ConvertTo-PowerShellLiteral $ProxyTargetsHeadZMode
+$DepthOverrideModeLiteral = ConvertTo-PowerShellLiteral $DepthOverrideMode
 $SmartXROptionsPathLiteral = ConvertTo-PowerShellLiteral $ResolvedSmartXROptionsPath
 $PoseModelLiteral = ConvertTo-PowerShellLiteral $PoseModel
 $PoseDeviceLiteral = ConvertTo-PowerShellLiteral $PoseDevice
@@ -189,6 +198,7 @@ $SenderLogLiteral = ConvertTo-PowerShellLiteral $SenderLog
 $ReceiverLogLiteral = ConvertTo-PowerShellLiteral $ReceiverLog
 $MonitorLogLiteral = ConvertTo-PowerShellLiteral $MonitorLog
 $DepthTraceFileLiteral = ConvertTo-PowerShellLiteral $DepthTraceFile
+$PoseTraceFileLiteral = ConvertTo-PowerShellLiteral $PoseTraceFile
 $HealthStatusFileLiteral = ConvertTo-PowerShellLiteral $HealthStatusFile
 $RunDiagnosticsFileLiteral = ConvertTo-PowerShellLiteral $RunDiagnosticsFile
 $RawMonitorStatusFileLiteral = ConvertTo-PowerShellLiteral $RawMonitorStatusFile
@@ -209,6 +219,7 @@ Write-Host "[sender] Keypoint anchor: $EnableKeypointAnchor pose_model=$PoseMode
 Write-Host "[sender] Position filter: min_cutoff=$PositionFilterMinCutoff beta=$PositionFilterBeta"
 Write-Host "[sender] SmartXR options: $ResolvedSmartXROptionsPath"
 Write-Host "[sender] Depth trace: $DepthTraceFile"
+Write-Host "[sender] Depth override: mode=$DepthOverrideMode fixed_m=$DepthOverrideFixedM scale=$DepthOverrideScale offset_m=$DepthOverrideOffsetM noise_std_m=$DepthOverrideNoiseStdM seed=$DepthOverrideSeed"
 Write-Host "[sender] VST AI SHM root: $VstAiShmRoot"
 Write-Host "[sender] A later healthy run should print sent stereo seq=..."
 `$PublisherArgs = @(
@@ -226,6 +237,12 @@ Write-Host "[sender] A later healthy run should print sent stereo seq=..."
   "--recorded-height", "$RecordedHeight",
   "--log-every", "$LogEvery",
   "--smartxr-options", $SmartXROptionsPathLiteral,
+  "--depth-override-mode", $DepthOverrideModeLiteral,
+  "--depth-override-fixed-m", "$DepthOverrideFixedM",
+  "--depth-override-scale", "$DepthOverrideScale",
+  "--depth-override-offset-m", "$DepthOverrideOffsetM",
+  "--depth-override-noise-std-m", "$DepthOverrideNoiseStdM",
+  "--depth-override-seed", "$DepthOverrideSeed",
   "--depth-trace", $DepthTraceFileLiteral
 )
 if ($EnableKeypointAnchorLiteral) {
@@ -262,6 +279,7 @@ Write-Host "[receiver] Sender ready; starting PCMR validation."
   ValidateProxyTargets = `$true
   ProxyTargetsWsUrl = $WsUrlLiteral
   SmartXROptionsPath = $SmartXROptionsPathLiteral
+  ProxyTargetsPoseTracePath = $PoseTraceFileLiteral
   ProxyTargetsTimeoutSeconds = $ProxyTargetsTimeoutSeconds
 }
 if ($ProxyTargetsAnchorModeLiteral -ne '') {
@@ -373,7 +391,9 @@ Write-Host "VST AI SHM root: $VstAiShmRoot"
 Write-Host "Keep receiver Godot open: $KeepReceiverOpen"
 Write-Host "Keypoint anchor: $EnableKeypointAnchor"
 Write-Host "Filter:    min_cutoff=$PositionFilterMinCutoff beta=$PositionFilterBeta"
+Write-Host "Depth override: mode=$DepthOverrideMode fixed_m=$DepthOverrideFixedM scale=$DepthOverrideScale offset_m=$DepthOverrideOffsetM noise_std_m=$DepthOverrideNoiseStdM seed=$DepthOverrideSeed"
 Write-Host "Depth trace: $DepthTraceFile"
+Write-Host "Godot pose trace: $PoseTraceFile"
 Write-Host ""
 
 Open-RunnerTab -WindowName $WindowName -Title "SmartXR stereo sender" -RunnerPath $SenderScript
@@ -406,6 +426,7 @@ Write-Host "  Sender:   $SenderLog"
 Write-Host "  Receiver: $ReceiverLog"
 Write-Host "  Monitor:  $MonitorLog"
 Write-Host "  Depth trace: $DepthTraceFile"
+Write-Host "  Godot pose trace: $PoseTraceFile"
 Write-Host "  Health:   $HealthStatusFile"
 Write-Host "  Run diagnostics: $RunDiagnosticsFile"
 Write-Host "  PCMR status copy: .tmp\windows_pcmr_proxy_targets\proxy_targets_live_status.json"

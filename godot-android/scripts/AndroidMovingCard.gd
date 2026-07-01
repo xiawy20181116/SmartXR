@@ -39,6 +39,7 @@ const PROXY_TARGETS_WS_ENABLED := true
 const PROXY_TARGETS_WS_URL := "ws://127.0.0.1:8766/proxy_targets"
 const PROXY_TARGETS_ANCHOR_MODE := "dynamic"
 const PROXY_TARGETS_HEAD_Z_MODE := "negative_z_forward"
+const PROXY_TARGETS_POSE_TRACE_PATH := ""
 const PROXY_TARGETS_CARD_OFFSET_RULE := {
 	"mode": "depth_scaled_right_half_width",
 	"offset_space": "world",
@@ -63,6 +64,7 @@ const ProxyTargetsConsumerScript := preload("res://scripts/proxy_targets_consume
 const ProxyTargetsCardAdapterScript := preload("res://scripts/proxy_targets_card_adapter.gd")
 const ProxyTargetsStatusFragmentScript := preload("res://scripts/proxy_targets_status_fragment.gd")
 const PassthroughOverlayPresenterScript := preload("res://scripts/passthrough_overlay_presenter.gd")
+const PoseTraceWriterScript := preload("res://scripts/pose_trace_writer.gd")
 const SmartXROptionsScript := preload("res://scripts/smartxr_options.gd")
 const StatusHudScript := preload("res://scripts/status_hud.gd")
 const StatusSnapshotComposerScript := preload("res://scripts/status_snapshot_composer.gd")
@@ -154,6 +156,7 @@ var _card_view = CardViewScript.new({
 })
 var _status_hud: Node = null
 var _status_snapshot_composer = StatusSnapshotComposerScript.new()
+var _pose_trace_writer = PoseTraceWriterScript.new()
 var _speed_deg_per_second := CARD_DEFAULT_SPEED_DEG_PER_SECOND
 var _anchor_yaw_deg := CARD_START_YAW_DEG
 var _anchor_pitch_deg := CARD_START_PITCH_DEG
@@ -252,6 +255,7 @@ func _ready() -> void:
 	_build_card_anchor()
 	_build_xr_render_probe()
 	_build_status_hud()
+	_pose_trace_writer.setup(_options.proxy_targets_pose_trace_path(PROXY_TARGETS_POSE_TRACE_PATH))
 	_build_vst_target_proxy()
 	_build_debug_target_marker()
 	_build_proxy_targets_validation()
@@ -517,6 +521,7 @@ func _process(delta: float) -> void:
 		_apply_3dof_anchor_transform()
 	_update_passthrough_overlay_layer()
 	_update_status_hud(delta)
+	_pose_trace_writer.write(delta, _build_status_snapshot())
 
 
 func _update_passthrough_overlay_layer() -> void:

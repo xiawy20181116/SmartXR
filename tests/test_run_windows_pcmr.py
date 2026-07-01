@@ -28,6 +28,7 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("SMARTXR_OPTIONS_PATH", source)
         self.assertIn("SMARTXR_PROXY_TARGETS_ANCHOR_MODE", source)
         self.assertIn("SMARTXR_PROXY_TARGETS_HEAD_Z_MODE", source)
+        self.assertIn("SMARTXR_PROXY_TARGETS_POSE_TRACE_PATH", source)
         self.assertIn("SMARTXR_USE_PASSTHROUGH_OVERLAY", source)
         self.assertIn("SMARTXR_STATUS_HUD_VISIBLE", source)
         self.assertIn("passthrough_overlay_status.json", source)
@@ -43,11 +44,23 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("Restore-EnvVar -Name \"SMARTXR_OPTIONS_PATH\"", source)
         self.assertIn("Restore-EnvVar -Name \"SMARTXR_PROXY_TARGETS_ANCHOR_MODE\"", source)
         self.assertIn("Restore-EnvVar -Name \"SMARTXR_PROXY_TARGETS_HEAD_Z_MODE\"", source)
+        self.assertIn("Restore-EnvVar -Name \"SMARTXR_PROXY_TARGETS_POSE_TRACE_PATH\"", source)
         self.assertIn("Restore-EnvVar -Name \"SMARTXR_USE_PASSTHROUGH_OVERLAY\"", source)
         self.assertIn("Restore-EnvVar -Name \"SMARTXR_STATUS_HUD_VISIBLE\"", source)
         self.assertIn("Restore-EnvVar -Name \"PROXY_TARGETS_WS_URL\"", source)
         self.assertIn('if (-not [string]::IsNullOrWhiteSpace($ProxyTargetsAnchorMode)) {', source)
         self.assertIn('if (-not [string]::IsNullOrWhiteSpace($ProxyTargetsHeadZMode)) {', source)
+        self.assertIn('if (-not [string]::IsNullOrWhiteSpace($ProxyTargetsPoseTracePath)) {', source)
+
+    def test_runner_can_enable_godot_pose_trace_jsonl(self):
+        source = RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn('[string]$ProxyTargetsPoseTracePath = ""', source)
+        self.assertIn("ProxyTargets pose trace:", source)
+        self.assertIn("$OldProxyTargetsPoseTracePath = $env:SMARTXR_PROXY_TARGETS_POSE_TRACE_PATH", source)
+        self.assertIn("$env:SMARTXR_PROXY_TARGETS_POSE_TRACE_PATH = $ProxyTargetsPoseTracePath", source)
+        self.assertIn('Remove-Item "Env:\\SMARTXR_PROXY_TARGETS_POSE_TRACE_PATH" -ErrorAction SilentlyContinue', source)
+        self.assertIn('Restore-EnvVar -Name "SMARTXR_PROXY_TARGETS_POSE_TRACE_PATH"', source)
 
     def test_validate_proxy_targets_hides_in_headset_status_hud(self):
         source = RUNNER.read_text(encoding="utf-8")
@@ -164,6 +177,38 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn("$DepthTraceFileLiteral", source)
         self.assertIn('"--depth-trace", $DepthTraceFileLiteral', source)
         self.assertIn("Depth trace:", source)
+
+    def test_stereo_runners_expose_publisher_depth_override_controls(self):
+        for runner in (STEREO_LIVE_RUNNER, STEREO_PACKAGE_REPLAY_RUNNER):
+            with self.subTest(runner=runner.name):
+                self.assertTrue(runner.exists())
+                source = runner.read_text(encoding="utf-8")
+                self.assertIn('[ValidateSet("real", "fixed", "scale_offset", "noise")]', source)
+                self.assertIn('[string]$DepthOverrideMode = "real"', source)
+                self.assertIn("[double]$DepthOverrideFixedM = 1.5", source)
+                self.assertIn("[double]$DepthOverrideScale = 1.0", source)
+                self.assertIn("[double]$DepthOverrideOffsetM = 0.0", source)
+                self.assertIn("[double]$DepthOverrideNoiseStdM = 0.0", source)
+                self.assertIn("[int]$DepthOverrideSeed = 0", source)
+                self.assertIn("$DepthOverrideModeLiteral = ConvertTo-PowerShellLiteral $DepthOverrideMode", source)
+                self.assertIn('"--depth-override-mode", $DepthOverrideModeLiteral', source)
+                self.assertIn('"--depth-override-fixed-m", "$DepthOverrideFixedM"', source)
+                self.assertIn('"--depth-override-scale", "$DepthOverrideScale"', source)
+                self.assertIn('"--depth-override-offset-m", "$DepthOverrideOffsetM"', source)
+                self.assertIn('"--depth-override-noise-std-m", "$DepthOverrideNoiseStdM"', source)
+                self.assertIn('"--depth-override-seed", "$DepthOverrideSeed"', source)
+                self.assertIn("Depth override: mode=$DepthOverrideMode", source)
+
+    def test_stereo_runners_enable_godot_pose_trace_jsonl(self):
+        for runner in (STEREO_LIVE_RUNNER, STEREO_PACKAGE_REPLAY_RUNNER):
+            with self.subTest(runner=runner.name):
+                self.assertTrue(runner.exists())
+                source = runner.read_text(encoding="utf-8")
+                self.assertIn("godot_pose_trace.jsonl", source)
+                self.assertIn("$PoseTraceFile", source)
+                self.assertIn("$PoseTraceFileLiteral", source)
+                self.assertIn("ProxyTargetsPoseTracePath = $PoseTraceFileLiteral", source)
+                self.assertIn("Godot pose trace: $PoseTraceFile", source)
 
     def test_stereo_live_runner_uses_vst_ai_shm_consumer_reader_by_default(self):
         self.assertTrue(STEREO_LIVE_RUNNER.exists())
