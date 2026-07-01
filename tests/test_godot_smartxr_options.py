@@ -89,7 +89,7 @@ class GodotSmartXROptionsTests(unittest.TestCase):
         self.assertIn("return _options.proxy_targets_ws_enabled(PROXY_TARGETS_WS_ENABLED)", source)
         self.assertIn("return _options.proxy_targets_anchor_mode(PROXY_TARGETS_ANCHOR_MODE)", source)
         self.assertIn("return _options.proxy_targets_head_z_mode(PROXY_TARGETS_HEAD_Z_MODE)", source)
-        self.assertIn("return _options.proxy_targets_pose_trace_path(PROXY_TARGETS_POSE_TRACE_PATH)", source)
+        self.assertIn("_pose_trace_writer.setup(_options.proxy_targets_pose_trace_path(PROXY_TARGETS_POSE_TRACE_PATH))", source)
         self.assertIn("_options.proxy_targets_card_offset_rule(PROXY_TARGETS_CARD_OFFSET_RULE)", source)
         self.assertIn("_proxy_targets_card_adapter.set_default_offset_rule(_options.proxy_targets_card_offset_rule(PROXY_TARGETS_CARD_OFFSET_RULE))", source)
         self.assertIn("return _options.status_hud_visible(STATUS_HUD_VISIBLE)", source)
