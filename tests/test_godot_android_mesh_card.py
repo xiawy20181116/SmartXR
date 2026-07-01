@@ -725,6 +725,25 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("Camera Rot xyz: %s", hud)
         self.assertIn("XROrigin Pos xyz: %s", hud)
 
+    def test_moving_card_can_write_pose_trace_jsonl_for_anchor_diagnosis(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('const PROXY_TARGETS_POSE_TRACE_PATH := ""', source)
+        self.assertIn('var _pose_trace_path := ""', source)
+        self.assertIn("func _setup_pose_trace() -> void:", source)
+        self.assertIn("_pose_trace_path = _proxy_targets_pose_trace_path()", source)
+        self.assertIn("return _options.proxy_targets_pose_trace_path(PROXY_TARGETS_POSE_TRACE_PATH)", source)
+        self.assertIn("_setup_pose_trace()", source)
+        self.assertIn("_write_pose_trace(delta)", source)
+        self.assertIn("func _write_pose_trace(delta: float) -> void:", source)
+        self.assertIn('"head_pose": _pose_trace_head_pose()', source)
+        self.assertIn('"proxy_world": _pose_trace_proxy_world()', source)
+        self.assertIn('"card_world": _pose_trace_card_world()', source)
+        self.assertIn('"anchor_state": _pose_trace_anchor_state()', source)
+        self.assertIn("FileAccess.READ_WRITE", source)
+        self.assertIn("file.seek_end()", source)
+        self.assertIn("file.store_line(JSON.stringify(event))", source)
+
     def test_android_template_has_concrete_godot_activity(self):
         source = ANDROID_ACTIVITY.read_text(encoding="utf-8")
 

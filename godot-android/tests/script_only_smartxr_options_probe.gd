@@ -65,6 +65,7 @@ func _run_checks() -> String:
 	_checks["default_bool_false"] = options.proxy_targets_ws_enabled(false) == false
 	_checks["default_proxy_anchor_mode"] = options.proxy_targets_anchor_mode("dynamic") == "dynamic"
 	_checks["default_proxy_head_z_mode"] = options.proxy_targets_head_z_mode("negative_z_forward") == "negative_z_forward"
+	_checks["default_pose_trace_path"] = options.proxy_targets_pose_trace_path("") == ""
 	_checks["default_card_offset_rule"] = _offset_rule_matches(
 		options.proxy_targets_card_offset_rule(_default_card_offset_rule()),
 		"depth_scaled_right_half_width",
@@ -83,6 +84,7 @@ func _run_checks() -> String:
 		"proxy_targets_ws_enabled": false,
 		"proxy_targets_anchor_mode": "world_latched",
 		"proxy_targets_head_z_mode": "positive_z_forward",
+		"proxy_targets_pose_trace_path": "user://pose_trace_config.jsonl",
 		"proxy_targets_card_offset_rule": {
 			"mode": "depth_scaled_right_angle",
 			"depth_scale": 1.15,
@@ -104,6 +106,7 @@ func _run_checks() -> String:
 	_checks["config_bool"] = options.proxy_targets_ws_enabled(true) == false
 	_checks["config_proxy_anchor_mode"] = options.proxy_targets_anchor_mode("dynamic") == "world_latched"
 	_checks["config_proxy_head_z_mode"] = options.proxy_targets_head_z_mode("negative_z_forward") == "positive_z_forward"
+	_checks["config_pose_trace_path"] = options.proxy_targets_pose_trace_path("") == "user://pose_trace_config.jsonl"
 	_checks["config_card_offset_rule"] = _offset_rule_matches(
 		options.proxy_targets_card_offset_rule(_default_card_offset_rule()),
 		"depth_scaled_right_angle",
@@ -125,6 +128,7 @@ func _run_checks() -> String:
 	OS.set_environment("SMARTXR_PROXY_TARGETS_WS_ENABLED", "on")
 	OS.set_environment("SMARTXR_PROXY_TARGETS_ANCHOR_MODE", "dynamic")
 	OS.set_environment("SMARTXR_PROXY_TARGETS_HEAD_Z_MODE", "negative_z_forward")
+	OS.set_environment("SMARTXR_PROXY_TARGETS_POSE_TRACE_PATH", "user://pose_trace_env.jsonl")
 	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_DEPTH_SCALE", "0.95")
 	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_DEPTH_OFFSET_M", "-0.15")
 	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_RIGHT_WIDTH_FRACTION", "0.25")
@@ -139,6 +143,7 @@ func _run_checks() -> String:
 	_checks["env_bool_on"] = options.proxy_targets_ws_enabled(false) == true
 	_checks["env_proxy_anchor_mode"] = options.proxy_targets_anchor_mode("world_latched") == "dynamic"
 	_checks["env_proxy_head_z_mode"] = options.proxy_targets_head_z_mode("positive_z_forward") == "negative_z_forward"
+	_checks["env_pose_trace_path"] = options.proxy_targets_pose_trace_path("user://default_pose_trace.jsonl") == "user://pose_trace_env.jsonl"
 	_checks["env_card_offset_rule"] = _offset_rule_matches(
 		options.proxy_targets_card_offset_rule(_default_card_offset_rule()),
 		"depth_scaled_right_angle",
@@ -197,6 +202,7 @@ func _clear_probe_env() -> void:
 	OS.set_environment("SMARTXR_PROXY_TARGETS_WS_ENABLED", "")
 	OS.set_environment("SMARTXR_PROXY_TARGETS_ANCHOR_MODE", "")
 	OS.set_environment("SMARTXR_PROXY_TARGETS_HEAD_Z_MODE", "")
+	OS.set_environment("SMARTXR_PROXY_TARGETS_POSE_TRACE_PATH", "")
 	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_OFFSET_MODE", "")
 	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_OFFSET_SPACE", "")
 	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_DEPTH_SCALE", "")

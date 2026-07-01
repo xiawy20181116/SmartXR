@@ -269,6 +269,35 @@ class StereoPackageLivePublisherTests(unittest.TestCase):
         self.assertEqual(args.source_hz, 45.0)
         self.assertEqual(args.depth_trace, Path(".tmp/depth_estimation_trace.jsonl"))
 
+    def test_package_replay_parse_args_exposes_depth_override_controls(self):
+        publisher = load_module(PACKAGE_PUBLISHER, "antman_vst_stereo_package_proxy_targets_live_publisher")
+
+        args = publisher.parse_args(
+            [
+                "--package-dir",
+                ".tmp/stereo_package",
+                "--depth-override-mode",
+                "fixed",
+                "--depth-override-fixed-m",
+                "1.5",
+                "--depth-override-scale",
+                "1.1",
+                "--depth-override-offset-m",
+                "0.2",
+                "--depth-override-noise-std-m",
+                "0.04",
+                "--depth-override-seed",
+                "9",
+            ]
+        )
+
+        self.assertEqual(args.depth_override_mode, "fixed")
+        self.assertEqual(args.depth_override_fixed_m, 1.5)
+        self.assertEqual(args.depth_override_scale, 1.1)
+        self.assertEqual(args.depth_override_offset_m, 0.2)
+        self.assertEqual(args.depth_override_noise_std_m, 0.04)
+        self.assertEqual(args.depth_override_seed, 9)
+
 
 if __name__ == "__main__":
     unittest.main()

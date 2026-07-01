@@ -39,6 +39,7 @@ const PROXY_TARGETS_WS_ENABLED := true
 const PROXY_TARGETS_WS_URL := "ws://127.0.0.1:8766/proxy_targets"
 const PROXY_TARGETS_ANCHOR_MODE := "dynamic"
 const PROXY_TARGETS_HEAD_Z_MODE := "negative_z_forward"
+const PROXY_TARGETS_POSE_TRACE_PATH := ""
 const PROXY_TARGETS_CARD_OFFSET_RULE := {
 	"mode": "depth_scaled_right_half_width",
 	"offset_space": "world",
@@ -154,6 +155,8 @@ var _card_view = CardViewScript.new({
 })
 var _status_hud: Node = null
 var _status_snapshot_composer = StatusSnapshotComposerScript.new()
+var _pose_trace_path := ""
+var _pose_trace_failed := false
 var _speed_deg_per_second := CARD_DEFAULT_SPEED_DEG_PER_SECOND
 var _anchor_yaw_deg := CARD_START_YAW_DEG
 var _anchor_pitch_deg := CARD_START_PITCH_DEG
@@ -252,6 +255,7 @@ func _ready() -> void:
 	_build_card_anchor()
 	_build_xr_render_probe()
 	_build_status_hud()
+	_setup_pose_trace()
 	_build_vst_target_proxy()
 	_build_debug_target_marker()
 	_build_proxy_targets_validation()
@@ -402,6 +406,10 @@ func _proxy_targets_head_z_mode() -> String:
 	return _options.proxy_targets_head_z_mode(PROXY_TARGETS_HEAD_Z_MODE)
 
 
+func _proxy_targets_pose_trace_path() -> String:
+	return _options.proxy_targets_pose_trace_path(PROXY_TARGETS_POSE_TRACE_PATH)
+
+
 func _control_ws_url() -> String:
 	return _options.control_ws_url(WS_URL)
 
@@ -517,6 +525,7 @@ func _process(delta: float) -> void:
 		_apply_3dof_anchor_transform()
 	_update_passthrough_overlay_layer()
 	_update_status_hud(delta)
+	_write_pose_trace(delta)
 
 
 func _update_passthrough_overlay_layer() -> void:
@@ -856,6 +865,111 @@ func _update_status_hud(delta: float) -> void:
 	if _card_anchor != null:
 		_status_hud.update_status_label(snapshot, delta)
 	_status_hud.write_status_files(snapshot, delta)
+
+
+func _setup_pose_trace() -> void:
+	_pose_trace_path = _proxy_targets_pose_trace_path().strip_edges()
+	_pose_trace_failed = false
+	if _pose_trace_path.is_empty():
+		return
+	var file := FileAccess.open(_pose_trace_path, FileAccess.WRITE)
+	if file == null:
+		_pose_trace_failed = true
+		push_warning("Proxy targets pose trace open failed: %s" % _pose_trace_path)
+		return
+	file.close()
+	print("Proxy targets pose trace: %s" % _pose_trace_path)
+
+
+func _write_pose_trace(delta: float) -> void:
+	if _pose_trace_path.is_empty() or _pose_trace_failed:
+		return
+	var event := {
+		"timestamp_ms": int(Time.get_ticks_msec()),
+		"delta_s": float(delta),
+		"head_pose": _pose_trace_head_pose(),
+		"proxy_world": _pose_trace_proxy_world(),
+		"card_world": _pose_trace_card_world(),
+		"anchor_state": _pose_trace_anchor_state(),
+	}
+	var file := FileAccess.open(_pose_trace_path, FileAccess.READ_WRITE)
+	if file == null:
+		_pose_trace_failed = true
+		push_warning("Proxy targets pose trace append failed: %s" % _pose_trace_path)
+		return
+	file.seek_end()
+	file.store_line(JSON.stringify(event))
+	file.close()
+
+
+func _pose_trace_vec3(value):
+	if typeof(value) == TYPE_VECTOR3:
+		return [float(value.x), float(value.y), float(value.z)]
+	if typeof(value) == TYPE_ARRAY and value.size() >= 3:
+		return [float(value[0]), float(value[1]), float(value[2])]
+	return null
+
+
+func _pose_trace_head_pose() -> Dictionary:
+	return {
+		"position": _pose_trace_vec3(_camera.global_position if _camera != null else null),
+		"rotation_degrees": _pose_trace_vec3(_camera.global_rotation_degrees if _camera != null else null),
+		"xr_origin_position": _pose_trace_vec3(_xr_origin.global_position if _xr_origin != null else null),
+	}
+
+
+func _pose_trace_proxy_world() -> Dictionary:
+	var info := _proxy_targets_head_to_world_info()
+	var proxy_world_position = null
+	var proxy_node_position = null
+	var target_id := _proxy_targets_card_target_id()
+	var proxies = _proxy_targets_proxy_dictionary()
+	if typeof(proxies) == TYPE_DICTIONARY:
+		var selected_id := target_id
+		if selected_id.is_empty() and proxies.keys().size() > 0:
+			selected_id = str(proxies.keys()[0])
+		if not selected_id.is_empty() and proxies.has(selected_id):
+			var proxy = proxies[selected_id]
+			if proxy is Node3D:
+				proxy_node_position = _pose_trace_vec3(proxy.global_transform.origin)
+				if proxy.has_meta("proxy_world_position"):
+					proxy_world_position = _pose_trace_vec3(proxy.get_meta("proxy_world_position"))
+	return {
+		"target_id": target_id,
+		"proxy_count": _proxy_targets_proxy_count(),
+		"local_position": _pose_trace_vec3(info.get("local_position", null)),
+		"runtime_local_position": _pose_trace_vec3(info.get("runtime_local_position", null)),
+		"world_position": _pose_trace_vec3(info.get("world_position", null)),
+		"node_world_position": proxy_node_position,
+		"node_meta_world_position": proxy_world_position,
+		"head_z_mode": str(info.get("head_z_mode", _proxy_targets_head_z_mode())),
+		"world_from_head_applied": bool(info.get("world_from_head_applied", false)),
+	}
+
+
+func _pose_trace_card_world() -> Dictionary:
+	return {
+		"card_id": CARD_ANCHOR_NAME,
+		"target_id": _proxy_targets_card_target_id(),
+		"resolved_position": _pose_trace_vec3(_proxy_targets_card_resolved_position()),
+		"node_position": _pose_trace_vec3(_card_anchor.global_transform.origin if _card_anchor != null else null),
+		"rotation_degrees": _pose_trace_vec3(_card_anchor.global_rotation_degrees if _card_anchor != null else null),
+		"apply_count": _proxy_targets_card_apply_count,
+	}
+
+
+func _pose_trace_anchor_state() -> Dictionary:
+	var info := _proxy_targets_head_to_world_info()
+	return {
+		"anchor_mode": _anchor_mode,
+		"proxy_anchor_mode": str(info.get("anchor_mode", _proxy_targets_anchor_mode())),
+		"world_latched": bool(info.get("world_latched", false)),
+		"world_latch_state": str(info.get("world_latch_state", "-")),
+		"head_z_mode": str(info.get("head_z_mode", _proxy_targets_head_z_mode())),
+		"card_attachment_count": _card_attachment.size(),
+		"last_command": _last_command,
+		"paused": _paused,
+	}
 
 
 ## Per-frame status snapshot consumed by StatusHud (label rendering + the

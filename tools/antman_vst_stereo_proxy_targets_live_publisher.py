@@ -4,6 +4,7 @@ import argparse
 import copy
 import json
 import math
+import random
 import socket
 import sys
 import threading
@@ -60,6 +61,7 @@ DEFAULT_POSE_ASSOCIATION_MARGIN_PX = 8.0
 DEFAULT_MAX_POSE_ASSOCIATION_DISTANCE_PX = 120.0
 BBOX_TOP_CENTER_FALLBACK_DEPTH_SOURCE = "bbox_top_center_fallback"
 KEYPOINT_DEPTH_ANCHOR_KINDS = {"shoulder_midpoint", "nose", "ear_midpoint"}
+DEPTH_OVERRIDE_MODES = ("real", "fixed", "scale_offset", "noise")
 
 
 def is_proxy_targets_request(first_line: str) -> bool:
@@ -151,6 +153,59 @@ class BroadcastHub:
         for conn, reason in stale:
             self.remove_client(conn, reason=reason)
         return delivered
+
+
+class DepthOverrideConfig:
+    def __init__(
+        self,
+        *,
+        mode: str = "real",
+        fixed_m: float | None = None,
+        scale: float = 1.0,
+        offset_m: float = 0.0,
+        noise_std_m: float = 0.0,
+        seed: int = 0,
+    ) -> None:
+        self.mode = mode
+        self.fixed_m = fixed_m
+        self.scale = scale
+        self.offset_m = offset_m
+        self.noise_std_m = noise_std_m
+        self.seed = seed
+
+    def normalized_mode(self) -> str:
+        mode = str(self.mode).strip().lower()
+        return mode if mode in DEPTH_OVERRIDE_MODES else "real"
+
+
+def apply_depth_override(raw_depth_m: float, config: DepthOverrideConfig | None, *, sequence: int = 0) -> dict[str, Any]:
+    raw_depth = max(float(raw_depth_m), 0.001)
+    if config is None:
+        config = DepthOverrideConfig()
+    mode = config.normalized_mode()
+    applied_depth = raw_depth
+    metadata: dict[str, Any] = {
+        "mode": mode,
+        "raw_depth_m": raw_depth,
+        "applied_depth_m": raw_depth,
+    }
+    if mode == "fixed":
+        applied_depth = raw_depth if config.fixed_m is None else float(config.fixed_m)
+        metadata["fixed_m"] = applied_depth
+    elif mode == "scale_offset":
+        applied_depth = raw_depth * float(config.scale) + float(config.offset_m)
+        metadata["scale"] = float(config.scale)
+        metadata["offset_m"] = float(config.offset_m)
+    elif mode == "noise":
+        rng = random.Random(f"{int(config.seed)}:{int(sequence)}")
+        noise_m = rng.gauss(0.0, max(float(config.noise_std_m), 0.0))
+        applied_depth = raw_depth + noise_m
+        metadata["noise_std_m"] = max(float(config.noise_std_m), 0.0)
+        metadata["noise_m"] = noise_m
+        metadata["seed"] = int(config.seed)
+    applied_depth = max(float(applied_depth), 0.001)
+    metadata["applied_depth_m"] = applied_depth
+    return metadata
 
 
 def _one_euro_alpha(cutoff_hz: float, dt_s: float) -> float:
@@ -834,6 +889,7 @@ def build_proxy_targets_message_from_stereo_bbox_record(
     min_box_ratio: float = 0.5,
     max_box_ratio: float = 2.0,
     max_vertical_error_px: float | None = None,
+    depth_override: DepthOverrideConfig | None = None,
 ) -> dict[str, Any] | None:
     calibration = SCENE_STEREO_28.scaled_to(recorded_width, recorded_height)
     gate_config = StereoGateConfig(
@@ -886,6 +942,22 @@ def build_proxy_targets_message_from_stereo_bbox_record(
     if isinstance(pose_association, dict):
         stereo_record["pose_association"] = copy.deepcopy(pose_association)
 
+    raw_depth_m = float(depth_m)
+    depth_override_context = apply_depth_override(raw_depth_m, depth_override, sequence=sequence)
+    depth_override_mode = str(depth_override_context.get("mode", "real"))
+    if depth_override_mode != "real":
+        depth_m = float(depth_override_context["applied_depth_m"])
+        depth_source = f"depth_override_{depth_override_mode}"
+        stereo_record["depth_m_raw"] = raw_depth_m
+        stereo_record["depth_m"] = depth_m
+        stereo_record["depth_source_raw"] = stereo_record.get("depth_source")
+        stereo_record["depth_source"] = depth_source
+        stereo_record["position"] = calibration.left.unproject(
+            stereo_record["left_anchor_px"][0],
+            stereo_record["left_anchor_px"][1],
+            depth_m,
+        )
+
     left_bbox = list(record["left_bbox_xyxy"])
     source_payload = {
         "source": "vst_stereo",
@@ -930,6 +1002,11 @@ def build_proxy_targets_message_from_stereo_bbox_record(
             }
         ],
     }
+    if depth_override_mode != "real":
+        source_payload["detections"][0]["depth_override"] = copy.deepcopy(depth_override_context)
+        source_payload["detections"][0]["stereo"]["depth_m_raw"] = raw_depth_m
+        source_payload["detections"][0]["stereo"]["depth_m"] = float(depth_m)
+        source_payload["detections"][0]["stereo"]["depth_source_raw"] = stereo_record.get("depth_source_raw")
     if keypoint_anchor is not None:
         source_payload["detections"][0]["stereo"]["keypoint_anchor"] = copy.deepcopy(keypoint_anchor)
     if isinstance(pose_association, dict):
@@ -940,9 +1017,15 @@ def build_proxy_targets_message_from_stereo_bbox_record(
         return None
     detection = source_payload["detections"][0]
     message["targets"][0]["stereo"] = copy.deepcopy(detection["stereo"])
+    if depth_override_mode != "real":
+        message["targets"][0]["depth_override"] = copy.deepcopy(depth_override_context)
+        source_coordinate = message["targets"][0].get("source_coordinate")
+        if isinstance(source_coordinate, dict):
+            source_coordinate["depth_override"] = copy.deepcopy(depth_override_context)
     _DEPTH_TRACE_CONTEXT[id(message)] = {
         "bbox": detection["bbox"],
         "stereo": detection["stereo"],
+        "depth_override": copy.deepcopy(depth_override_context) if depth_override_mode != "real" else None,
         "keypoint_anchor": copy.deepcopy(keypoint_anchor) if keypoint_anchor is not None else None,
         "pose_association": copy.deepcopy(pose_association) if isinstance(pose_association, dict) else None,
         "selection": dict(record.get("selection", {})),
@@ -1131,6 +1214,10 @@ def build_depth_trace_event(
             "stereo": stereo,
         }
     )
+    depth_override = trace_context.get("depth_override") or target.get("depth_override")
+    if isinstance(depth_override, dict):
+        event["depth_override"] = copy.deepcopy(depth_override)
+        event["depth_raw_m"] = depth_override.get("raw_depth_m")
     keypoint_anchor = trace_context.get("keypoint_anchor")
     if keypoint_anchor is None and isinstance(stereo, dict):
         keypoint_anchor = stereo.get("keypoint_anchor")
@@ -1408,6 +1495,7 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
     position_filter: OneEuroVector3Filter | None = None,
     max_pair_capture_delta_ms: float | None = DEFAULT_MAX_PAIR_CAPTURE_DELTA_MS,
     target_source_hz: float = DEFAULT_SOURCE_HZ,
+    depth_override: DepthOverrideConfig | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     attempts = max_read_attempts if max_read_attempts is not None else max_empty_reads
     diagnostics = _empty_diagnostics("no_pair")
@@ -1538,6 +1626,7 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
                 recorded_height=recorded_height,
                 min_confidence=min_confidence,
                 max_vertical_error_px=max_vertical_error_px,
+                depth_override=depth_override,
             )
             stage_timing["message_build_ms"] = float(stage_timing.get("message_build_ms", 0.0)) + _elapsed_ms(message_build_started)
             if message is None:
@@ -1602,6 +1691,7 @@ def _detector_loop(
     position_filter_beta: float = DEFAULT_POSITION_FILTER_BETA,
     position_filter_d_cutoff: float = DEFAULT_POSITION_FILTER_D_CUTOFF,
     offset_rule: dict[str, Any] | None = None,
+    depth_override: DepthOverrideConfig | None = None,
 ) -> None:
     detector_sequence = 0
     empty_windows = 0
@@ -1642,6 +1732,7 @@ def _detector_loop(
             position_filter=position_filter,
             max_pair_capture_delta_ms=max_pair_capture_delta_ms,
             target_source_hz=target_source_hz,
+            depth_override=depth_override,
         )
         diagnostics["detector_sequence"] = detector_sequence
         state.update(message=message, diagnostics=diagnostics)
@@ -1701,6 +1792,7 @@ def _broadcast_loop(
     position_filter_beta: float = DEFAULT_POSITION_FILTER_BETA,
     position_filter_d_cutoff: float = DEFAULT_POSITION_FILTER_D_CUTOFF,
     offset_rule: dict[str, Any] | None = None,
+    depth_override: DepthOverrideConfig | None = None,
 ) -> None:
     interval_s = 1.0 / max(hz, 0.1)
     sequence = 0
@@ -1734,6 +1826,7 @@ def _broadcast_loop(
             "position_filter_min_cutoff": position_filter_min_cutoff,
             "position_filter_beta": position_filter_beta,
             "position_filter_d_cutoff": position_filter_d_cutoff,
+            "depth_override": depth_override,
         },
         daemon=True,
     ).start()
@@ -1831,6 +1924,17 @@ def serve(args: argparse.Namespace) -> int:
                 % json.dumps(offset_rule, ensure_ascii=False, separators=(",", ":")),
                 flush=True,
             )
+            depth_override = depth_override_config_from_args(args)
+            if depth_override.normalized_mode() != "real":
+                print(
+                    "depth_override=%s"
+                    % json.dumps(
+                        apply_depth_override(1.0, depth_override, sequence=0),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    flush=True,
+                )
             hub = BroadcastHub()
             threading.Thread(
                 target=_broadcast_loop,
@@ -1861,6 +1965,7 @@ def serve(args: argparse.Namespace) -> int:
                     "position_filter_min_cutoff": args.position_filter_min_cutoff,
                     "position_filter_beta": args.position_filter_beta,
                     "position_filter_d_cutoff": args.position_filter_d_cutoff,
+                    "depth_override": depth_override,
                 },
                 daemon=True,
             ).start()
@@ -1882,7 +1987,18 @@ def serve(args: argparse.Namespace) -> int:
                 reader.release()
 
 
-def _parse_args() -> argparse.Namespace:
+def depth_override_config_from_args(args: argparse.Namespace) -> DepthOverrideConfig:
+    return DepthOverrideConfig(
+        mode=getattr(args, "depth_override_mode", "real"),
+        fixed_m=getattr(args, "depth_override_fixed_m", None),
+        scale=getattr(args, "depth_override_scale", 1.0),
+        offset_m=getattr(args, "depth_override_offset_m", 0.0),
+        noise_std_m=getattr(args, "depth_override_noise_std_m", 0.0),
+        seed=getattr(args, "depth_override_seed", 0),
+    )
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Publish live proxy_targets from Antman Left/Right VST SHM stereo depth.")
     parser.add_argument("--antman-root", type=Path, default=DEFAULT_ANTMAN_ROOT)
     parser.add_argument("--host", default="127.0.0.1")
@@ -1901,6 +2017,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--position-filter-min-cutoff", type=float, default=DEFAULT_POSITION_FILTER_MIN_CUTOFF)
     parser.add_argument("--position-filter-beta", type=float, default=DEFAULT_POSITION_FILTER_BETA)
     parser.add_argument("--position-filter-d-cutoff", type=float, default=DEFAULT_POSITION_FILTER_D_CUTOFF)
+    parser.add_argument("--depth-override-mode", choices=DEPTH_OVERRIDE_MODES, default="real")
+    parser.add_argument("--depth-override-fixed-m", type=float, default=None)
+    parser.add_argument("--depth-override-scale", type=float, default=1.0)
+    parser.add_argument("--depth-override-offset-m", type=float, default=0.0)
+    parser.add_argument("--depth-override-noise-std-m", type=float, default=0.0)
+    parser.add_argument("--depth-override-seed", type=int, default=0)
     parser.add_argument("--recorded-width", type=int, default=880)
     parser.add_argument("--recorded-height", type=int, default=660)
     parser.add_argument("--vst-reader", choices=("vst_ai_shm", "legacy"), default="vst_ai_shm")
@@ -1921,7 +2043,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--min-keypoint-score", type=float, default=DEFAULT_MIN_KEYPOINT_SCORE)
     parser.add_argument("--pose-association-margin-px", type=float, default=DEFAULT_POSE_ASSOCIATION_MARGIN_PX)
     parser.add_argument("--max-pose-association-distance-px", type=float, default=DEFAULT_MAX_POSE_ASSOCIATION_DISTANCE_PX)
-    return parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def _parse_args() -> argparse.Namespace:
+    return parse_args()
 
 
 def main() -> int:
