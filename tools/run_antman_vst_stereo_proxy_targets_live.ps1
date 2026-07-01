@@ -18,6 +18,8 @@ param(
     [int]$PoseImgsz = 640,
     [double]$PoseConf = 0.25,
     [double]$MinKeypointScore = 0.5,
+    [double]$KeypointMaxHz = 12.0,
+    [double]$KeypointReuseMaxAgeMs = 150.0,
     [string]$PoseDevice = "",
     [string]$PythonExe = ""
 )
@@ -83,6 +85,7 @@ Write-Host "Python:      $PythonExe"
 Write-Host "Work dir:    $WorkDir"
 Write-Host "Depth trace: $DepthTraceFile"
 Write-Host "Keypoints:   $EnableKeypointAnchor"
+Write-Host "Keypoint runtime: keypoint_max_hz=$KeypointMaxHz reuse_max_age_ms=$KeypointReuseMaxAgeMs"
 
 try {
     $PublisherArgs = @(
@@ -104,7 +107,9 @@ try {
             "--pose-model", $PoseModel,
             "--pose-imgsz", [string]$PoseImgsz,
             "--pose-conf", [string]$PoseConf,
-            "--min-keypoint-score", [string]$MinKeypointScore
+            "--min-keypoint-score", [string]$MinKeypointScore,
+            "--keypoint-max-hz", [string]$KeypointMaxHz,
+            "--keypoint-reuse-max-age-ms", [string]$KeypointReuseMaxAgeMs
         )
         if ($PoseDevice -ne "") {
             $PublisherArgs += @("--pose-device", $PoseDevice)

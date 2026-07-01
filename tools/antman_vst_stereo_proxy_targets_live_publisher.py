@@ -59,6 +59,8 @@ DEFAULT_POSE_CONFIDENCE = 0.25
 DEFAULT_MIN_KEYPOINT_SCORE = 0.5
 DEFAULT_POSE_ASSOCIATION_MARGIN_PX = 8.0
 DEFAULT_MAX_POSE_ASSOCIATION_DISTANCE_PX = 120.0
+DEFAULT_KEYPOINT_MAX_HZ = 12.0
+DEFAULT_KEYPOINT_REUSE_MAX_AGE_MS = 150.0
 BBOX_TOP_CENTER_FALLBACK_DEPTH_SOURCE = "bbox_top_center_fallback"
 KEYPOINT_DEPTH_ANCHOR_KINDS = {"shoulder_midpoint", "nose", "ear_midpoint"}
 DEPTH_OVERRIDE_MODES = ("real", "fixed", "scale_offset", "noise")
@@ -1124,6 +1126,9 @@ def build_depth_trace_event(
         "sync": diagnostics.get("sync", {}),
         "realtime": diagnostics.get("realtime", {}),
     }
+    keypoint_runtime = diagnostics.get("keypoint_runtime")
+    if isinstance(keypoint_runtime, dict):
+        event["keypoint_runtime"] = copy.deepcopy(keypoint_runtime)
     left_source_stats = event["left_source_stats"] if isinstance(event["left_source_stats"], dict) else {}
     right_source_stats = event["right_source_stats"] if isinstance(event["right_source_stats"], dict) else {}
     replay_stat_keys = (
@@ -1364,6 +1369,72 @@ def write_depth_trace_event(trace_path: Path | None, event: dict[str, Any]) -> N
         handle.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
+def _bbox_fraction_from_xy(
+    xy: list[float] | tuple[float, float],
+    bbox_xyxy: list[float] | tuple[float, float, float, float],
+) -> list[float]:
+    x1, y1, x2, y2 = (float(value) for value in bbox_xyxy)
+    width = max(x2 - x1, 1e-6)
+    height = max(y2 - y1, 1e-6)
+    return [(float(xy[0]) - x1) / width, (float(xy[1]) - y1) / height]
+
+
+def _xy_from_bbox_fraction(
+    fraction: list[float] | tuple[float, float],
+    bbox_xyxy: list[float] | tuple[float, float, float, float],
+) -> list[float]:
+    x1, y1, x2, y2 = (float(value) for value in bbox_xyxy)
+    return [
+        x1 + float(fraction[0]) * (x2 - x1),
+        y1 + float(fraction[1]) * (y2 - y1),
+    ]
+
+
+def _cache_from_keypoint_record(
+    record: dict[str, Any],
+    *,
+    completed_at_s: float,
+    inference_ms: float,
+) -> dict[str, Any] | None:
+    anchor = record.get("selected_anchor")
+    if not isinstance(anchor, dict) or str(anchor.get("kind", "")) not in KEYPOINT_DEPTH_ANCHOR_KINDS:
+        return None
+    left_px = _xy_pair_or_none(anchor.get("left_px"))
+    right_px = _xy_pair_or_none(anchor.get("right_px"))
+    if left_px is None or right_px is None:
+        return None
+    left_bbox = record.get("left_bbox_xyxy")
+    right_bbox = record.get("right_bbox_xyxy")
+    if not isinstance(left_bbox, (list, tuple)) or not isinstance(right_bbox, (list, tuple)):
+        return None
+    if len(left_bbox) != 4 or len(right_bbox) != 4:
+        return None
+    return {
+        "completed_at_s": float(completed_at_s),
+        "inference_ms": float(inference_ms),
+        "selected_anchor": copy.deepcopy(anchor),
+        "left_fraction": _bbox_fraction_from_xy(left_px, left_bbox),
+        "right_fraction": _bbox_fraction_from_xy(right_px, right_bbox),
+        "keypoints": copy.deepcopy(record.get("keypoints", {})),
+        "pose_association": copy.deepcopy(record.get("pose_association", {})),
+    }
+
+
+def _apply_cached_keypoint_anchor(record: dict[str, Any], cache: dict[str, Any]) -> dict[str, Any]:
+    anchor = copy.deepcopy(cache["selected_anchor"])
+    anchor["left_px"] = _xy_from_bbox_fraction(cache["left_fraction"], record["left_bbox_xyxy"])
+    anchor["right_px"] = _xy_from_bbox_fraction(cache["right_fraction"], record["right_bbox_xyxy"])
+    anchor["cache_reused"] = True
+    record["source"] = "vst_stereo_keypoint"
+    record["selected_anchor"] = anchor
+    record["keypoints"] = copy.deepcopy(cache.get("keypoints", {}))
+    record["pose_association"] = copy.deepcopy(cache.get("pose_association", {}))
+    return {
+        "keypoint_anchor": copy.deepcopy(anchor),
+        "pose_association": copy.deepcopy(record["pose_association"]),
+    }
+
+
 def _attach_keypoint_anchor_to_record(
     record: dict[str, Any],
     *,
@@ -1409,6 +1480,244 @@ def _attach_keypoint_anchor_to_record(
         "keypoint_anchor": copy.deepcopy(record["selected_anchor"]),
         "pose_association": copy.deepcopy(record["pose_association"]),
     }
+
+
+class KeypointAnchorScheduler:
+    def __init__(
+        self,
+        *,
+        left_pose_estimator: Any,
+        right_pose_estimator: Any,
+        min_keypoint_score: float,
+        pose_association_margin_px: float,
+        max_pose_association_distance_px: float,
+        max_hz: float = DEFAULT_KEYPOINT_MAX_HZ,
+        reuse_max_age_ms: float = DEFAULT_KEYPOINT_REUSE_MAX_AGE_MS,
+        now_fn: Any = time.monotonic,
+        async_enabled: bool = False,
+    ) -> None:
+        self.left_pose_estimator = left_pose_estimator
+        self.right_pose_estimator = right_pose_estimator
+        self.min_keypoint_score = float(min_keypoint_score)
+        self.pose_association_margin_px = float(pose_association_margin_px)
+        self.max_pose_association_distance_px = float(max_pose_association_distance_px)
+        self.max_hz = float(max_hz)
+        self.reuse_max_age_ms = float(reuse_max_age_ms)
+        self.now_fn = now_fn
+        self.async_enabled = bool(async_enabled)
+        self._lock = threading.Lock()
+        self._pending = False
+        self._completed: dict[str, Any] | None = None
+        self._cache: dict[str, Any] | None = None
+        self._last_submitted_s: float | None = None
+        self._last_error: str | None = None
+
+    def attach_or_reuse(
+        self,
+        record: dict[str, Any],
+        *,
+        left_frame: Any,
+        right_frame: Any,
+    ) -> dict[str, Any]:
+        now_s = float(self.now_fn())
+        self._consume_completed(now_s)
+        cache = self._valid_cache(now_s)
+        if cache is not None:
+            applied = _apply_cached_keypoint_anchor(record, cache)
+            scheduled = self._maybe_schedule(record, left_frame=left_frame, right_frame=right_frame, now_s=now_s)
+            applied["keypoint_runtime"] = self._runtime_payload(
+                mode="reuse",
+                now_s=now_s,
+                cache=cache,
+                cache_hit=True,
+                scheduled=scheduled,
+            )
+            return applied
+
+        if self.async_enabled:
+            scheduled = self._maybe_schedule(record, left_frame=left_frame, right_frame=right_frame, now_s=now_s)
+            return {
+                "keypoint_anchor": {
+                    "kind": "disabled",
+                    "fallback_reason": "async_pending" if self._is_pending() else "no_cached_keypoint_anchor",
+                },
+                "keypoint_runtime": self._runtime_payload(
+                    mode="fallback",
+                    now_s=now_s,
+                    cache=None,
+                    cache_hit=False,
+                    scheduled=scheduled,
+                    fallback_reason="async_pending" if self._is_pending() else "no_cached_keypoint_anchor",
+                ),
+            }
+
+        if not self._rate_limit_allows(now_s):
+            return {
+                "keypoint_anchor": {
+                    "kind": "disabled",
+                    "fallback_reason": "keypoint_rate_limited",
+                },
+                "keypoint_runtime": self._runtime_payload(
+                    mode="fallback",
+                    now_s=now_s,
+                    cache=None,
+                    cache_hit=False,
+                    scheduled=False,
+                    fallback_reason="keypoint_rate_limited",
+                ),
+            }
+
+        return self._run_inline(record, left_frame=left_frame, right_frame=right_frame, now_s=now_s)
+
+    def _run_inline(
+        self,
+        record: dict[str, Any],
+        *,
+        left_frame: Any,
+        right_frame: Any,
+        now_s: float,
+    ) -> dict[str, Any]:
+        self._last_submitted_s = now_s
+        started = time.perf_counter()
+        diagnostics = _attach_keypoint_anchor_to_record(
+            record,
+            left_frame=left_frame,
+            right_frame=right_frame,
+            left_pose_estimator=self.left_pose_estimator,
+            right_pose_estimator=self.right_pose_estimator,
+            min_keypoint_score=self.min_keypoint_score,
+            pose_association_margin_px=self.pose_association_margin_px,
+            max_pose_association_distance_px=self.max_pose_association_distance_px,
+        )
+        inference_ms = _elapsed_ms(started)
+        self._cache = _cache_from_keypoint_record(record, completed_at_s=now_s, inference_ms=inference_ms)
+        self._last_error = None
+        diagnostics["keypoint_runtime"] = self._runtime_payload(
+            mode="run",
+            now_s=now_s,
+            cache=self._cache,
+            cache_hit=False,
+            scheduled=False,
+            inference_ms=inference_ms,
+        )
+        return diagnostics
+
+    def _maybe_schedule(self, record: dict[str, Any], *, left_frame: Any, right_frame: Any, now_s: float) -> bool:
+        if not self.async_enabled or not self._rate_limit_allows(now_s) or self._is_pending():
+            return False
+        self._last_submitted_s = now_s
+        with self._lock:
+            self._pending = True
+        job_record = copy.deepcopy(record)
+        thread = threading.Thread(
+            target=self._run_async_job,
+            kwargs={
+                "record": job_record,
+                "left_frame": left_frame,
+                "right_frame": right_frame,
+            },
+            daemon=True,
+        )
+        thread.start()
+        return True
+
+    def _run_async_job(self, *, record: dict[str, Any], left_frame: Any, right_frame: Any) -> None:
+        started = time.perf_counter()
+        try:
+            diagnostics = _attach_keypoint_anchor_to_record(
+                record,
+                left_frame=left_frame,
+                right_frame=right_frame,
+                left_pose_estimator=self.left_pose_estimator,
+                right_pose_estimator=self.right_pose_estimator,
+                min_keypoint_score=self.min_keypoint_score,
+                pose_association_margin_px=self.pose_association_margin_px,
+                max_pose_association_distance_px=self.max_pose_association_distance_px,
+            )
+            result = {
+                "record": record,
+                "diagnostics": diagnostics,
+                "inference_ms": _elapsed_ms(started),
+                "completed_at_s": time.monotonic(),
+            }
+        except Exception as exc:
+            result = {
+                "error": str(exc),
+                "inference_ms": _elapsed_ms(started),
+                "completed_at_s": time.monotonic(),
+            }
+        with self._lock:
+            self._completed = result
+            self._pending = False
+
+    def _consume_completed(self, now_s: float) -> None:
+        with self._lock:
+            completed = self._completed
+            self._completed = None
+        if completed is None:
+            return
+        if completed.get("error") is not None:
+            self._last_error = str(completed["error"])
+            return
+        record = completed.get("record")
+        if isinstance(record, dict):
+            self._cache = _cache_from_keypoint_record(
+                record,
+                completed_at_s=now_s,
+                inference_ms=float(completed.get("inference_ms", 0.0)),
+            )
+            self._last_error = None
+
+    def _valid_cache(self, now_s: float) -> dict[str, Any] | None:
+        cache = self._cache
+        if cache is None:
+            return None
+        if self.reuse_max_age_ms <= 0.0:
+            return None
+        age_ms = (now_s - float(cache.get("completed_at_s", now_s))) * 1000.0
+        return cache if age_ms <= self.reuse_max_age_ms else None
+
+    def _rate_limit_allows(self, now_s: float) -> bool:
+        if self.max_hz <= 0.0 or self._last_submitted_s is None:
+            return True
+        return (now_s - self._last_submitted_s) >= (1.0 / self.max_hz)
+
+    def _is_pending(self) -> bool:
+        with self._lock:
+            return self._pending
+
+    def _runtime_payload(
+        self,
+        *,
+        mode: str,
+        now_s: float,
+        cache: dict[str, Any] | None,
+        cache_hit: bool,
+        scheduled: bool,
+        inference_ms: float | None = None,
+        fallback_reason: str | None = None,
+    ) -> dict[str, Any]:
+        age_ms = None
+        if cache is not None:
+            age_ms = max(0.0, (now_s - float(cache.get("completed_at_s", now_s))) * 1000.0)
+        payload: dict[str, Any] = {
+            "mode": mode,
+            "cache_hit": bool(cache_hit),
+            "pending": self._is_pending(),
+            "scheduled": bool(scheduled),
+            "age_ms": age_ms,
+            "max_hz": self.max_hz,
+            "reuse_max_age_ms": self.reuse_max_age_ms,
+        }
+        if inference_ms is not None:
+            payload["inference_ms"] = float(inference_ms)
+        elif cache is not None and cache.get("inference_ms") is not None:
+            payload["inference_ms"] = float(cache["inference_ms"])
+        if fallback_reason is not None:
+            payload["fallback_reason"] = fallback_reason
+        if self._last_error is not None:
+            payload["last_error"] = self._last_error
+        return payload
 
 
 class UltralyticsPoseEstimator:
@@ -1493,6 +1802,7 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
     max_vertical_error_px: float | None = None,
     target_stabilizer: StereoActiveTargetStabilizer | None = None,
     position_filter: OneEuroVector3Filter | None = None,
+    keypoint_scheduler: KeypointAnchorScheduler | None = None,
     max_pair_capture_delta_ms: float | None = DEFAULT_MAX_PAIR_CAPTURE_DELTA_MS,
     target_source_hz: float = DEFAULT_SOURCE_HZ,
     depth_override: DepthOverrideConfig | None = None,
@@ -1586,7 +1896,34 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
                     right_frame_id=right_frame_id,
                 )
                 continue
-            if left_pose_estimator is not None and right_pose_estimator is not None:
+            if keypoint_scheduler is not None:
+                keypoint_anchor_started = time.perf_counter()
+                try:
+                    keypoint_diagnostics = keypoint_scheduler.attach_or_reuse(
+                        record,
+                        left_frame=left_tracker_frame,
+                        right_frame=right_tracker_frame,
+                    )
+                    diagnostics.update(keypoint_diagnostics)
+                except Exception as exc:
+                    diagnostics["keypoint_anchor"] = {
+                        "kind": "disabled",
+                        "fallback_reason": "keypoint_scheduler_failed",
+                        "error": str(exc),
+                    }
+                    diagnostics["keypoint_runtime"] = {
+                        "mode": "fallback",
+                        "cache_hit": False,
+                        "pending": False,
+                        "scheduled": False,
+                        "fallback_reason": "keypoint_scheduler_failed",
+                        "error": str(exc),
+                    }
+                finally:
+                    stage_timing["keypoint_anchor_ms"] = (
+                        float(stage_timing.get("keypoint_anchor_ms", 0.0)) + _elapsed_ms(keypoint_anchor_started)
+                    )
+            elif left_pose_estimator is not None and right_pose_estimator is not None:
                 keypoint_anchor_started = time.perf_counter()
                 try:
                     keypoint_diagnostics = _attach_keypoint_anchor_to_record(
@@ -1613,6 +1950,13 @@ def next_live_stereo_proxy_targets_message_with_diagnostics(
             elif left_pose_estimator is not None or right_pose_estimator is not None:
                 diagnostics["keypoint_anchor"] = {
                     "kind": "disabled",
+                    "fallback_reason": "one_eye_pose_estimator_missing",
+                }
+                diagnostics["keypoint_runtime"] = {
+                    "mode": "fallback",
+                    "cache_hit": False,
+                    "pending": False,
+                    "scheduled": False,
                     "fallback_reason": "one_eye_pose_estimator_missing",
                 }
             diagnostics.update(record.get("selection", {}))
@@ -1690,6 +2034,8 @@ def _detector_loop(
     position_filter_min_cutoff: float = DEFAULT_POSITION_FILTER_MIN_CUTOFF,
     position_filter_beta: float = DEFAULT_POSITION_FILTER_BETA,
     position_filter_d_cutoff: float = DEFAULT_POSITION_FILTER_D_CUTOFF,
+    keypoint_max_hz: float = DEFAULT_KEYPOINT_MAX_HZ,
+    keypoint_reuse_max_age_ms: float = DEFAULT_KEYPOINT_REUSE_MAX_AGE_MS,
     offset_rule: dict[str, Any] | None = None,
     depth_override: DepthOverrideConfig | None = None,
 ) -> None:
@@ -1706,6 +2052,18 @@ def _detector_loop(
         if position_filter_enabled
         else None
     )
+    keypoint_scheduler = None
+    if left_pose_estimator is not None and right_pose_estimator is not None:
+        keypoint_scheduler = KeypointAnchorScheduler(
+            left_pose_estimator=left_pose_estimator,
+            right_pose_estimator=right_pose_estimator,
+            min_keypoint_score=min_keypoint_score,
+            pose_association_margin_px=pose_association_margin_px,
+            max_pose_association_distance_px=max_pose_association_distance_px,
+            max_hz=keypoint_max_hz,
+            reuse_max_age_ms=keypoint_reuse_max_age_ms,
+            async_enabled=True,
+        )
     while True:
         if hub.client_count() == 0:
             time.sleep(0.05)
@@ -1730,6 +2088,7 @@ def _detector_loop(
             max_vertical_error_px=max_vertical_error_px,
             target_stabilizer=target_stabilizer,
             position_filter=position_filter,
+            keypoint_scheduler=keypoint_scheduler,
             max_pair_capture_delta_ms=max_pair_capture_delta_ms,
             target_source_hz=target_source_hz,
             depth_override=depth_override,
@@ -1791,6 +2150,8 @@ def _broadcast_loop(
     position_filter_min_cutoff: float = DEFAULT_POSITION_FILTER_MIN_CUTOFF,
     position_filter_beta: float = DEFAULT_POSITION_FILTER_BETA,
     position_filter_d_cutoff: float = DEFAULT_POSITION_FILTER_D_CUTOFF,
+    keypoint_max_hz: float = DEFAULT_KEYPOINT_MAX_HZ,
+    keypoint_reuse_max_age_ms: float = DEFAULT_KEYPOINT_REUSE_MAX_AGE_MS,
     offset_rule: dict[str, Any] | None = None,
     depth_override: DepthOverrideConfig | None = None,
 ) -> None:
@@ -1826,6 +2187,8 @@ def _broadcast_loop(
             "position_filter_min_cutoff": position_filter_min_cutoff,
             "position_filter_beta": position_filter_beta,
             "position_filter_d_cutoff": position_filter_d_cutoff,
+            "keypoint_max_hz": keypoint_max_hz,
+            "keypoint_reuse_max_age_ms": keypoint_reuse_max_age_ms,
             "depth_override": depth_override,
         },
         daemon=True,
@@ -1917,6 +2280,12 @@ def serve(args: argparse.Namespace) -> int:
             if args.enable_keypoint_anchor:
                 source_label += " + YOLO pose keypoint anchor"
             print(f"source: {source_label}", flush=True)
+            if args.enable_keypoint_anchor:
+                print(
+                    "keypoint_anchor_runtime=max_hz=%.3f reuse_max_age_ms=%.1f"
+                    % (args.keypoint_max_hz, args.keypoint_reuse_max_age_ms),
+                    flush=True,
+                )
             print("waiting for WebSocket client; sent seq appears after a stereo pair passes confidence/depth gates", flush=True)
             offset_rule = load_card_offset_rule(args.smartxr_options)
             print(
@@ -1965,6 +2334,8 @@ def serve(args: argparse.Namespace) -> int:
                     "position_filter_min_cutoff": args.position_filter_min_cutoff,
                     "position_filter_beta": args.position_filter_beta,
                     "position_filter_d_cutoff": args.position_filter_d_cutoff,
+                    "keypoint_max_hz": args.keypoint_max_hz,
+                    "keypoint_reuse_max_age_ms": args.keypoint_reuse_max_age_ms,
                     "depth_override": depth_override,
                 },
                 daemon=True,
@@ -2043,6 +2414,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--min-keypoint-score", type=float, default=DEFAULT_MIN_KEYPOINT_SCORE)
     parser.add_argument("--pose-association-margin-px", type=float, default=DEFAULT_POSE_ASSOCIATION_MARGIN_PX)
     parser.add_argument("--max-pose-association-distance-px", type=float, default=DEFAULT_MAX_POSE_ASSOCIATION_DISTANCE_PX)
+    parser.add_argument("--keypoint-max-hz", type=float, default=DEFAULT_KEYPOINT_MAX_HZ)
+    parser.add_argument("--keypoint-reuse-max-age-ms", type=float, default=DEFAULT_KEYPOINT_REUSE_MAX_AGE_MS)
     return parser.parse_args(argv)
 
 

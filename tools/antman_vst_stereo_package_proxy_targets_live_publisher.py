@@ -29,6 +29,8 @@ from antman_vst_stereo_proxy_targets_live_publisher import (  # noqa: E402
     DEFAULT_POSE_IMGSZ,
     DEFAULT_POSE_MODEL,
     DEFAULT_SOURCE_HZ,
+    DEFAULT_KEYPOINT_MAX_HZ,
+    DEFAULT_KEYPOINT_REUSE_MAX_AGE_MS,
     BroadcastHub,
     _broadcast_loop,
     _client_loop,
@@ -295,7 +297,11 @@ def serve(args: argparse.Namespace) -> int:
             print(f"source: stereo package replay {Path(args.package_dir).resolve()}", flush=True)
             print(f"replay_timing={args.replay_timing} source_hz={args.source_hz}", flush=True)
             if args.enable_keypoint_anchor:
-                print("keypoint_anchor=enabled pose_model=%s" % args.pose_model, flush=True)
+                print(
+                    "keypoint_anchor=enabled pose_model=%s max_hz=%.3f reuse_max_age_ms=%.1f"
+                    % (args.pose_model, args.keypoint_max_hz, args.keypoint_reuse_max_age_ms),
+                    flush=True,
+                )
             offset_rule = load_card_offset_rule(args.smartxr_options)
             depth_override = depth_override_config_from_args(args)
             print(
@@ -333,6 +339,8 @@ def serve(args: argparse.Namespace) -> int:
                     "position_filter_min_cutoff": args.position_filter_min_cutoff,
                     "position_filter_beta": args.position_filter_beta,
                     "position_filter_d_cutoff": args.position_filter_d_cutoff,
+                    "keypoint_max_hz": args.keypoint_max_hz,
+                    "keypoint_reuse_max_age_ms": args.keypoint_reuse_max_age_ms,
                     "depth_override": depth_override,
                 },
                 daemon=True,
@@ -397,6 +405,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--min-keypoint-score", type=float, default=DEFAULT_MIN_KEYPOINT_SCORE)
     parser.add_argument("--pose-association-margin-px", type=float, default=DEFAULT_POSE_ASSOCIATION_MARGIN_PX)
     parser.add_argument("--max-pose-association-distance-px", type=float, default=DEFAULT_MAX_POSE_ASSOCIATION_DISTANCE_PX)
+    parser.add_argument("--keypoint-max-hz", type=float, default=DEFAULT_KEYPOINT_MAX_HZ)
+    parser.add_argument("--keypoint-reuse-max-age-ms", type=float, default=DEFAULT_KEYPOINT_REUSE_MAX_AGE_MS)
     return parser.parse_args(argv)
 
 

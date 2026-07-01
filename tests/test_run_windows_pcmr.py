@@ -285,6 +285,17 @@ class WindowsPcmrRunnerTests(unittest.TestCase):
         self.assertIn('"--position-filter-beta", "$PositionFilterBeta"', source)
         self.assertIn("Position filter: min_cutoff=$PositionFilterMinCutoff beta=$PositionFilterBeta", source)
 
+    def test_stereo_runners_expose_keypoint_async_cache_controls(self):
+        for runner in (STEREO_LIVE_RUNNER, STEREO_PACKAGE_REPLAY_RUNNER):
+            with self.subTest(runner=runner.name):
+                self.assertTrue(runner.exists())
+                source = runner.read_text(encoding="utf-8")
+                self.assertIn("[double]$KeypointMaxHz = 12.0", source)
+                self.assertIn("[double]$KeypointReuseMaxAgeMs = 150.0", source)
+                self.assertIn("keypoint_max_hz=$KeypointMaxHz reuse_max_age_ms=$KeypointReuseMaxAgeMs", source)
+                self.assertIn('"--keypoint-max-hz", "$KeypointMaxHz"', source)
+                self.assertIn('"--keypoint-reuse-max-age-ms", "$KeypointReuseMaxAgeMs"', source)
+
     def test_stereo_runners_expose_proxy_targets_anchor_mode(self):
         for runner in (STEREO_LIVE_RUNNER, STEREO_PACKAGE_REPLAY_RUNNER):
             with self.subTest(runner=runner.name):

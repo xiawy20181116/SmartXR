@@ -5,6 +5,8 @@ import sys
 import types
 from pathlib import Path
 import json
+import threading
+import time
 import unittest
 import uuid
 from unittest import mock
@@ -294,6 +296,168 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertEqual(config.offset_m, 0.2)
         self.assertEqual(config.noise_std_m, 0.03)
         self.assertEqual(config.seed, 123)
+
+    def test_parse_args_exposes_keypoint_async_cache_controls(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        args = publisher.parse_args(
+            [
+                "--enable-keypoint-anchor",
+                "--keypoint-max-hz",
+                "12.5",
+                "--keypoint-reuse-max-age-ms",
+                "150",
+            ]
+        )
+
+        self.assertEqual(args.keypoint_max_hz, 12.5)
+        self.assertEqual(args.keypoint_reuse_max_age_ms, 150.0)
+
+    def test_keypoint_anchor_cache_reuses_previous_anchor_when_rate_limited(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+
+        class FakePoseEstimator:
+            def __init__(self, x):
+                self.calls = 0
+                self.x = x
+
+            def __call__(self, _frame):
+                self.calls += 1
+                person = [[0.0, 0.0] for _ in range(17)]
+                scores = [0.9 for _ in range(17)]
+                person[5] = [self.x, 300.0]
+                person[6] = [self.x + 20.0, 300.0]
+                return [person], [scores]
+
+        left_pose = FakePoseEstimator(660.0)
+        right_pose = FakePoseEstimator(628.0)
+        scheduler = publisher.KeypointAnchorScheduler(
+            left_pose_estimator=left_pose,
+            right_pose_estimator=right_pose,
+            min_keypoint_score=0.5,
+            pose_association_margin_px=80.0,
+            max_pose_association_distance_px=240.0,
+            max_hz=10.0,
+            reuse_max_age_ms=150.0,
+            now_fn=mock.Mock(side_effect=[1.000, 1.001]),
+        )
+        first = {
+            "frame_id": 1,
+            "pair_id": "pair-1",
+            "person_id": "person-1",
+            "timestamp_ms": 1_000,
+            "left_bbox_xyxy": [640, 240, 720, 520],
+            "right_bbox_xyxy": [608, 240, 688, 520],
+            "confidence": 0.9,
+        }
+        second = {
+            **first,
+            "frame_id": 2,
+            "pair_id": "pair-2",
+            "timestamp_ms": 1_001,
+            "left_bbox_xyxy": [650, 240, 730, 520],
+            "right_bbox_xyxy": [618, 240, 698, 520],
+        }
+
+        first_diagnostics = scheduler.attach_or_reuse(
+            first,
+            left_frame=FakeFrame(timestamp_us=1_000_000),
+            right_frame=FakeFrame(timestamp_us=1_000_100),
+        )
+        second_diagnostics = scheduler.attach_or_reuse(
+            second,
+            left_frame=FakeFrame(timestamp_us=1_001_000),
+            right_frame=FakeFrame(timestamp_us=1_001_100),
+        )
+
+        self.assertEqual(left_pose.calls, 1)
+        self.assertEqual(right_pose.calls, 1)
+        self.assertEqual(first_diagnostics["keypoint_runtime"]["mode"], "run")
+        self.assertEqual(second_diagnostics["keypoint_runtime"]["mode"], "reuse")
+        self.assertEqual(second["source"], "vst_stereo_keypoint")
+        self.assertEqual(second["selected_anchor"]["kind"], "shoulder_midpoint")
+        self.assertEqual(second["selected_anchor"]["left_px"], [680.0, 300.0])
+        self.assertEqual(second["selected_anchor"]["right_px"], [648.0, 300.0])
+        self.assertGreaterEqual(second_diagnostics["keypoint_runtime"]["age_ms"], 0.0)
+        self.assertLessEqual(second_diagnostics["keypoint_runtime"]["age_ms"], 150.0)
+
+    def test_keypoint_anchor_scheduler_submits_async_and_reuses_completed_cache(self):
+        publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
+        release_pose = threading.Event()
+
+        class BlockingPoseEstimator:
+            def __init__(self, x):
+                self.calls = 0
+                self.x = x
+
+            def __call__(self, _frame):
+                self.calls += 1
+                self_released = release_pose.wait(timeout=1.0)
+                if not self_released:
+                    raise AssertionError("pose estimator was not released")
+                person = [[0.0, 0.0] for _ in range(17)]
+                scores = [0.9 for _ in range(17)]
+                person[5] = [self.x, 300.0]
+                person[6] = [self.x + 20.0, 300.0]
+                return [person], [scores]
+
+        left_pose = BlockingPoseEstimator(660.0)
+        right_pose = BlockingPoseEstimator(628.0)
+        scheduler = publisher.KeypointAnchorScheduler(
+            left_pose_estimator=left_pose,
+            right_pose_estimator=right_pose,
+            min_keypoint_score=0.5,
+            pose_association_margin_px=80.0,
+            max_pose_association_distance_px=240.0,
+            max_hz=1.0,
+            reuse_max_age_ms=500.0,
+            async_enabled=True,
+        )
+        first = {
+            "frame_id": 1,
+            "pair_id": "pair-1",
+            "person_id": "person-1",
+            "timestamp_ms": 1_000,
+            "left_bbox_xyxy": [640, 240, 720, 520],
+            "right_bbox_xyxy": [608, 240, 688, 520],
+            "confidence": 0.9,
+        }
+        first_diagnostics = scheduler.attach_or_reuse(
+            first,
+            left_frame=FakeFrame(timestamp_us=1_000_000),
+            right_frame=FakeFrame(timestamp_us=1_000_100),
+        )
+
+        self.assertEqual(first_diagnostics["keypoint_runtime"]["mode"], "fallback")
+        self.assertTrue(first_diagnostics["keypoint_runtime"]["scheduled"])
+        self.assertNotIn("selected_anchor", first)
+
+        release_pose.set()
+        deadline = time.monotonic() + 1.0
+        while scheduler._is_pending() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertFalse(scheduler._is_pending())
+
+        second = {
+            **first,
+            "frame_id": 2,
+            "pair_id": "pair-2",
+            "timestamp_ms": 1_020,
+            "left_bbox_xyxy": [650, 240, 730, 520],
+            "right_bbox_xyxy": [618, 240, 698, 520],
+        }
+        second_diagnostics = scheduler.attach_or_reuse(
+            second,
+            left_frame=FakeFrame(timestamp_us=1_020_000),
+            right_frame=FakeFrame(timestamp_us=1_020_100),
+        )
+
+        self.assertEqual(left_pose.calls, 1)
+        self.assertEqual(right_pose.calls, 1)
+        self.assertEqual(second_diagnostics["keypoint_runtime"]["mode"], "reuse")
+        self.assertFalse(second_diagnostics["keypoint_runtime"]["scheduled"])
+        self.assertEqual(second["selected_anchor"]["left_px"], [680.0, 300.0])
+        self.assertEqual(second["selected_anchor"]["right_px"], [648.0, 300.0])
 
     def test_builds_message_from_keypoint_anchor_record(self):
         publisher = load_module(LIVE_PUBLISHER, "antman_vst_stereo_proxy_targets_live_publisher")
@@ -1457,6 +1621,10 @@ class AntmanVstStereoProxyTargetsLivePublisherTests(unittest.TestCase):
         self.assertIn("EnableKeypointAnchor", source)
         self.assertIn("--enable-keypoint-anchor", source)
         self.assertIn("--min-keypoint-score", source)
+        self.assertIn("KeypointMaxHz", source)
+        self.assertIn("--keypoint-max-hz", source)
+        self.assertIn("KeypointReuseMaxAgeMs", source)
+        self.assertIn("--keypoint-reuse-max-age-ms", source)
 
     def test_runner_declares_stereo_source_and_staged_probe(self):
         source = RUNNER.read_text(encoding="utf-8")
