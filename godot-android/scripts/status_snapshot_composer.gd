@@ -62,6 +62,7 @@ func build_proxy_targets_status_snapshot(values: Dictionary) -> Dictionary:
 		"card_resolved_position": values.get("card_resolved_position"),
 		"card_node_position": values.get("card_node_position"),
 		"card_apply_count": values.get("card_apply_count"),
+		"card_reacquire_state": values.get("card_reacquire_state"),
 		"packets": values.get("packets"),
 		"parsed": values.get("parsed"),
 		"live": values.get("live"),

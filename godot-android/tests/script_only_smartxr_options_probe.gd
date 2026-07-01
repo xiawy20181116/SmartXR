@@ -75,6 +75,14 @@ func _run_checks() -> String:
 		15.0,
 		0.0
 	)
+	_checks["default_card_reacquire_rule"] = _reacquire_rule_matches(
+		options.proxy_targets_card_reacquire_rule(_default_card_reacquire_rule()),
+		true,
+		"dynamic_held_to_dynamic",
+		250.0,
+		0.2,
+		0.03
+	)
 
 	# 2. Config file overrides the default. The probe writes the config to the
 	# same path SmartXROptions reads (CONFIG_RES unless overridden for tests).
@@ -92,6 +100,13 @@ func _run_checks() -> String:
 			"right_angle_deg": 12.5,
 			"right_width_fraction": -0.5,
 			"up_m": 0.1,
+		},
+		"proxy_targets_card_reacquire_rule": {
+			"enabled": false,
+			"trigger": "dynamic_held_to_dynamic",
+			"smoothing_ms": 400,
+			"max_step_m": 0.35,
+			"settle_epsilon_m": 0.05,
 		},
 	}
 	var file := FileAccess.open(_config_path, FileAccess.WRITE)
@@ -116,6 +131,14 @@ func _run_checks() -> String:
 		12.5,
 		0.1
 	)
+	_checks["config_card_reacquire_rule"] = _reacquire_rule_matches(
+		options.proxy_targets_card_reacquire_rule(_default_card_reacquire_rule()),
+		false,
+		"dynamic_held_to_dynamic",
+		400.0,
+		0.35,
+		0.05
+	)
 	OS.set_environment("SMARTXR_OPTIONS_PATH", _config_path)
 	options = options_script.load_options()
 	_checks["env_options_path"] = (
@@ -134,6 +157,10 @@ func _run_checks() -> String:
 	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_RIGHT_WIDTH_FRACTION", "0.25")
 	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_RIGHT_ANGLE_DEG", "20.0")
 	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_UP_M", "0.2")
+	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_REACQUIRE_ENABLED", "on")
+	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_REACQUIRE_SMOOTHING_MS", "125")
+	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_REACQUIRE_MAX_STEP_M", "0.12")
+	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_REACQUIRE_SETTLE_EPSILON_M", "0.015")
 	_checks["env_beats_config"] = (
 		options.control_ws_url("ws://default:1/control") == "ws://from-env:3/control"
 	)
@@ -152,6 +179,14 @@ func _run_checks() -> String:
 		0.25,
 		20.0,
 		0.2
+	)
+	_checks["env_card_reacquire_rule"] = _reacquire_rule_matches(
+		options.proxy_targets_card_reacquire_rule(_default_card_reacquire_rule()),
+		true,
+		"dynamic_held_to_dynamic",
+		125.0,
+		0.12,
+		0.015
 	)
 	OS.set_environment("SMARTXR_PROXY_TARGETS_WS_ENABLED", "definitely_not")
 	_checks["env_bool_other_is_false"] = options.proxy_targets_ws_enabled(true) == false
@@ -173,6 +208,16 @@ func _default_card_offset_rule() -> Dictionary:
 	}
 
 
+func _default_card_reacquire_rule() -> Dictionary:
+	return {
+		"enabled": true,
+		"trigger": "dynamic_held_to_dynamic",
+		"smoothing_ms": 250.0,
+		"max_step_m": 0.2,
+		"settle_epsilon_m": 0.03,
+	}
+
+
 func _offset_rule_matches(rule: Dictionary, expected_mode: String, depth_scale: float, depth_offset_m: float, right_width_fraction: float, right_angle_deg: float, up_m: float) -> bool:
 	return (
 		str(rule.get("mode", "")) == expected_mode
@@ -183,6 +228,16 @@ func _offset_rule_matches(rule: Dictionary, expected_mode: String, depth_scale: 
 		and is_equal_approx(float(rule.get("right_angle_deg", -99.0)), right_angle_deg)
 		and is_equal_approx(float(rule.get("up_m", -99.0)), up_m)
 		and str(rule.get("fallback", "")) == "hold_last_pose"
+	)
+
+
+func _reacquire_rule_matches(rule: Dictionary, enabled: bool, trigger: String, smoothing_ms: float, max_step_m: float, settle_epsilon_m: float) -> bool:
+	return (
+		bool(rule.get("enabled", false)) == enabled
+		and str(rule.get("trigger", "")) == trigger
+		and is_equal_approx(float(rule.get("smoothing_ms", -1.0)), smoothing_ms)
+		and is_equal_approx(float(rule.get("max_step_m", -1.0)), max_step_m)
+		and is_equal_approx(float(rule.get("settle_epsilon_m", -1.0)), settle_epsilon_m)
 	)
 
 
@@ -211,6 +266,10 @@ func _clear_probe_env() -> void:
 	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_RIGHT_ANGLE_DEG", "")
 	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_UP_M", "")
 	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_FALLBACK", "")
+	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_REACQUIRE_ENABLED", "")
+	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_REACQUIRE_SMOOTHING_MS", "")
+	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_REACQUIRE_MAX_STEP_M", "")
+	OS.set_environment("SMARTXR_PROXY_TARGETS_CARD_REACQUIRE_SETTLE_EPSILON_M", "")
 	OS.set_environment("SMARTXR_VST_HORIZONTAL_FOV_DEG", "")
 	OS.set_environment("SMARTXR_VST_VERTICAL_FOV_DEG", "")
 	OS.set_environment("SMARTXR_VST_PRINCIPAL_POINT_X", "")

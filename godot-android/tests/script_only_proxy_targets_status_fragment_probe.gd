@@ -141,6 +141,7 @@ func _run_checks() -> String:
 		"card_resolved_position": Vector3(10.0, 11.0, 12.0),
 		"card_node_position": Vector3(13.0, 14.0, 15.0),
 		"card_apply_count": 5,
+		"card_reacquire_state": "clamped",
 		"packets": 8,
 		"live": 13,
 		"packet_bytes": 21,
@@ -157,6 +158,7 @@ func _run_checks() -> String:
 		"card_resolved_position",
 		"card_node_position",
 		"card_apply_count",
+		"card_reacquire_state",
 		"packets",
 		"parsed",
 		"live",
@@ -176,6 +178,8 @@ func _run_checks() -> String:
 		"error",
 	] and bool(status.get("ws_connected")) and int(status.get("packets")) == 8 \
 		and int(status.get("parsed")) == 3 and int(status.get("live")) == 13
+	_checks["status_values_includes_card_reacquire_state"] = str(status.get("card_reacquire_state")) == "clamped" \
+		and str(fragment.status_values({}).get("card_reacquire_state")) == "idle"
 
 	return "-"
 

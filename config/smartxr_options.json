@@ -11,5 +11,12 @@
     "right_width_fraction": 1.5,
     "up_m": 0.0,
     "fallback": "hold_last_pose"
+  },
+  "proxy_targets_card_reacquire_rule": {
+    "enabled": true,
+    "trigger": "dynamic_held_to_dynamic",
+    "smoothing_ms": 250,
+    "max_step_m": 0.2,
+    "settle_epsilon_m": 0.03
   }
 }

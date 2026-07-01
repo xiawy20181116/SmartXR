@@ -29,11 +29,22 @@ class_name CardAttachment
 const TARGET_FALLBACK_HOLD_LAST_POSE := "hold_last_pose"
 const TARGET_FALLBACK_DETACH := "detach"
 const TARGET_FALLBACK_FADE_OUT := "fade_out"
+const REACQUIRE_STATE_IDLE := "idle"
+const REACQUIRE_STATE_SMOOTHING := "smoothing"
+const REACQUIRE_STATE_CLAMPED := "clamped"
+const REACQUIRE_STATE_SETTLED := "settled"
 const DEFAULT_OFFSET_RULE := {
 	"mode": "front",
 	"offset_space": "world",
 	"distance_m": 0.35,
 	"fallback": TARGET_FALLBACK_HOLD_LAST_POSE,
+}
+const DEFAULT_REACQUIRE_RULE := {
+	"enabled": false,
+	"trigger": "dynamic_held_to_dynamic",
+	"smoothing_ms": 250.0,
+	"max_step_m": 0.2,
+	"settle_epsilon_m": 0.03,
 }
 
 var _attachments := {}
@@ -41,6 +52,7 @@ var _resolver := Callable()
 var _reference_transform_provider := Callable()
 var _on_applied := Callable()
 var _on_detach_card := Callable()
+var _reacquire_rule := DEFAULT_REACQUIRE_RULE.duplicate(true)
 
 
 ## Target resolver into the card's registry: func(target_id: String) -> adapter
@@ -73,6 +85,13 @@ func set_on_detach_card(on_detach_card: Callable) -> void:
 	_on_detach_card = on_detach_card
 
 
+## Optional fresh re-acquire rule for dynamic mode. When a proxy target moves
+## from dynamic_held back to dynamic, the card can smooth/clamp from the held
+## world pose toward the new fresh target instead of teleporting on that frame.
+func set_reacquire_rule(reacquire_rule: Dictionary) -> void:
+	_reacquire_rule = normalize_reacquire_rule(reacquire_rule)
+
+
 ## Attaches card_id to target_id with the given offset rule (Dictionary,
 ## bare mode String, or omitted for DEFAULT_OFFSET_RULE). Returns false when
 ## the resolver does not know the target. Seeds last_transform from the
@@ -83,14 +102,31 @@ func attach(card_id: String, target_id: String, offset_rule = {}) -> bool:
 		return false
 	var normalized := normalize_offset_rule(offset_rule)
 	var next_transform := _offset_transform_for_adapter(adapter, normalized)
+	var current_latch_state := _card_latch_state(adapter)
+	var last_latch_state := current_latch_state
+	var reacquire_active := false
+	var reacquire_state := REACQUIRE_STATE_IDLE
 	var existing = _attachments.get(card_id)
-	if typeof(existing) == TYPE_DICTIONARY and str(existing.get("target_id", "")) == target_id and _should_hold_card_transform(adapter, existing):
-		next_transform = existing["last_transform"]
+	if typeof(existing) == TYPE_DICTIONARY and str(existing.get("target_id", "")) == target_id:
+		last_latch_state = str(existing.get("last_latch_state", current_latch_state))
+		reacquire_active = bool(existing.get("reacquire_active", false))
+		reacquire_state = str(existing.get("reacquire_state", REACQUIRE_STATE_IDLE))
+		var preserve_last_transform := _should_hold_card_transform(adapter, existing) \
+				or reacquire_active \
+				or _should_start_reacquire(current_latch_state, last_latch_state)
+		if preserve_last_transform:
+			next_transform = existing.get("last_transform", next_transform)
+		else:
+			reacquire_active = false
+			reacquire_state = REACQUIRE_STATE_IDLE
 	_attachments[card_id] = {
 		"target_id": target_id,
 		"offset_rule": normalized,
 		"fallback": str(normalized.get("fallback", TARGET_FALLBACK_HOLD_LAST_POSE)),
 		"last_transform": next_transform,
+		"last_latch_state": last_latch_state,
+		"reacquire_active": reacquire_active,
+		"reacquire_state": reacquire_state,
 	}
 	return true
 
@@ -105,7 +141,7 @@ func detach(card_id: String) -> void:
 ## fallback otherwise. Returns true when an attachment was processed (applied
 ## or fallback) so the card knows to re-orient; false when there was nothing
 ## to do.
-func update_attachments(card_anchor: Node3D, primary_card_id: String) -> bool:
+func update_attachments(card_anchor: Node3D, primary_card_id: String, delta_s := 0.0) -> bool:
 	if card_anchor == null:
 		return false
 	var attachment = _attachments.get(primary_card_id)
@@ -118,10 +154,16 @@ func update_attachments(card_anchor: Node3D, primary_card_id: String) -> bool:
 	var adapter = _resolve(target_id)
 	if adapter != null and adapter.is_available():
 		var next_transform := _offset_transform_for_adapter(adapter, offset_rule)
+		var current_latch_state := _card_latch_state(adapter)
 		if _should_hold_card_transform(adapter, attachment):
 			next_transform = attachment["last_transform"]
+			attachment["reacquire_active"] = false
+			attachment["reacquire_state"] = REACQUIRE_STATE_IDLE
+		else:
+			next_transform = _apply_reacquire_rule(attachment, next_transform, current_latch_state, float(delta_s))
 		card_anchor.global_transform = next_transform
 		attachment["last_transform"] = next_transform
+		attachment["last_latch_state"] = current_latch_state
 		card_anchor.visible = true
 		if _on_applied.is_valid():
 			_on_applied.call()
@@ -135,6 +177,8 @@ func update_attachments(card_anchor: Node3D, primary_card_id: String) -> bool:
 ## hold_last_pose (the default) restores the last applied transform. Also
 ## called directly by the card's VST lost-state path with a stored attachment.
 func apply_fallback(attachment: Dictionary, card_anchor: Node3D, primary_card_id: String) -> void:
+	attachment["reacquire_active"] = false
+	attachment["reacquire_state"] = REACQUIRE_STATE_IDLE
 	var fallback := str(attachment.get("fallback", TARGET_FALLBACK_HOLD_LAST_POSE))
 	match fallback:
 		TARGET_FALLBACK_DETACH:
@@ -193,6 +237,13 @@ func last_resolved_position(card_id: String):
 	return null
 
 
+func reacquire_state(card_id: String) -> String:
+	var attachment = get_attachment(card_id)
+	if attachment == null:
+		return REACQUIRE_STATE_IDLE
+	return str(attachment.get("reacquire_state", REACQUIRE_STATE_IDLE))
+
+
 static func normalize_offset_rule(offset_rule) -> Dictionary:
 	var normalized := DEFAULT_OFFSET_RULE.duplicate()
 	if typeof(offset_rule) == TYPE_DICTIONARY:
@@ -200,6 +251,19 @@ static func normalize_offset_rule(offset_rule) -> Dictionary:
 			normalized[key] = offset_rule[key]
 	elif typeof(offset_rule) == TYPE_STRING:
 		normalized["mode"] = str(offset_rule)
+	return normalized
+
+
+static func normalize_reacquire_rule(reacquire_rule) -> Dictionary:
+	var normalized := DEFAULT_REACQUIRE_RULE.duplicate(true)
+	if typeof(reacquire_rule) == TYPE_DICTIONARY:
+		for key in reacquire_rule.keys():
+			normalized[key] = reacquire_rule[key]
+	normalized["enabled"] = bool(normalized.get("enabled", false))
+	normalized["trigger"] = str(normalized.get("trigger", "dynamic_held_to_dynamic"))
+	normalized["smoothing_ms"] = maxf(float(normalized.get("smoothing_ms", 250.0)), 0.0)
+	normalized["max_step_m"] = maxf(float(normalized.get("max_step_m", 0.2)), 0.0)
+	normalized["settle_epsilon_m"] = maxf(float(normalized.get("settle_epsilon_m", 0.03)), 0.0)
 	return normalized
 
 
@@ -373,6 +437,65 @@ func _should_hold_card_transform(adapter, attachment: Dictionary) -> bool:
 	if str(adapter.get_meta_value("proxy_world_latch_state", "")).strip_edges().to_lower() != "dynamic_held":
 		return false
 	return attachment.get("last_transform", null) is Transform3D
+
+
+func _apply_reacquire_rule(attachment: Dictionary, candidate_transform: Transform3D, current_latch_state: String, delta_s: float) -> Transform3D:
+	var previous_transform = attachment.get("last_transform", null)
+	var previous_latch_state := str(attachment.get("last_latch_state", ""))
+	var active := bool(attachment.get("reacquire_active", false))
+	if not active and _should_start_reacquire(current_latch_state, previous_latch_state):
+		active = true
+	if not active or not (previous_transform is Transform3D):
+		attachment["reacquire_active"] = false
+		attachment["reacquire_state"] = REACQUIRE_STATE_IDLE
+		return candidate_transform
+
+	var previous_origin: Vector3 = previous_transform.origin
+	var target_origin := candidate_transform.origin
+	var settle_epsilon_m := float(_reacquire_rule.get("settle_epsilon_m", 0.03))
+	if previous_origin.distance_to(target_origin) <= settle_epsilon_m:
+		attachment["reacquire_active"] = false
+		attachment["reacquire_state"] = REACQUIRE_STATE_SETTLED
+		return candidate_transform
+
+	var smoothing_s := float(_reacquire_rule.get("smoothing_ms", 250.0)) / 1000.0
+	var alpha := 1.0
+	if smoothing_s > 0.0:
+		alpha = clampf(delta_s / smoothing_s, 0.0, 1.0)
+	var next_origin := previous_origin.lerp(target_origin, alpha)
+	var next_transform := candidate_transform
+	next_transform.origin = next_origin
+	var next_state := REACQUIRE_STATE_SMOOTHING
+
+	var max_step_m := float(_reacquire_rule.get("max_step_m", 0.2))
+	var step := next_origin - previous_origin
+	if max_step_m > 0.0 and step.length() > max_step_m:
+		next_transform.origin = previous_origin + step.normalized() * max_step_m
+		attachment["reacquire_state"] = REACQUIRE_STATE_CLAMPED
+		next_state = REACQUIRE_STATE_CLAMPED
+
+	if next_transform.origin.distance_to(target_origin) <= settle_epsilon_m:
+		next_transform.origin = target_origin
+		attachment["reacquire_active"] = false
+		attachment["reacquire_state"] = REACQUIRE_STATE_SETTLED
+	else:
+		attachment["reacquire_active"] = true
+		attachment["reacquire_state"] = next_state
+	return next_transform
+
+
+func _should_start_reacquire(current_latch_state: String, previous_latch_state: String) -> bool:
+	if not bool(_reacquire_rule.get("enabled", false)):
+		return false
+	if str(_reacquire_rule.get("trigger", "dynamic_held_to_dynamic")) != "dynamic_held_to_dynamic":
+		return false
+	return previous_latch_state == "dynamic_held" and current_latch_state == "dynamic"
+
+
+func _card_latch_state(adapter) -> String:
+	if adapter == null or not adapter.has_method("get_meta_value"):
+		return ""
+	return str(adapter.get_meta_value("proxy_world_latch_state", "")).strip_edges().to_lower()
 
 
 func _reference_transform() -> Transform3D:

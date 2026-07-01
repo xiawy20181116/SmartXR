@@ -90,6 +90,7 @@ func _anchor_state(snapshot: Dictionary, proxy: Dictionary) -> Dictionary:
 		"proxy_anchor_mode": str(proxy.get("anchor_mode", "dynamic")),
 		"world_latched": bool(proxy.get("world_latched", false)),
 		"world_latch_state": str(proxy.get("world_latch_state", "-")),
+		"card_reacquire_state": str(proxy.get("card_reacquire_state", "idle")),
 		"head_z_mode": str(proxy.get("head_z_mode", "negative_z_forward")),
 		"card_attachment_count": int(proxy.get("attachments", 0)),
 		"last_command": str(snapshot.get("last_command", "")),
