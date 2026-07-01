@@ -34,6 +34,8 @@ param(
     [int]$PoseImgsz = 640,
     [double]$PoseConf = 0.25,
     [double]$MinKeypointScore = 0.5,
+    [double]$KeypointMaxHz = 12.0,
+    [double]$KeypointReuseMaxAgeMs = 150.0,
     [string]$PoseDevice = "",
     [string]$PythonExe = ""
 )
@@ -220,6 +222,7 @@ Write-Host "[sender] Position filter: min_cutoff=$PositionFilterMinCutoff beta=$
 Write-Host "[sender] SmartXR options: $ResolvedSmartXROptionsPath"
 Write-Host "[sender] Depth trace: $DepthTraceFile"
 Write-Host "[sender] Depth override: mode=$DepthOverrideMode fixed_m=$DepthOverrideFixedM scale=$DepthOverrideScale offset_m=$DepthOverrideOffsetM noise_std_m=$DepthOverrideNoiseStdM seed=$DepthOverrideSeed"
+Write-Host "[sender] Keypoint runtime: keypoint_max_hz=$KeypointMaxHz reuse_max_age_ms=$KeypointReuseMaxAgeMs"
 Write-Host "[sender] VST AI SHM root: $VstAiShmRoot"
 Write-Host "[sender] A later healthy run should print sent stereo seq=..."
 `$PublisherArgs = @(
@@ -251,7 +254,9 @@ if ($EnableKeypointAnchorLiteral) {
     "--pose-model", $PoseModelLiteral,
     "--pose-imgsz", "$PoseImgsz",
     "--pose-conf", "$PoseConf",
-    "--min-keypoint-score", "$MinKeypointScore"
+    "--min-keypoint-score", "$MinKeypointScore",
+    "--keypoint-max-hz", "$KeypointMaxHz",
+    "--keypoint-reuse-max-age-ms", "$KeypointReuseMaxAgeMs"
   )
   if ($PoseDeviceLiteral -ne '') {
     `$PublisherArgs += @("--pose-device", $PoseDeviceLiteral)

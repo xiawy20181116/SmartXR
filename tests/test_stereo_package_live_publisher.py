@@ -298,6 +298,24 @@ class StereoPackageLivePublisherTests(unittest.TestCase):
         self.assertEqual(args.depth_override_noise_std_m, 0.04)
         self.assertEqual(args.depth_override_seed, 9)
 
+    def test_package_replay_parse_args_exposes_keypoint_async_cache_controls(self):
+        publisher = load_module(PACKAGE_PUBLISHER, "antman_vst_stereo_package_proxy_targets_live_publisher")
+
+        args = publisher.parse_args(
+            [
+                "--package-dir",
+                ".tmp/stereo_package",
+                "--enable-keypoint-anchor",
+                "--keypoint-max-hz",
+                "10",
+                "--keypoint-reuse-max-age-ms",
+                "120",
+            ]
+        )
+
+        self.assertEqual(args.keypoint_max_hz, 10.0)
+        self.assertEqual(args.keypoint_reuse_max_age_ms, 120.0)
+
 
 if __name__ == "__main__":
     unittest.main()
