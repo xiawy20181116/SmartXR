@@ -12,6 +12,8 @@ param(
     [string]$ProxyTargetsPoseTracePath = "",
     [string]$SmartXROptionsPath = "",
     [double]$ProxyTargetsTimeoutSeconds = 15.0,
+    [double]$RunForSeconds = 0.0,
+    [string]$StopWhenFileExists = "",
     [string]$GodotExe = "E:\xia\Godot_v4.6.2-stable_win64.exe\Godot_v4.6.2-stable_win64.exe"
 )
 
@@ -109,6 +111,7 @@ $OldProxyTargetsPoseTracePath = $env:SMARTXR_PROXY_TARGETS_POSE_TRACE_PATH
 $OldPassthroughOverlay = $env:SMARTXR_USE_PASSTHROUGH_OVERLAY
 $OldStatusHudVisible = $env:SMARTXR_STATUS_HUD_VISIBLE
 $GodotProcess = $null
+$TimedRun = $RunForSeconds -gt 0.0
 
 try {
     $env:PROXY_TARGETS_WS_URL = $ProxyTargetsWsUrl
@@ -167,6 +170,36 @@ try {
         $ExitCode = $LASTEXITCODE
         if (Test-Path -LiteralPath $StatusFile) {
             Copy-Item -LiteralPath $StatusFile -Destination $WorkDirStatusFile -Force
+        }
+    } elseif ($TimedRun -or -not [string]::IsNullOrWhiteSpace($StopWhenFileExists)) {
+        New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+        Remove-Item -LiteralPath $GodotLog, $GodotErr -Force -ErrorAction SilentlyContinue
+
+        $GodotProcess = Start-Process `
+            -FilePath $GodotExe `
+            -ArgumentList @("--path", $ProjectDir) `
+            -WorkingDirectory $RepoRoot `
+            -RedirectStandardOutput $GodotLog `
+            -RedirectStandardError $GodotErr `
+            -PassThru
+
+        $StopAt = $null
+        if ($TimedRun) {
+            $StopAt = [DateTime]::UtcNow.AddSeconds($RunForSeconds)
+        }
+
+        while (-not $GodotProcess.HasExited) {
+            if (-not [string]::IsNullOrWhiteSpace($StopWhenFileExists) -and (Test-Path -LiteralPath $StopWhenFileExists)) {
+                break
+            }
+            if ($null -ne $StopAt -and [DateTime]::UtcNow -ge $StopAt) {
+                break
+            }
+            Start-Sleep -Milliseconds 100
+        }
+
+        if ($GodotProcess.HasExited) {
+            $ExitCode = $GodotProcess.ExitCode
         }
     } else {
         & $GodotExe --path $ProjectDir

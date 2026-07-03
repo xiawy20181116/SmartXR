@@ -11,15 +11,16 @@ from __future__ import annotations
 import json
 import importlib.util
 import shutil
-import tempfile
 import unittest
 from pathlib import Path, PureWindowsPath
+from unittest.mock import patch
 
 from smartxr.live_stereo_recorder import (
     CapturedNv12Frame,
     LiveStereoRecorderError,
     coerce_captured_nv12_frame,
     record_live_stereo_package,
+    write_mono_nv12_session,
 )
 from smartxr.nv12_reader import iter_session, nv12_payload_size
 from smartxr.stereo_depth import SCENE_STEREO_28
@@ -33,6 +34,8 @@ from smartxr.stereo_package import (
 ROOT = Path(__file__).resolve().parents[1]
 ANTMAN_TOOL = ROOT / "tools" / "record_antman_vst_stereo_package.py"
 ANTMAN_RUNNER = ROOT / "tools" / "run_antman_vst_stereo_package_recorder.ps1"
+ANTMAN_POSE_RUNNER = ROOT / "tools" / "run_antman_vst_stereo_package_recorder_with_pose.ps1"
+WINDOWS_PCMR_RUNNER = ROOT / "tools" / "run_windows_pcmr.ps1"
 
 
 def load_module(path: Path, name: str):
@@ -110,9 +113,14 @@ class FakeNv12Array:
 
 
 class LiveStereoRecorderTests(unittest.TestCase):
+    def _out_dir(self, name: str) -> Path:
+        out_dir = ROOT / ".tmp" / "test_live_stereo_recorder" / name
+        shutil.rmtree(out_dir, ignore_errors=True)
+        return out_dir
+
     def test_records_dual_eye_readers_into_valid_stereo_package(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            out_dir = Path(tmp)
+        out_dir = self._out_dir("records_dual_eye_readers")
+        try:
             left = FakeReader(
                 [
                     make_frame(100, timestamp_us=100_000, fill=0x11),
@@ -128,15 +136,26 @@ class LiveStereoRecorderTests(unittest.TestCase):
                 ]
             )
 
-            status = record_live_stereo_package(
-                left_reader=left,
-                right_reader=right,
-                out_dir=out_dir,
-                calibration=SCENE_STEREO_28.scaled_to(1164, 872),
-                max_read_attempts=3,
-                max_skew_frames=1,
-                sleep_seconds=0.0,
-            )
+            with patch(
+                "smartxr.live_stereo_recorder.time.time_ns",
+                side_effect=[
+                    1_000_000_001_000,
+                    1_000_000_002_000,
+                    1_000_000_003_000,
+                    1_000_000_004_000,
+                    1_000_000_005_000,
+                    1_000_000_006_000,
+                ],
+            ):
+                status = record_live_stereo_package(
+                    left_reader=left,
+                    right_reader=right,
+                    out_dir=out_dir,
+                    calibration=SCENE_STEREO_28.scaled_to(1164, 872),
+                    max_read_attempts=3,
+                    max_skew_frames=1,
+                    sleep_seconds=0.0,
+                )
 
             self.assertTrue(left.released)
             self.assertTrue(right.released)
@@ -160,10 +179,20 @@ class LiveStereoRecorderTests(unittest.TestCase):
             self.assertEqual(metadata["pairing"]["stats"]["pair_count"], 2)
             self.assertEqual(metadata["pairing"]["stats"]["dropped_unpaired_left"], 1)
             self.assertEqual(metadata["pairing"]["stats"]["dropped_unpaired_right"], 1)
+            left_metadata = json.loads((out_dir / LEFT_EYE_DIR / "metadata.json").read_text(encoding="utf-8"))
+            right_metadata = json.loads((out_dir / RIGHT_EYE_DIR / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(left_metadata["read_system_unix_time_us"], [1_000_000_001, 1_000_000_003, 1_000_000_005])
+            self.assertEqual(right_metadata["read_system_unix_time_us"], [1_000_000_002, 1_000_000_004, 1_000_000_006])
+            self.assertEqual(len(left_metadata["read_system_unix_time_us"]), len(left_metadata["frame_ids"]))
+            self.assertEqual(len(left_metadata["read_system_unix_time_us"]), len(left_metadata["timestamps_us"]))
+            self.assertEqual(len(right_metadata["read_system_unix_time_us"]), len(right_metadata["frame_ids"]))
+            self.assertEqual(len(right_metadata["read_system_unix_time_us"]), len(right_metadata["timestamps_us"]))
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
 
     def test_record_stops_after_duration_without_estimating_attempts(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            out_dir = Path(tmp)
+        out_dir = self._out_dir("record_stops_after_duration")
+        try:
             left = InfiniteReader(start_frame_id=1)
             right = InfiniteReader(start_frame_id=1)
 
@@ -185,9 +214,12 @@ class LiveStereoRecorderTests(unittest.TestCase):
             self.assertGreaterEqual(status["elapsed_seconds"], 0.0)
             self.assertTrue(left.released)
             self.assertTrue(right.released)
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
 
     def test_record_reports_progress_every_n_stereo_frames(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        out_dir = self._out_dir("record_reports_progress")
+        try:
             progress: list[dict] = []
             left = FakeReader([make_frame(i) for i in range(1, 6)])
             right = FakeReader([make_frame(i) for i in range(1, 6)])
@@ -195,7 +227,7 @@ class LiveStereoRecorderTests(unittest.TestCase):
             status = record_live_stereo_package(
                 left_reader=left,
                 right_reader=right,
-                out_dir=Path(tmp),
+                out_dir=out_dir,
                 calibration=SCENE_STEREO_28.scaled_to(1164, 872),
                 max_read_attempts=5,
                 max_skew_frames=0,
@@ -209,6 +241,27 @@ class LiveStereoRecorderTests(unittest.TestCase):
             self.assertEqual([event["stereo_frames"] for event in progress], [2, 4])
             self.assertEqual(progress[0]["frames_seen_left"], 2)
             self.assertEqual(progress[0]["frames_seen_right"], 2)
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
+
+    def test_write_mono_session_omits_read_system_time_when_frames_lack_it(self):
+        out_dir = self._out_dir("write_mono_omits_missing_read_system_time")
+        try:
+            write_mono_nv12_session(
+                out_dir,
+                [
+                    make_frame(1, timestamp_us=111_000),
+                    make_frame(2, timestamp_us=222_000),
+                ],
+            )
+
+            metadata = json.loads((out_dir / "metadata.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(metadata["frame_ids"], [1, 2])
+            self.assertEqual(metadata["timestamps_us"], [111_000, 222_000])
+            self.assertNotIn("read_system_unix_time_us", metadata)
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
 
     def test_coerce_mapping_frame_rejects_bad_payload_size(self):
         with self.assertRaises(LiveStereoRecorderError):
@@ -245,17 +298,20 @@ class LiveStereoRecorderTests(unittest.TestCase):
             def release(self):
                 pass
 
-        with tempfile.TemporaryDirectory() as tmp:
+        out_dir = self._out_dir("record_rejects_non_integer_reader_frame_id")
+        try:
             with self.assertRaises(LiveStereoRecorderError):
                 record_live_stereo_package(
                     left_reader=BadFrameIdReader(),
                     right_reader=FakeReader([]),
-                    out_dir=Path(tmp),
+                    out_dir=out_dir,
                     calibration=SCENE_STEREO_28.scaled_to(1164, 872),
                     max_read_attempts=1,
                     max_skew_frames=0,
                     sleep_seconds=0.0,
                 )
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
 
     def test_antman_tool_wires_left_right_shm_names_to_recorder_core(self):
         tool = load_module(ANTMAN_TOOL, "record_antman_vst_stereo_package")
@@ -276,6 +332,86 @@ class LiveStereoRecorderTests(unittest.TestCase):
         self.assertIn("--progress-every-frames", tool_source)
         self.assertIn("[double]$DurationSeconds", runner_source)
         self.assertIn("[int]$ProgressEveryFrames", runner_source)
+
+    def test_antman_pose_runner_wires_pcmr_pose_logger_recorder_and_merge(self):
+        self.assertTrue(ANTMAN_POSE_RUNNER.exists())
+
+        runner_source = ANTMAN_POSE_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("[string]$OutDir", runner_source)
+        self.assertIn("[double]$DurationSeconds", runner_source)
+        self.assertIn("[string]$SmartXROptionsPath", runner_source)
+        self.assertIn("SMARTXR_XR_POSE_TRACE_PATH", runner_source)
+        self.assertIn("$ResolvedOutDir", runner_source)
+        self.assertIn('Join-Path -Path $ResolvedOutDir -ChildPath "xr_pose_trace.jsonl"', runner_source)
+        self.assertIn('Join-Path -Path $ResolvedOutDir -ChildPath "frame_pose_assoc.jsonl"', runner_source)
+        self.assertIn('$env:SMARTXR_XR_POSE_TRACE_PATH = $PoseTracePath', runner_source)
+        self.assertIn("$OldSmartXrPoseTracePath", runner_source)
+        self.assertIn("finally", runner_source)
+        self.assertIn("Restore-EnvVar -Name \"SMARTXR_XR_POSE_TRACE_PATH\"", runner_source)
+        self.assertIn("run_windows_pcmr.ps1", runner_source)
+        self.assertIn("Start-Process", runner_source)
+        self.assertIn("record_antman_vst_stereo_package.py", runner_source)
+        self.assertIn("merge_stereo_pose_trace.py", runner_source)
+        self.assertIn("frame_pose_assoc.jsonl", runner_source)
+        self.assertIn("--pose-trace", runner_source)
+        self.assertIn("--output", runner_source)
+        self.assertNotIn("OpenXR", runner_source)
+
+    def test_antman_pose_runner_resolves_paths_and_quotes_pcmr_child_args(self):
+        runner_source = ANTMAN_POSE_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("function Resolve-RunnerPath", runner_source)
+        self.assertIn("[System.IO.Path]::IsPathRooted($Path)", runner_source)
+        self.assertIn("[System.IO.Path]::GetFullPath((Join-Path -Path $RepoRoot -ChildPath $Path))", runner_source)
+        self.assertIn('$ResolvedOutDir = Resolve-RunnerPath -Path $OutDir', runner_source)
+        self.assertIn('$ResolvedSmartXROptionsPath = ""', runner_source)
+        self.assertIn(
+            '$ResolvedSmartXROptionsPath = Resolve-RunnerPath -Path $SmartXROptionsPath',
+            runner_source,
+        )
+        self.assertIn(' -SmartXROptionsPath ', runner_source)
+        self.assertIn("$ResolvedSmartXROptionsPath", runner_source)
+        self.assertIn("--out-dir $ResolvedOutDir", runner_source)
+        self.assertIn("--package-dir $ResolvedOutDir", runner_source)
+        self.assertIn("function ConvertTo-PowerShellLiteral", runner_source)
+        self.assertIn('$PcmrCommand = "& " + (ConvertTo-PowerShellLiteral $PcmrRunner)', runner_source)
+        self.assertIn(
+            '$PcmrCommand += " -SmartXROptionsPath " + '
+            "(ConvertTo-PowerShellLiteral $ResolvedSmartXROptionsPath)",
+            runner_source,
+        )
+        self.assertIn("[System.Text.Encoding]::Unicode.GetBytes($PcmrCommand)", runner_source)
+        self.assertIn("[Convert]::ToBase64String", runner_source)
+        self.assertIn("$EncodedPcmrCommand", runner_source)
+        self.assertIn('"-EncodedCommand"', runner_source)
+        self.assertIn("$EncodedPcmrCommand", runner_source)
+        self.assertIn("-ArgumentList $PcmrNativeArgs", runner_source)
+        self.assertNotIn("$PcmrCommandLine", runner_source)
+        self.assertNotIn("-ArgumentList $PcmrCommandLine", runner_source)
+        self.assertNotIn("-ArgumentList $PcmrArgs", runner_source)
+        self.assertNotIn("ConvertTo-PowerShellLiteral $_", runner_source)
+
+    def test_antman_pose_runner_lets_pcmr_own_godot_lifecycle(self):
+        pose_runner_source = ANTMAN_POSE_RUNNER.read_text(encoding="utf-8")
+        pcmr_runner_source = WINDOWS_PCMR_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("[double]$RunForSeconds = 0.0", pcmr_runner_source)
+        self.assertIn("[string]$StopWhenFileExists = \"\"", pcmr_runner_source)
+        self.assertIn("$TimedRun = $RunForSeconds -gt 0.0", pcmr_runner_source)
+        self.assertIn("$GodotProcess = Start-Process", pcmr_runner_source)
+        self.assertIn("while (-not $GodotProcess.HasExited)", pcmr_runner_source)
+        self.assertIn("Test-Path -LiteralPath $StopWhenFileExists", pcmr_runner_source)
+        self.assertIn("Stop-ChildProcess -Process $GodotProcess", pcmr_runner_source)
+
+        self.assertIn("$PcmrStopFile", pose_runner_source)
+        self.assertIn("Remove-Item -LiteralPath $PoseTracePath, $FramePoseAssocPath, $PcmrStopFile", pose_runner_source)
+        self.assertIn(' -RunForSeconds " + $PcmrRunSeconds', pose_runner_source)
+        self.assertIn(' -StopWhenFileExists " + (ConvertTo-PowerShellLiteral $PcmrStopFile)', pose_runner_source)
+        self.assertIn("Request-PcmrStop -Process $PcmrProcess -StopFile $PcmrStopFile", pose_runner_source)
+        self.assertIn("$PcmrExitCode = $PcmrProcess.ExitCode", pose_runner_source)
+        self.assertIn("if ($PcmrExitCode -ne 0)", pose_runner_source)
+        self.assertIn("exit $PcmrExitCode", pose_runner_source)
 
     def test_antman_tool_defaults_to_vst_ai_shm_consumer_module(self):
         tool = load_module(ANTMAN_TOOL, "record_antman_vst_stereo_package")

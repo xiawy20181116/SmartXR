@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -46,6 +46,7 @@ class CapturedNv12Frame:
     stride: int
     timestamp_us: int
     payload: bytes
+    read_system_unix_time_us: int | None = None
 
     def __post_init__(self) -> None:
         if self.frame_id < 0:
@@ -62,6 +63,11 @@ class CapturedNv12Frame:
             raise LiveStereoRecorderError(
                 f"timestamp_us must be non-negative, got {self.timestamp_us}"
             )
+        if self.read_system_unix_time_us is not None:
+            _coerce_non_negative_int(
+                self.read_system_unix_time_us,
+                "read_system_unix_time_us",
+            )
         expected = nv12_payload_size(self.height, self.stride)
         if len(self.payload) != expected:
             raise LiveStereoRecorderError(
@@ -74,14 +80,22 @@ def coerce_captured_nv12_frame(
     *,
     frame_id: int,
     fallback_timestamp_us: int | None = None,
+    read_system_unix_time_us: int | None = None,
 ) -> CapturedNv12Frame:
     """Convert a reader-returned frame object into :class:`CapturedNv12Frame`."""
     frame_id = _coerce_non_negative_int(frame_id, "frame_id")
+    if read_system_unix_time_us is not None:
+        read_system_unix_time_us = _coerce_non_negative_int(
+            read_system_unix_time_us,
+            "read_system_unix_time_us",
+        )
     if isinstance(frame, CapturedNv12Frame):
         if frame.frame_id != frame_id:
             raise LiveStereoRecorderError(
                 f"reader frame_id {frame_id} != frame.frame_id {frame.frame_id}"
             )
+        if read_system_unix_time_us is not None:
+            return replace(frame, read_system_unix_time_us=read_system_unix_time_us)
         return frame
     if isinstance(frame, Mapping):
         timestamp_us = frame.get("timestamp_us", fallback_timestamp_us)
@@ -101,11 +115,13 @@ def coerce_captured_nv12_frame(
             stride=_coerce_positive_int(frame.get("stride"), "stride"),
             timestamp_us=_coerce_non_negative_int(timestamp_us, "timestamp_us"),
             payload=payload,
+            read_system_unix_time_us=read_system_unix_time_us,
         )
     array_frame = _coerce_nv12_like_array_frame(
         frame,
         frame_id=frame_id,
         fallback_timestamp_us=fallback_timestamp_us,
+        read_system_unix_time_us=read_system_unix_time_us,
     )
     if array_frame is not None:
         return array_frame
@@ -124,6 +140,7 @@ def write_mono_nv12_session(session_dir: Path, frames: list[CapturedNv12Frame]) 
     files: list[str] = []
     frame_ids: list[int] = []
     timestamps_us: list[int] = []
+    read_system_unix_time_us: list[int] | None = []
     for position, frame in enumerate(frames, start=1):
         name = f"packet_{position:06d}.bin"
         path = packets_dir / name
@@ -140,12 +157,18 @@ def write_mono_nv12_session(session_dir: Path, frames: list[CapturedNv12Frame]) 
         files.append(f"{PACKETS_DIR}/{name}")
         frame_ids.append(frame.frame_id)
         timestamps_us.append(frame.timestamp_us)
+        if frame.read_system_unix_time_us is None:
+            read_system_unix_time_us = None
+        elif read_system_unix_time_us is not None:
+            read_system_unix_time_us.append(frame.read_system_unix_time_us)
 
     metadata: dict[str, Any] = {
         "files": files,
         "frame_ids": frame_ids,
         "timestamps_us": timestamps_us,
     }
+    if read_system_unix_time_us is not None:
+        metadata["read_system_unix_time_us"] = read_system_unix_time_us
     if frames:
         first = frames[0]
         metadata.update(
@@ -302,11 +325,13 @@ def _read_one_eye(
     frame_id = _coerce_non_negative_int(frame_id, "reader frame_id")
     if frame_id in seen_frame_ids:
         return 0
+    read_system_unix_time_us = time.time_ns() // 1000
     frames.append(
         coerce_captured_nv12_frame(
             frame,
             frame_id=frame_id,
             fallback_timestamp_us=int(time.time() * 1_000_000),
+            read_system_unix_time_us=read_system_unix_time_us,
         )
     )
     seen_frame_ids.add(frame_id)
@@ -318,6 +343,7 @@ def _coerce_nv12_like_array_frame(
     *,
     frame_id: int,
     fallback_timestamp_us: int | None,
+    read_system_unix_time_us: int | None,
 ) -> CapturedNv12Frame | None:
     shape = getattr(frame, "shape", None)
     if not (isinstance(shape, tuple) and len(shape) == 2 and hasattr(frame, "tobytes")):
@@ -345,6 +371,7 @@ def _coerce_nv12_like_array_frame(
         stride=stride,
         timestamp_us=_coerce_non_negative_int(timestamp_us, "timestamp_us"),
         payload=payload,
+        read_system_unix_time_us=read_system_unix_time_us,
     )
 
 

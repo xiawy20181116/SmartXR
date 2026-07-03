@@ -7,6 +7,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "godot-android" / "scripts" / "AndroidMovingCard.gd"
 POSE_TRACE_WRITER = ROOT / "godot-android" / "scripts" / "pose_trace_writer.gd"
+XR_POSE_RECORDER = ROOT / "godot-android" / "scripts" / "xr_pose_recorder.gd"
 # Status label rendering and the user:// status-file writers moved to the
 # StatusHud subsystem in M3 step 1 (YAN-74); display/format assertions are
 # pinned there, snapshot-assembly assertions stay on the card script.
@@ -745,6 +746,127 @@ class GodotAndroidMeshCardTests(unittest.TestCase):
         self.assertIn("FileAccess.READ_WRITE", writer)
         self.assertIn("file.seek_end()", writer)
         self.assertIn("file.store_line(JSON.stringify(event))", writer)
+
+    def test_xr_pose_recorder_buffers_samples_before_flushing_jsonl(self):
+        self.assertTrue(XR_POSE_RECORDER.exists())
+        recorder = XR_POSE_RECORDER.read_text(encoding="utf-8")
+
+        self.assertIn("extends RefCounted", recorder)
+        self.assertIn("var _buffer: Array = []", recorder)
+        self.assertIn("var _flush_every_samples := 30", recorder)
+        self.assertIn("var _flush_drops := 0", recorder)
+        self.assertIn('var _status_path := ""', recorder)
+        self.assertIn("func setup(path: String, flush_every_samples := 30) -> void:", recorder)
+        self.assertIn("func sample(camera: Camera3D, xr_active: bool) -> void:", recorder)
+        self.assertIn("func flush() -> void:", recorder)
+        self.assertIn("func status() -> Dictionary:", recorder)
+        self.assertIn("_buffer.append(row)", recorder)
+        self.assertIn("if _buffer.size() >= _flush_every_samples:", recorder)
+        self.assertIn("flush()", recorder)
+        self.assertIn("FileAccess.open(_path, FileAccess.READ_WRITE)", recorder)
+        self.assertIn("file.seek_end()", recorder)
+        self.assertIn("for row in _buffer:\n\t\tfile.store_line(JSON.stringify(row))", recorder)
+        self.assertIn("file.store_line(JSON.stringify(row))", recorder)
+        self.assertIn("_buffer.clear()", recorder)
+        self.assertIn('"flush_drops": _flush_drops', recorder)
+        self.assertIn('"status_path": _status_path', recorder)
+        self.assertIn("func _write_status_file() -> void:", recorder)
+        self.assertIn("FileAccess.open(_status_path, FileAccess.WRITE)", recorder)
+        self.assertIn("file.store_string(JSON.stringify(status()))", recorder)
+
+        flush_body = re.search(
+            r"func flush\(\) -> void:(?P<body>.*?)(?=\n\nfunc |\Z)",
+            recorder,
+            re.S,
+        )
+        self.assertIsNotNone(flush_body)
+        append_failure_branch = re.search(
+            r"if file == null:\n(?P<body>.*?)(?=\n\tfile\.seek_end\(\))",
+            flush_body.group("body"),
+            re.S,
+        )
+        self.assertIsNotNone(append_failure_branch)
+        self.assertIn("_failed = true", append_failure_branch.group("body"))
+        self.assertIn("_flush_drops += _buffer.size()", append_failure_branch.group("body"))
+        self.assertIn("_buffer.clear()", append_failure_branch.group("body"))
+        self.assertIn("_write_status_file()", append_failure_branch.group("body"))
+        self.assertIn("return", append_failure_branch.group("body"))
+
+        sample_body = re.search(
+            r"func sample\(camera: Camera3D, xr_active: bool\) -> void:(?P<body>.*?)(?=\n\nfunc |\Z)",
+            recorder,
+            re.S,
+        )
+        self.assertIsNotNone(sample_body)
+        sample_source = sample_body.group("body")
+        disabled_guard = re.search(
+            r"\A\s*if _path\.is_empty\(\) or _failed:\s*\n\s*return",
+            sample_source,
+        )
+        self.assertIsNotNone(disabled_guard)
+        self.assertLess(disabled_guard.start(), sample_source.index("Time.get_ticks_usec()"))
+        self.assertLess(disabled_guard.start(), sample_source.index("var row := {"))
+        self.assertNotIn("FileAccess.open", sample_source)
+        self.assertIn('"buffered_samples": _buffer.size()', recorder)
+        self.assertIn('"flush_drops": _flush_drops', recorder)
+
+    def test_xr_pose_recorder_rows_include_timestamp_schema_and_head_pose(self):
+        self.assertTrue(XR_POSE_RECORDER.exists())
+        recorder = XR_POSE_RECORDER.read_text(encoding="utf-8")
+
+        self.assertIn("Time.get_ticks_usec()", recorder)
+        self.assertIn("Time.get_unix_time_from_system()", recorder)
+        self.assertIn('"schema_version": SCHEMA_VERSION', recorder)
+        self.assertIn('"timestamp_kind": "godot_sample_time"', recorder)
+        self.assertIn('"pose_time_clock": "system_unix_time_usec"', recorder)
+        self.assertIn('"pose_time_us": system_unix_time_usec', recorder)
+        self.assertIn('"godot_ticks_usec": godot_ticks_usec', recorder)
+        self.assertIn('"system_unix_time_usec": system_unix_time_usec', recorder)
+        self.assertIn('"sample_index": _sample_index', recorder)
+        self.assertIn('"xr_active": xr_active', recorder)
+        self.assertIn('"reference_space": "world"', recorder)
+        self.assertIn('"camera_node": str(camera.get_path()) if camera != null else ""', recorder)
+        self.assertIn('"world_from_head": _transform_to_matrix4(world_from_head)', recorder)
+        self.assertIn('"head_position_m": _vec3_to_array(world_from_head.origin)', recorder)
+        self.assertIn('"head_basis_rows": _basis_to_rows(world_from_head.basis)', recorder)
+        self.assertIn('"tracking_valid": camera != null and xr_active', recorder)
+        self.assertIn("func _transform_to_matrix4(transform: Transform3D) -> Array:", recorder)
+        self.assertIn("func _basis_to_rows(basis: Basis) -> Array:", recorder)
+        self.assertIn("func _vec3_to_array(value: Vector3) -> Array:", recorder)
+
+    def test_moving_card_wires_xr_pose_recorder_runtime_trace(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('const XR_POSE_TRACE_PATH := ""', source)
+        self.assertIn('const XRPoseRecorderScript := preload("res://scripts/xr_pose_recorder.gd")', source)
+        self.assertIn("var _xr_pose_recorder = XRPoseRecorderScript.new()", source)
+        self.assertIn("_xr_pose_recorder.setup(_options.xr_pose_trace_path(XR_POSE_TRACE_PATH))", source)
+        self.assertIn("_xr_pose_recorder.sample(_camera, _xr_active)", source)
+        self.assertIn("_xr_pose_recorder.flush()", source)
+
+        ready_body = re.search(
+            r"func _ready\(\) -> void:(?P<body>.*?)(?=\n\n## |\n\nfunc |\Z)",
+            source,
+            re.S,
+        )
+        self.assertIsNotNone(ready_body)
+        self.assertIn("_xr_pose_recorder.setup(_options.xr_pose_trace_path(XR_POSE_TRACE_PATH))", ready_body.group("body"))
+
+        process_body = re.search(
+            r"func _process\(delta: float\) -> void:(?P<body>.*?)(?=\n\nfunc |\Z)",
+            source,
+            re.S,
+        )
+        self.assertIsNotNone(process_body)
+        self.assertEqual(process_body.group("body").count("_xr_pose_recorder.sample(_camera, _xr_active)"), 1)
+
+        exit_body = re.search(
+            r"func _exit_tree\(\) -> void:(?P<body>.*?)(?=\n\nfunc |\Z)",
+            source,
+            re.S,
+        )
+        self.assertIsNotNone(exit_body)
+        self.assertIn("_xr_pose_recorder.flush()", exit_body.group("body"))
 
     def test_android_template_has_concrete_godot_activity(self):
         source = ANDROID_ACTIVITY.read_text(encoding="utf-8")

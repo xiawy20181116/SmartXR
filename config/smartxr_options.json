@@ -2,6 +2,7 @@
   "proxy_targets_anchor_mode": "world_latched",
   "proxy_targets_head_z_mode": "negative_z_forward",
   "proxy_targets_pose_trace_path": "",
+  "xr_pose_trace_path": "",
   "proxy_targets_card_offset_rule": {
     "mode": "depth_scaled_right_angle",
     "offset_space": "world",

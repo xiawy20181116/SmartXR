@@ -22,6 +22,7 @@ const ENV_PROXY_TARGETS_WS_ENABLED := "SMARTXR_PROXY_TARGETS_WS_ENABLED"
 const ENV_PROXY_TARGETS_ANCHOR_MODE := "SMARTXR_PROXY_TARGETS_ANCHOR_MODE"
 const ENV_PROXY_TARGETS_HEAD_Z_MODE := "SMARTXR_PROXY_TARGETS_HEAD_Z_MODE"
 const ENV_PROXY_TARGETS_POSE_TRACE_PATH := "SMARTXR_PROXY_TARGETS_POSE_TRACE_PATH"
+const ENV_XR_POSE_TRACE_PATH := "SMARTXR_XR_POSE_TRACE_PATH"
 const ENV_PROXY_TARGETS_CARD_OFFSET_MODE := "SMARTXR_PROXY_TARGETS_CARD_OFFSET_MODE"
 const ENV_PROXY_TARGETS_CARD_OFFSET_SPACE := "SMARTXR_PROXY_TARGETS_CARD_OFFSET_SPACE"
 const ENV_PROXY_TARGETS_CARD_DEPTH_SCALE := "SMARTXR_PROXY_TARGETS_CARD_DEPTH_SCALE"
@@ -139,6 +140,11 @@ func proxy_targets_head_z_mode(default_mode: String) -> String:
 ## Per-frame Godot pose trace JSONL path. Empty means disabled.
 func proxy_targets_pose_trace_path(default_path: String) -> String:
 	return resolve_string("proxy_targets_pose_trace_path", ENV_PROXY_TARGETS_POSE_TRACE_PATH, default_path)
+
+
+## High-frequency XR pose trace JSONL path. Empty means disabled.
+func xr_pose_trace_path(default_path: String) -> String:
+	return resolve_string("xr_pose_trace_path", ENV_XR_POSE_TRACE_PATH, default_path)
 
 
 ## proxy_targets card offset rule used when the card binding omits one.
