@@ -58,6 +58,11 @@ func _run_checks() -> String:
 	image.fill(Color(0.1, 0.2, 0.3, 1.0))
 	ui.update_raw_image(image, Vector2(8.0, 4.0))
 	_checks["raw_image_texture_updates"] = raw_sprite != null and raw_sprite.texture != null
+	var raw_label := raw_panel.get_node_or_null("VSTRawDebugLabel") if raw_panel != null else null
+	ui.update_raw_frame_metadata(42, 123456789)
+	_checks["raw_metadata_label_updates"] = raw_label != null \
+		and str(raw_label.text).find("frame_id=42") >= 0 \
+		and str(raw_label.text).find("exposure_timestamp=123456789") >= 0
 
 	ui.update_raw_bbox_overlay(PackedFloat32Array([0.25, 0.25, 0.5, 0.5, 0.95]), Vector2(8.0, 4.0))
 	_checks["raw_bbox_overlay_updates"] = _all_parts_visible(raw_panel, "VSTRawBBox")

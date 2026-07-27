@@ -19,6 +19,7 @@ var _world_bbox_frame_anchor: Node3D = null
 var _world_bbox_frame_parts: Array[MeshInstance3D] = []
 var _raw_debug_anchor: Node3D = null
 var _raw_right_sprite: Sprite3D = null
+var _raw_debug_label: Label3D = null
 var _raw_bbox_parts: Array[MeshInstance3D] = []
 
 
@@ -61,12 +62,13 @@ func build_raw_debug_panel(camera: Node3D) -> void:
 
 	var label := Label3D.new()
 	label.name = "VSTRawDebugLabel"
-	label.text = "RAW VST"
+	label.text = _format_raw_debug_label(0, -1)
 	label.font_size = 18
 	label.no_depth_test = true
 	label.modulate = VST_BBOX_FRAME_COLOR
 	label.position = Vector3(0.0, 0.19, 0.02)
 	_raw_debug_anchor.add_child(label)
+	_raw_debug_label = label
 
 
 func update_world_bbox_frame(anchor_position: Vector3, anchor_depth_m: float, angular_size_deg: Vector2, orient_to_camera: Callable) -> void:
@@ -94,6 +96,12 @@ func update_raw_image(right_img: Image, image_size: Vector2) -> void:
 	if image_size.x <= 0.0 or image_size.y <= 0.0:
 		return
 	_raw_right_sprite.texture = ImageTexture.create_from_image(right_img)
+
+
+func update_raw_frame_metadata(frame_id: int, exposure_timestamp: int) -> void:
+	if _raw_debug_label == null:
+		return
+	_raw_debug_label.text = _format_raw_debug_label(frame_id, exposure_timestamp)
 
 
 func update_raw_bbox_overlay(boxes: PackedFloat32Array, image_size: Vector2) -> void:
@@ -149,3 +157,8 @@ func _configure_frame_part(part: MeshInstance3D, size: Vector2, position: Vector
 	if mesh != null:
 		mesh.size = size
 	part.position = position
+
+
+func _format_raw_debug_label(frame_id: int, exposure_timestamp: int) -> String:
+	var exposure_text := str(exposure_timestamp) if exposure_timestamp >= 0 else "n/a"
+	return "RAW VST\nframe_id=%d\nexposure_timestamp=%s" % [frame_id, exposure_text]

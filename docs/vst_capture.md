@@ -28,7 +28,7 @@ The card wires three callbacks:
 
 | Callback | Payload |
 |---|---|
-| `set_raw_image_callback(callable)` | `Image`, image size, and frame count; the card forwards the visual update to `VSTDebugUI`. |
+| `set_raw_image_callback(callable)` | `Image`, image size, frame count, and exposure timestamp; the card forwards the visual update to `VSTDebugUI`. |
 | `set_boxes_callback(callable)` | Tracker boxes plus image size; the card forwards raw overlay updates to `VSTDebugUI`. |
 | `set_anchor_callback(callable)` | Bbox center/size/image, angular size, confidence, target transform, and update count for target-source update and diagnostics printing. |
 

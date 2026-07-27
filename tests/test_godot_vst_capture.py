@@ -42,6 +42,7 @@ class GodotVSTCaptureTests(unittest.TestCase):
             "func set_raw_image_callback(on_raw_image: Callable) -> void:",
             "func set_boxes_callback(on_boxes: Callable) -> void:",
             "func set_anchor_callback(on_anchor: Callable) -> void:",
+            "func _read_right_exposure_timestamp() -> int:",
         ]:
             self.assertIn(marker, source)
 
@@ -51,6 +52,7 @@ class GodotVSTCaptureTests(unittest.TestCase):
             "configure_right_tracker_model",
             "get_right_tracker_boxes",
             "get_right_tracker_total_latency_ms",
+            "get_right_exposure_timestamp",
             "get_eye_to_head_matrices",
             "get_calibration_coeff_info",
             "_principal_point_px",
@@ -75,6 +77,7 @@ class GodotVSTCaptureTests(unittest.TestCase):
         self.assertIn("_vst_capture.poll()", card)
         self.assertIn("_vst_capture.status_snapshot()", card)
         self.assertIn("_vst_capture.shutdown()", card)
+        self.assertIn("func _on_vst_raw_right_image(right_img: Image, image_size: Vector2, frames: int, exposure_timestamp: int) -> void:", card)
         self.assertIn("func update_vst_target(target_id: String, transform: Transform3D, confidence: float, timestamp_ms: float) -> bool:", card)
         self.assertIn("func register_node3d_target(target_id: String, node_or_path) -> bool:", card)
         self.assertIn("func attach_to_target(card_id: String, target_id: String, offset_rule = {}) -> bool:", card)

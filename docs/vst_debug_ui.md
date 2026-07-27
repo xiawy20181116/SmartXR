@@ -13,9 +13,10 @@ bbox math, target updates, attachment, or status snapshots.
 | API | Meaning |
 |---|---|
 | `build_world_bbox_frame(parent)` | Creates the hidden `VSTBBoxFrame` anchor and four frame quads under the supplied scene parent. |
-| `build_raw_debug_panel(camera)` | Creates `VSTRawDebugPanel`, `VSTRawRightImage`, four raw bbox quads, and the `RAW VST` label under the camera. |
+| `build_raw_debug_panel(camera)` | Creates `VSTRawDebugPanel`, `VSTRawRightImage`, four raw bbox quads, and the raw metadata label under the camera. |
 | `update_world_bbox_frame(...)` | Applies visibility, position, optional card-provided orientation, and quad sizing for the world-space bbox frame. |
 | `update_raw_image(image, image_size)` | Converts the latest right-eye `Image` into the raw debug sprite texture. |
+| `update_raw_frame_metadata(frame_id, exposure_timestamp)` | Updates the raw debug label with the current frame id and exposure timestamp; negative timestamp renders as `n/a`. |
 | `update_raw_bbox_overlay(boxes, image_size)` | Sizes and positions the raw-image bbox quads from normalized tracker boxes. |
 | `set_world_bbox_visible(...)` / `set_raw_bbox_visible(...)` | Explicit visibility controls used when the card resets or loses boxes. |
 
@@ -43,5 +44,5 @@ powershell -File tools\run_godot_vst_debug_ui_probe.ps1
 
 The probe runs `godot-android/tests/script_only_vst_debug_ui_probe.gd` in
 no-project mode. It verifies node construction/parenting, raw image texture
-updates, raw bbox overlay sizing and hide behavior, world bbox frame sizing,
-and explicit visibility control.
+updates, raw metadata label updates, raw bbox overlay sizing and hide behavior,
+world bbox frame sizing, and explicit visibility control.
